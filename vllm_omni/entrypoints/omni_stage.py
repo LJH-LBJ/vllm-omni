@@ -853,9 +853,7 @@ def _generate_batch_outputs(
             gen_outputs.append(ro)
     _gen_t1 = _time.time()
     _gen_ms = (_gen_t1 - _gen_t0) * 1000.0
-    logger.debug(
-        f"Generate done: batch={batch_task_count}, req_ids={batch_request_ids}, gen_ms={_gen_ms:.1f}"
-    )
+    logger.debug(f"Generate done: batch={batch_task_count}, req_ids={batch_request_ids}, gen_ms={_gen_ms:.1f}")
     return gen_outputs, _gen_ms
 
 
@@ -985,8 +983,6 @@ def _enqueue_one_result(
 
 
 def _handle_batch_exception(out_q: mp.Queue, batch_request_ids: list[Any], stage_id: Any, exc: Exception) -> None:
-    import traceback
-
     logger.exception("Failed on batch %s: %s", batch_request_ids, exc)
     _tb = traceback.format_exc()
     for rid in batch_request_ids:
