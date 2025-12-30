@@ -605,9 +605,14 @@ def _stage_worker(
     max_batch_size = int(runtime_cfg.get("max_batch_size", 1) or 1)
     logger.info(f"Max batch size: {max_batch_size}")
 
-    # Batch processing loop
+    # Batch processing loop (event-driven, no busy-wait)
     while True:
-        task = in_q.get()
+        try:
+            # Always block for the first task
+            task = in_q.get()
+        except Exception:
+            logger.error("Failed to get task from in_q")
+            break
 
         _recv_dequeue_ts = _time.time()
         if task is None:
@@ -615,29 +620,22 @@ def _stage_worker(
             break
 
         batch_tasks: list[dict[str, Any]] = [task]
-        start_time = _time.time()
         if max_batch_size > 1:
+            batch_deadline = _time.time() + batch_timeout
             while len(batch_tasks) < max_batch_size:
-                if not in_q.empty():
-                    extra = in_q.get_nowait()
+                remaining_timeout = max(0, batch_deadline - _time.time())
+                if remaining_timeout <= 0:
+                    break
+                try:
+                    extra = in_q.get(timeout=remaining_timeout)
                     if extra is None:
+                        # Propagate shutdown to other workers
                         in_q.put(None)
                         break
                     batch_tasks.append(extra)
-                    end_time = _time.time()
-                    duration = end_time - start_time
-                    if duration > batch_timeout:
-                        break
-                    else:
-                        continue
-                else:
-                    end_time = _time.time()
-                    duration = end_time - start_time
-                    _time.sleep(0.05)
-                    if duration > batch_timeout:
-                        break
-                    else:
-                        continue
+                except Exception:
+                    # Timeout or queue.Empty
+                    break
 
         batch_request_ids: list[Any] = []
         batch_engine_inputs: list[Any] = []
