@@ -15,6 +15,7 @@ import queue
 import sys
 import traceback
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor
 
 from vllm.inputs import TextPrompt
 from vllm.inputs.preprocess import InputPreprocessor
@@ -642,16 +643,17 @@ def _stage_worker(
         _rx_bytes_by_rid: dict[Any, int] = {}
         _rx_decode_ms_by_rid: dict[Any, float] = {}
         _in_flight_ms_by_rid: dict[Any, float] = {}
-        for t in batch_tasks:
+
+        def process_task(t):
             rid = t["request_id"]
             try:
                 sent_ts = float(t.get("sent_ts", None)) if isinstance(t, dict) else None
                 if sent_ts is not None:
-                    _in_flight_ms_by_rid[rid] = (_recv_dequeue_ts - sent_ts) * 1000.0
+                    in_flight = (_recv_dequeue_ts - sent_ts) * 1000.0
                 else:
-                    _in_flight_ms_by_rid[rid] = 0.0
+                    in_flight = 0.0
             except Exception:
-                _in_flight_ms_by_rid[rid] = 0.0
+                in_flight = 0.0
 
             # Resolve input data strictly via connectors if payload
             # is larger than shm_threshold_bytes or using other connectors
@@ -666,10 +668,17 @@ def _stage_worker(
                     f"[Stage-{stage_id}] Missing connector payload for request {rid}. "
                     "Ensure connectors are configured for all incoming edges."
                 )
+            rx_decode = float(_rx_metrics.get("rx_decode_time_ms", 0.0))
+            rx_bytes = int(_rx_metrics.get("rx_transfer_bytes", 0))
+            return rid, in_flight, ein, rx_decode, rx_bytes
 
-            _rx_decode_ms_by_rid[rid] = float(_rx_metrics.get("rx_decode_time_ms", 0.0))
-            _rx_bytes_by_rid[rid] = int(_rx_metrics.get("rx_transfer_bytes", 0))
+        with ThreadPoolExecutor() as executor:
+            results = list(executor.map(process_task, batch_tasks))
 
+        for rid, in_flight, ein, rx_decode, rx_bytes in results:
+            _in_flight_ms_by_rid[rid] = in_flight
+            _rx_decode_ms_by_rid[rid] = rx_decode
+            _rx_bytes_by_rid[rid] = rx_bytes
             batch_request_ids.append(rid)
             if isinstance(ein, list):
                 batch_engine_inputs.extend(ein)
