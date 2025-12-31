@@ -833,6 +833,18 @@ def handle_batch_exception(out_q: mp.Queue, batch_request_ids: list[Any], stage_
         )
 
 
+def count_prompt_tokens_from_outputs(engine_outputs: list[Any]) -> int:
+    """Count prompt tokens from engine outputs."""
+    total = 0
+    for _ro in engine_outputs:
+        try:
+            prompt_token_ids = getattr(_ro, "prompt_token_ids", None)
+            if prompt_token_ids is not None:
+                total += len(prompt_token_ids)
+        except Exception:
+            pass
+    return total
+
 def make_request_stats(
     req_output: list[Any],
     stage_gen_time_ms: float,
@@ -846,8 +858,10 @@ def make_request_stats(
         StageRequestMetrics,
     )
 
+    num_tokens_in = count_prompt_tokens_from_outputs(req_output)
     num_tokens_out = count_tokens_from_outputs(req_output)
     return StageRequestMetrics(
+        num_tokens_in=num_tokens_in,
         num_tokens_out=num_tokens_out,
         stage_gen_time_ms=stage_gen_time_ms,
         batch_id=batch_id,
