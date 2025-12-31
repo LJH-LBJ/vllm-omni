@@ -340,7 +340,7 @@ def _to_dict(x: Any) -> dict[str, Any]:
             return {}
 
 
-def _acquire_device_locks(
+def acquire_device_locks(
     device_type: str | None,
     engine_args: dict[str, Any],
     stage_id: Any,
@@ -479,7 +479,7 @@ def _acquire_device_locks(
     return lock_files
 
 
-def _initialize_stage_engine(
+def initialize_stage_engine(
     stage_type: str,
     model: str,
     engine_args: dict[str, Any],
@@ -507,7 +507,7 @@ def _initialize_stage_engine(
     return stage_engine
 
 
-def _initialize_connectors(stage_id: Any, connectors_config: dict[str, Any]) -> dict[str, Any] | None:
+def initialize_connectors(stage_id: Any, connectors_config: dict[str, Any]) -> dict[str, Any] | None:
     # Initialize OmniConnectors if configured
     connectors: dict[str, Any] = {}
     if connectors_config:
@@ -521,7 +521,7 @@ def _initialize_connectors(stage_id: Any, connectors_config: dict[str, Any]) -> 
     return connectors
 
 
-def _collect_batch_tasks(
+def collect_batch_tasks(
     in_q: mp.Queue,
     first_task: dict[str, Any],
     max_batch_size: int,
@@ -555,7 +555,7 @@ def _collect_batch_tasks(
     return batch_tasks
 
 
-def _prepare_batch_payloads(
+def prepare_batch_payloads(
     batch_tasks: list[dict[str, Any]],
     connectors: dict[str, Any],
     stage_id: Any,
@@ -614,7 +614,7 @@ def _prepare_batch_payloads(
     )
 
 
-def _generate_batch_outputs(
+def generate_batch_outputs(
     stage_type: str,
     stage_engine: Any,
     batch_engine_inputs: list[Any],
@@ -684,7 +684,7 @@ def _generate_batch_outputs(
     return gen_outputs, _gen_ms
 
 
-def _group_outputs_by_request(
+def group_outputs_by_request(
     batch_request_ids: list[Any],
     gen_outputs: list[Any],
 ) -> dict[Any, list[Any]]:
@@ -707,7 +707,7 @@ def _group_outputs_by_request(
     return req_to_outputs
 
 
-def _emit_batch_results(
+def emit_batch_results(
     batch_request_ids: list[Any],
     req_to_outputs: dict[Any, list[Any]],
     _rx_decode_ms_by_rid: dict[Any, float],
@@ -737,7 +737,7 @@ def _emit_batch_results(
             _metrics.stage_stats = make_stage_stats(_agg_total_tokens, _agg_total_gen_time_ms)
         else:
             _metrics.stage_stats = None
-        _enqueue_one_result(
+        enqueue_one_result(
             out_q=out_q,
             stage_id=stage_id,
             request_id=rid,
@@ -753,7 +753,7 @@ def _emit_batch_results(
     return _agg_total_tokens
 
 
-def _enqueue_one_result(
+def enqueue_one_result(
     *,
     out_q: mp.Queue,
     stage_id: Any,
@@ -809,7 +809,7 @@ def _enqueue_one_result(
         return
 
 
-def _handle_batch_exception(out_q: mp.Queue, batch_request_ids: list[Any], stage_id: Any, exc: Exception) -> None:
+def handle_batch_exception(out_q: mp.Queue, batch_request_ids: list[Any], stage_id: Any, exc: Exception) -> None:
     logger.exception("Failed on batch %s: %s", batch_request_ids, exc)
     _tb = traceback.format_exc()
     for rid in batch_request_ids:

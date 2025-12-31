@@ -32,16 +32,16 @@ from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs
 from vllm_omni.entrypoints.async_omni_diffusion import AsyncOmniDiffusion
 from vllm_omni.entrypoints.async_omni_llm import AsyncOmniLLM
 from vllm_omni.entrypoints.stage_utils import (
-    _acquire_device_locks,
-    _collect_batch_tasks,
-    _emit_batch_results,
-    _enqueue_one_result,
-    _generate_batch_outputs,
-    _group_outputs_by_request,
-    _handle_batch_exception,
-    _initialize_connectors,
-    _initialize_stage_engine,
-    _prepare_batch_payloads,
+    acquire_device_locks,
+    collect_batch_tasks,
+    emit_batch_results,
+    enqueue_one_result,
+    generate_batch_outputs,
+    group_outputs_by_request,
+    handle_batch_exception,
+    initialize_connectors,
+    initialize_stage_engine,
+    prepare_batch_payloads,
     _to_dict,
     make_request_stats,
     make_stage_stats,
@@ -462,12 +462,12 @@ def _stage_worker(
     # Sequential initialization on the same device to avoid memory calculation errors
     # when multiple instances start simultaneously
     # For TP/PP/DP/SP, we need to lock ALL devices that will be used by this stage
-    lock_files = _acquire_device_locks(device_type, engine_args, stage_id, stage_init_timeout, _os, _time)
+    lock_files = acquire_device_locks(device_type, engine_args, stage_id, stage_init_timeout, _os, _time)
     # Init engine based on stage_type
     logger.debug("[Stage-%s] Initializing %s engine with args keys=%s", stage_id, stage_type, list(engine_args.keys()))
-    stage_engine = _initialize_stage_engine(stage_type, model, engine_args, lock_files, _os)
+    stage_engine = initialize_stage_engine(stage_type, model, engine_args, lock_files, _os)
 
-    connectors = _initialize_connectors(stage_id, connectors_config)
+    connectors = initialize_connectors(stage_id, connectors_config)
     if connectors is None:
         return
 
@@ -489,14 +489,14 @@ def _stage_worker(
             logger.info("Received shutdown signal")
             break
 
-        batch_tasks = _collect_batch_tasks(in_q, task, max_batch_size, batch_timeout, _time)
+        batch_tasks = collect_batch_tasks(in_q, task, max_batch_size, batch_timeout, _time)
         (
             batch_request_ids,
             batch_engine_inputs,
             _rx_bytes_by_rid,
             _rx_decode_ms_by_rid,
             _in_flight_ms_by_rid,
-        ) = _prepare_batch_payloads(
+        ) = prepare_batch_payloads(
             batch_tasks,
             connectors,
             stage_id,
@@ -510,7 +510,7 @@ def _stage_worker(
         )
         try:
             _batch_seq += 1
-            gen_outputs, _gen_ms = _generate_batch_outputs(
+            gen_outputs, _gen_ms = generate_batch_outputs(
                 stage_type,
                 stage_engine,
                 batch_engine_inputs,
@@ -519,9 +519,9 @@ def _stage_worker(
                 len(batch_tasks),
                 _time,
             )
-            req_to_outputs = _group_outputs_by_request(batch_request_ids, gen_outputs)
+            req_to_outputs = group_outputs_by_request(batch_request_ids, gen_outputs)
             _agg_total_gen_time_ms += _gen_ms
-            _agg_total_tokens = _emit_batch_results(
+            _agg_total_tokens = emit_batch_results(
                 batch_request_ids,
                 req_to_outputs,
                 _rx_decode_ms_by_rid,
@@ -536,7 +536,7 @@ def _stage_worker(
                 _agg_total_gen_time_ms,
             )
         except Exception as e:
-            _handle_batch_exception(out_q, batch_request_ids, stage_id, e)
+            handle_batch_exception(out_q, batch_request_ids, stage_id, e)
 
 
 def _stage_worker_async_entry(
@@ -591,14 +591,14 @@ async def _stage_worker_async(
     max_batch_size = int(runtime_cfg.get("max_batch_size", 1) or 1)
     engine_args["max_num_seqs"] = max_batch_size
     # Initialize OmniConnectors if configured to match sync worker behavior
-    connectors = _initialize_connectors(stage_id, connectors_config)
+    connectors = initialize_connectors(stage_id, connectors_config)
     if connectors is None:
         return
 
     # Sequential initialization on the same device to avoid memory calculation errors
     # when multiple instances start simultaneously
     # For TP, we need to lock ALL devices that will be used by this stage
-    lock_files = _acquire_device_locks(device_type, engine_args, stage_id, stage_init_timeout, _os, _time)
+    lock_files = acquire_device_locks(device_type, engine_args, stage_id, stage_init_timeout, _os, _time)
 
     # Init engine based on stage_type
     logger.debug(
@@ -787,7 +787,7 @@ async def _stage_worker_async(
             batch_request_ids, batch_request_outputs, _gen_ms_list, batch_metrics
         ):
             r_outputs = [output]
-            _enqueue_one_result(
+            enqueue_one_result(
                 out_q=out_q,
                 stage_id=stage_id,
                 request_id=rid,
