@@ -14,9 +14,9 @@ import os
 import queue
 import sys
 import traceback
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import fields
 from typing import Any
-from concurrent.futures import ThreadPoolExecutor
 
 from vllm.inputs import TextPrompt
 from vllm.inputs.preprocess import InputPreprocessor
