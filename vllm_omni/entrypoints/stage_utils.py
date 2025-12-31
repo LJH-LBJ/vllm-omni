@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import fcntl
 import enum
+import fcntl
 import json
 import logging
 import multiprocessing as mp
