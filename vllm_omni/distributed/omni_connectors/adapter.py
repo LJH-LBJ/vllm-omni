@@ -7,8 +7,6 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from vllm_omni.entrypoints.stage_utils import OmniStageTaskType
-
 from .utils.logging import get_connector_logger
 
 logger = get_connector_logger(__name__)
@@ -49,6 +47,7 @@ def try_send_via_connector(
         success, serialized_size, metadata = connector.put(str(stage_id), str(next_stage_id), str(req_id), payload_data)
 
         if success:
+            from vllm_omni.entrypoints.stage_utils import OmniStageTaskType
             # Send lightweight notification via queue
             notify_payload = {
                 "type": OmniStageTaskType.GENERATE,
