@@ -32,6 +32,7 @@ from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs
 from vllm_omni.entrypoints.async_omni_diffusion import AsyncOmniDiffusion
 from vllm_omni.entrypoints.async_omni_llm import AsyncOmniLLM
 from vllm_omni.entrypoints.stage_utils import (
+    _to_dict,
     acquire_device_locks,
     collect_batch_tasks,
     emit_batch_results,
@@ -41,10 +42,9 @@ from vllm_omni.entrypoints.stage_utils import (
     handle_batch_exception,
     initialize_connectors,
     initialize_stage_engine,
-    prepare_batch_payloads,
-    _to_dict,
     make_request_stats,
     make_stage_stats,
+    prepare_batch_payloads,
     set_stage_devices,
 )
 from vllm_omni.inputs.data import OmniTokensPrompt
