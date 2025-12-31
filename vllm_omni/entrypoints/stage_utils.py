@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import enum
 import json
 import logging
 import multiprocessing as mp
@@ -19,6 +20,15 @@ from vllm_omni.entrypoints.omni_llm import OmniLLM
 from vllm_omni.entrypoints.omni_stage import prepare_sampling_params
 
 logger = logging.getLogger(__name__)
+
+
+class OmniStageTaskType(enum.Enum):
+    GENERATE = "generate"
+    ABORT = "abort"
+    SHUTDOWN = "shutdown"
+
+
+SHUTDOWN_TASK = {"type": OmniStageTaskType.SHUTDOWN}
 
 
 def set_stage_devices(
@@ -534,8 +544,8 @@ def collect_batch_tasks(
         while len(batch_tasks) < max_batch_size:
             if not in_q.empty():
                 extra = in_q.get_nowait()
-                if extra is None:
-                    in_q.put(None)
+                if extra == SHUTDOWN_TASK:
+                    in_q.put(SHUTDOWN_TASK)
                     break
                 batch_tasks.append(extra)
                 end_time = _time.time()
