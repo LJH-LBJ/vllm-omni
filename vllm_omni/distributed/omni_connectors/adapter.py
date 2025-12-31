@@ -48,6 +48,7 @@ def try_send_via_connector(
 
         if success:
             from vllm_omni.entrypoints.stage_utils import OmniStageTaskType
+
             # Send lightweight notification via queue
             notify_payload = {
                 "type": OmniStageTaskType.GENERATE,

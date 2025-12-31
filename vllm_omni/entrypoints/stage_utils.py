@@ -845,6 +845,7 @@ def count_prompt_tokens_from_outputs(engine_outputs: list[Any]) -> int:
             pass
     return total
 
+
 def make_request_stats(
     req_output: list[Any],
     stage_gen_time_ms: float,
