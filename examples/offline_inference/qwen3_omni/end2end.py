@@ -143,11 +143,61 @@ def get_audio_query(question: str = None, audio_path: str | None = None, samplin
     )
 
 
+def get_mixed_modalities_query() -> QueryResult:
+    question = "What is recited in the audio? What is the content of this image? Why is this video funny?"
+    prompt = (
+        f"<|im_start|>system\n{default_system}<|im_end|>\n"
+        "<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_end|>"
+        "<|vision_start|><|image_pad|><|vision_end|>"
+        "<|vision_start|><|video_pad|><|vision_end|>"
+        f"{question}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
+    )
+    return QueryResult(
+        inputs={
+            "prompt": prompt,
+            "multi_modal_data": {
+                "audio": AudioAsset("mary_had_lamb").audio_and_sample_rate,
+                "image": convert_image_mode(ImageAsset("cherry_blossom").pil_image, "RGB"),
+                "video": VideoAsset(name="baby_reading", num_frames=16).np_ndarrays,
+            },
+        },
+        limit_mm_per_prompt={"audio": 1, "image": 1, "video": 1},
+    )
+
+
+def get_multi_audios_query() -> QueryResult:
+    question = "Are these two audio clips the same?"
+    prompt = (
+        f"<|im_start|>system\n{default_system}<|im_end|>\n"
+        "<|im_start|>user\n<|audio_start|><|audio_pad|><|audio_end|>"
+        "<|audio_start|><|audio_pad|><|audio_end|>"
+        f"{question}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
+    )
+    return QueryResult(
+        inputs={
+            "prompt": prompt,
+            "multi_modal_data": {
+                "audio": [
+                    AudioAsset("winning_call").audio_and_sample_rate,
+                    AudioAsset("mary_had_lamb").audio_and_sample_rate,
+                ],
+            },
+        },
+        limit_mm_per_prompt={
+            "audio": 2,
+        },
+    )
+
+
 query_map = {
     "text": get_text_query,
     "use_audio": get_audio_query,
     "use_image": get_image_query,
     "use_video": get_video_query,
+    "use_mixed_modalities": get_mixed_modalities_query,
+    "use_multi_audios": get_multi_audios_query,
 }
 
 
@@ -174,6 +224,7 @@ def main(args):
         model=model_name,
         stage_configs_path=args.stage_configs_path,
         log_stats=args.enable_stats,
+        stage_init_timeout=args.stage_init_timeout,
     )
 
     thinker_sampling_params = SamplingParams(
@@ -276,7 +327,7 @@ def parse_args():
         "--query-type",
         "-q",
         type=str,
-        default="use_video",
+        default="use_mixed_modalities",
         choices=query_map.keys(),
         help="Query type.",
     )
@@ -287,10 +338,10 @@ def parse_args():
         help="Enable writing detailed statistics (default: disabled)",
     )
     parser.add_argument(
-        "--init-sleep-seconds",
+        "--stage-init-timeout",
         type=int,
-        default=20,
-        help="Sleep seconds after starting each stage process to allow initialization (default: 20)",
+        default=300,
+        help="Timeout for initializing a single stage in seconds (default: 300)",
     )
     parser.add_argument(
         "--batch-timeout",
