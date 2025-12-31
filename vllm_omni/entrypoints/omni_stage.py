@@ -457,7 +457,7 @@ def _stage_worker(
     # Sequential initialization on the same device to avoid memory calculation errors
     # when multiple instances start simultaneously
     # For TP/PP/DP/SP, we need to lock ALL devices that will be used by this stage
-    lock_files = _acquire_device_locks(device_type, engine_args, stage_id, _os, _time)
+    lock_files = _acquire_device_locks(device_type, engine_args, stage_id, stage_init_timeout, _os, _time)
     # Init engine based on stage_type
     logger.debug("[Stage-%s] Initializing %s engine with args keys=%s", stage_id, stage_type, list(engine_args.keys()))
     stage_engine = _initialize_stage_engine(stage_type, model, engine_args, lock_files, stage_id, _os)
@@ -481,7 +481,7 @@ def _stage_worker(
 
         _recv_dequeue_ts = _time.time()
         if task is None:
-            logger.error("Received shutdown signal")
+            logger.info("Received shutdown signal")
             break
 
         batch_tasks = _collect_batch_tasks(in_q, task, max_batch_size, batch_timeout, _time)
@@ -538,6 +538,7 @@ def _acquire_device_locks(
     device_type: str | None,
     engine_args: dict[str, Any],
     stage_id: Any,
+    stage_init_timeout: int,
     _os,
     _time,
 ) -> list[int]:
@@ -1076,7 +1077,7 @@ async def _stage_worker_async(
     # Sequential initialization on the same device to avoid memory calculation errors
     # when multiple instances start simultaneously
     # For TP, we need to lock ALL devices that will be used by this stage
-    lock_files = _acquire_device_locks(device_type, engine_args, stage_id, _os, _time)
+    lock_files = _acquire_device_locks(device_type, engine_args, stage_id, stage_init_timeout, _os, _time)
 
     # Init engine based on stage_type
     logger.debug(
