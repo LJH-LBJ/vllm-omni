@@ -3,13 +3,14 @@ from __future__ import annotations
 import fcntl
 import json
 import logging
-import os
-from multiprocessing import shared_memory as _shm
 import multiprocessing as mp
+import os
 import traceback
+from multiprocessing import shared_memory as _shm
 from typing import Any
 
 from omegaconf import OmegaConf
+
 from vllm_omni.distributed.omni_connectors.adapter import try_recv_via_connector
 from vllm_omni.distributed.omni_connectors.utils.initialization import build_stage_connectors
 from vllm_omni.entrypoints.log_utils import count_tokens_from_outputs
