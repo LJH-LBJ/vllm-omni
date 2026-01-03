@@ -88,6 +88,7 @@ class OmniLLM(LLM):
 
         # Initialize connectors
         from vllm_omni.distributed.omni_connectors import initialize_orchestrator_connectors
+
         self.omni_transfer_config, self.connectors = initialize_orchestrator_connectors(
             self.config_path, worker_backend=self.worker_backend, shm_threshold_bytes=shm_threshold_bytes
         )
