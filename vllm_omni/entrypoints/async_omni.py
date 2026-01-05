@@ -359,7 +359,7 @@ class AsyncOmni(OmniBase):
                         )
                         raise RuntimeError(result)  # Request Finished due to error
 
-                    engine_outputs = _load(result, obj_key="engine_outputs", shm_key="engine_outputs_shm")、
+                    engine_outputs = _load(result, obj_key="engine_outputs", shm_key="engine_outputs_shm")
                     if isinstance(engine_outputs, list):
                         engine_outputs = engine_outputs[0]
                     finished = engine_outputs.finished
