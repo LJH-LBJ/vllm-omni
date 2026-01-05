@@ -359,12 +359,16 @@ class AsyncOmni(OmniBase):
                         )
                         raise RuntimeError(result)  # Request Finished due to error
 
-                    engine_outputs = _load(result, obj_key="engine_outputs", shm_key="engine_outputs_shm")
+                    engine_outputs = _load(result, obj_key="engine_outputs", shm_key="engine_outputs_shm")、
+                    if isinstance(engine_outputs, list):
+                        engine_outputs = engine_outputs[0]
+                    finished = engine_outputs.finished
+
                     # Mark last output time for this stage whenever we receive outputs
                     metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
                     try:
                         _m = asdict(result.get("metrics"))
-                        if _m is not None:
+                        if _m is not None and finished:
                             metrics.on_stage_metrics(stage_id, req_id, _m)
                     except Exception as e:
                         logger.exception(
@@ -375,10 +379,6 @@ class AsyncOmni(OmniBase):
                     )
                     stage.set_engine_outputs(engine_outputs)
 
-                    if isinstance(engine_outputs, list):
-                        engine_outputs = engine_outputs[0]
-                    finished = engine_outputs.finished
-
                     if getattr(stage, "final_output", False):
                         logger.debug(
                             f"[{self._name}] Request {req_id} finalized at stage-{stage_id}",
@@ -388,7 +388,8 @@ class AsyncOmni(OmniBase):
                         # (only once per request at the designated final stage)
                         try:
                             rid_key = str(req_id)
-                            if stage_id == final_stage_id_for_e2e and rid_key not in metrics.e2e_done:
+                            if stage_id == final_stage_id_for_e2e and \
+                                rid_key not in metrics.e2e_done and finished:
                                 metrics.on_finalize_request(
                                     stage_id,
                                     req_id,

@@ -166,6 +166,8 @@ def record_stage_metrics(
 ) -> None:
     try:
         stage_req_counts[stage_id] += 1
+        if stage_id == 0:
+            stage_total_tokens[stage_id] += int(metrics.get("num_tokens_in", 0))
         stage_total_tokens[stage_id] += int(metrics.get("num_tokens_out", 0))
         rid_key = str(req_id)
         pr = per_request.setdefault(rid_key, {"stages": {}, "transfers_ms": 0.0, "transfers_bytes": 0})
