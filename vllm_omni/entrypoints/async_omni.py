@@ -388,8 +388,11 @@ class AsyncOmni(OmniBase):
                         # (only once per request at the designated final stage)
                         try:
                             rid_key = str(req_id)
-                            if stage_id == final_stage_id_for_e2e and \
-                                rid_key not in metrics.e2e_done and finished:
+                            if (
+                                stage_id == final_stage_id_for_e2e
+                                and rid_key not in metrics.e2e_done
+                                and finished
+                            ):
                                 metrics.on_finalize_request(
                                     stage_id,
                                     req_id,
