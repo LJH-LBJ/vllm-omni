@@ -114,7 +114,7 @@ class AsyncOmni(OmniBase):
             self._ray_pg,
             self.output_handler,
         )
-        self.metrics: OrchestratorMetrics  = None
+        self.metrics: OrchestratorMetrics = None
 
     def _create_default_diffusion_stage_cfg(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Create default diffusion stage configuration."""
