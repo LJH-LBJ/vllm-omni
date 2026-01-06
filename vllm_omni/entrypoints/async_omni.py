@@ -114,6 +114,7 @@ class AsyncOmni(OmniBase):
             self._ray_pg,
             self.output_handler,
         )
+        self.metrics: OrchestratorMetrics  = None
 
     def _create_default_diffusion_stage_cfg(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Create default diffusion stage configuration."""
@@ -316,7 +317,7 @@ class AsyncOmni(OmniBase):
             )
 
             # Metrics/aggregation helper
-            metrics = OrchestratorMetrics(
+            self.metrics = OrchestratorMetrics(
                 num_stages,
                 self._enable_stats,
                 _wall_start_ts,
@@ -327,7 +328,7 @@ class AsyncOmni(OmniBase):
             self.request_states[request_id] = req_state
 
             # Mark first input time for stage-0
-            metrics.stage_first_ts[0] = metrics.stage_first_ts[0] or time.time()
+            self.metrics.stage_first_ts[0] = self.metrics.stage_first_ts[0] or time.time()
 
             sp0: SamplingParams = sampling_params_list[0]  # type: ignore[index]
             task = {
@@ -365,11 +366,11 @@ class AsyncOmni(OmniBase):
                     finished = engine_outputs.finished
 
                     # Mark last output time for this stage whenever we receive outputs
-                    metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
+                    self.metrics.stage_last_ts[stage_id] = max(self.metrics.stage_last_ts[stage_id] or 0.0, time.time())
                     try:
                         _m = asdict(result.get("metrics"))
                         if _m is not None and finished:
-                            metrics.on_stage_metrics(stage_id, req_id, _m)
+                            self.metrics.on_stage_metrics(stage_id, req_id, _m)
                     except Exception as e:
                         logger.exception(
                             f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
@@ -388,8 +389,8 @@ class AsyncOmni(OmniBase):
                         # (only once per request at the designated final stage)
                         try:
                             rid_key = str(req_id)
-                            if stage_id == final_stage_id_for_e2e and rid_key not in metrics.e2e_done and finished:
-                                metrics.on_finalize_request(
+                            if stage_id == final_stage_id_for_e2e and rid_key not in self.metrics.e2e_done and finished:
+                                self.metrics.on_finalize_request(
                                     stage_id,
                                     req_id,
                                     _req_start_ts.get(req_id, _wall_start_ts),
@@ -442,7 +443,7 @@ class AsyncOmni(OmniBase):
                             sampling_params=sp_next,
                             original_prompt=prompt,
                             next_stage_queue_submit_fn=self.stage_list[next_stage_id].submit,
-                            metrics=metrics,
+                            metrics=self.metrics,
                         )
 
                     if not sent_via_connector:
@@ -464,7 +465,7 @@ class AsyncOmni(OmniBase):
 
             # Summarize and print stats
             try:
-                summary = metrics.build_and_log_summary(final_stage_id_for_e2e)
+                summary = self.metrics.build_and_log_summary(final_stage_id_for_e2e)
                 logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
             except Exception as e:
                 logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
