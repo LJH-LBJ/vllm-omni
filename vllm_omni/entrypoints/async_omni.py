@@ -361,6 +361,7 @@ class AsyncOmni(OmniBase):
                         raise RuntimeError(result)  # Request Finished due to error
 
                     engine_outputs = _load(result, obj_key="engine_outputs", shm_key="engine_outputs_shm")
+                    stage.set_engine_outputs(engine_outputs)
                     if isinstance(engine_outputs, list):
                         engine_outputs = engine_outputs[0]
                     finished = engine_outputs.finished
@@ -378,7 +379,6 @@ class AsyncOmni(OmniBase):
                     logger.debug(
                         f"[{self._name}] Stage-{stage_id} completed request {req_id}; forwarding or finalizing",
                     )
-                    stage.set_engine_outputs(engine_outputs)
 
                     if getattr(stage, "final_output", False):
                         logger.debug(
