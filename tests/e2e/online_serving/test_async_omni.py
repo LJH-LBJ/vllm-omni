@@ -103,8 +103,10 @@ async def test_abort():
 @pytest.mark.asyncio
 async def test_build_and_log_summary(monkeypatch):
     from vllm_omni.entrypoints.utils import get_final_stage_id_for_e2e
+
     RealCRS = ClientRequestState
     capture_metrics = {}
+
     class MockCRS(RealCRS):
         def __init__(self, request_id: str):
             super().__init__(request_id)
@@ -112,7 +114,7 @@ async def test_build_and_log_summary(monkeypatch):
 
     monkeypatch.setattr("vllm_omni.entrypoints.async_omni.ClientRequestState", MockCRS)
     monkeypatch.setattr("vllm_omni.entrypoints.client_request_state.ClientRequestState", MockCRS)
-    
+
     with ExitStack() as after:
         engine = AsyncOmni(model=model, stage_configs_path=stage_config)
         after.callback(engine.shutdown)

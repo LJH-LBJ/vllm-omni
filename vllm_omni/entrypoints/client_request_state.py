@@ -1,5 +1,8 @@
 import asyncio
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from vllm_omni.entrypoints.log_utils import OrchestratorMetrics
 
 class ClientRequestState:
     """Tracks the state of an individual request in the orchestrator."""
