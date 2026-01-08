@@ -581,7 +581,7 @@ class Qwen3OmniMoeConditionalGenerationMixin(Qwen2_5OmniConditionalGenerationMix
             and input_audio_features.ndim == 3
         ):
             # (batch_size, feature_dim, chunk_size) -> (feature_dim, batch_size * chunk_size)
-            input_audio_features = input_audio_features.permute(1, 0, 2).reshape(input_audio_features.shape[1], -1)
+            input_audio_features = input_audio_features.permute(1, 0, 2).flatten(1)
         elif input_audio_features is not None and isinstance(input_audio_features, list):
             input_audio_features = torch.cat(input_audio_features, dim=-1)
         if (
