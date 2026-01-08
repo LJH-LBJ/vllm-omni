@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from vllm.inputs import PromptType
 
-from vllm_omni.entrypoints.async_omni import AsyncOmni
+from vllm_omni.entrypoints.async_omni import AsyncOmni, ClientRequestState
 
 SEED = 42
 
@@ -101,9 +101,18 @@ async def test_abort():
 
 
 @pytest.mark.asyncio
-async def test_build_and_log_summary():
+async def test_build_and_log_summary(monkeypatch):
     from vllm_omni.entrypoints.utils import get_final_stage_id_for_e2e
+    RealCRS = ClientRequestState
+    capture_metrics = {}
+    class MockCRS(RealCRS):
+        def __init__(self, request_id: str):
+            super().__init__(request_id)
+            capture_metrics[request_id] = self
 
+    monkeypatch.setattr("vllm_omni.entrypoints.async_omni.ClientRequestState", MockCRS)
+    monkeypatch.setattr("vllm_omni.entrypoints.client_request_state.ClientRequestState", MockCRS)
+    
     with ExitStack() as after:
         engine = AsyncOmni(model=model, stage_configs_path=stage_config)
         after.callback(engine.shutdown)
@@ -124,7 +133,7 @@ async def test_build_and_log_summary():
             final_stage_id_for_e2e = get_final_stage_id_for_e2e(
                 output_modalities, engine.output_modalities, engine.stage_list
             )
-            summary = engine.request_states[request_ids[idx]].metrics.build_and_log_summary(final_stage_id_for_e2e)
+            summary = capture_metrics[request_ids[idx]].metrics.build_and_log_summary(final_stage_id_for_e2e)
 
             # Check that total tokens matches sum of stage tokens.
             assert summary["e2e_total_tokens"] == sum(stage["tokens"] for stage in summary["stages"])
