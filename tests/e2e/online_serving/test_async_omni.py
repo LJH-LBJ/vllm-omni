@@ -109,17 +109,24 @@ async def test_build_and_log_summary():
         after.callback(engine.shutdown)
         prompt = "Hello my name is Robert and "
         NUM_EXPECTED_TOKENS = 100
-        request_id = "request-0"
-        task = asyncio.create_task(generate(engine, request_id, prompt, NUM_EXPECTED_TOKENS))
-        await task
+        NUM_REQUESTS = 5
+        request_ids = [f"request-{i}" for i in range(NUM_REQUESTS)]
 
-        output_modalities = ["text"]
-        final_stage_id_for_e2e = get_final_stage_id_for_e2e(
-            output_modalities, engine.output_modalities, engine.stage_list
-        )
-        summary = engine.metrics.build_and_log_summary(final_stage_id_for_e2e)
+        # Create concurrent requests.
+        tasks: list[asyncio.Task] = []
+        for idx, request_id in enumerate(request_ids):
+            tasks.append(asyncio.create_task(generate(engine, request_id, prompt, NUM_EXPECTED_TOKENS)))
 
-        # Check that total tokens matches sum of stage tokens.
-        assert summary["e2e_total_tokens"] == sum(stage["tokens"] for stage in summary["stages"])
-        # Check that total time matches sum of stage times.
-        assert summary["e2e_total_time_ms"] >= sum(stage["total_time_ms"] for stage in summary["stages"])
+        # Confirm the requests are okay.
+        for idx, task in enumerate(tasks):
+            await task
+            output_modalities = ["text"]
+            final_stage_id_for_e2e = get_final_stage_id_for_e2e(
+                output_modalities, engine.output_modalities, engine.stage_list
+            )
+            summary = engine.request_states[request_ids[idx]].metrics.build_and_log_summary(final_stage_id_for_e2e)
+
+            # Check that total tokens matches sum of stage tokens.
+            assert summary["e2e_total_tokens"] == sum(stage["tokens"] for stage in summary["stages"])
+            # Check that total time matches sum of stage times.
+            assert summary["e2e_total_time_ms"] >= sum(stage["total_time_ms"] for stage in summary["stages"])
