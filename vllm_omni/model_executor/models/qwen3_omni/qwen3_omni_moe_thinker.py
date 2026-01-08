@@ -597,8 +597,7 @@ class Qwen3OmniMoeConditionalGenerationMixin(Qwen2_5OmniConditionalGenerationMix
             and isinstance(feature_attention_mask, torch.Tensor)
             and feature_attention_mask.ndim == 3
         ):
-            # (batch_size, feature_dim, chunk_size) -> (feature_dim, batch_size * chunk_size)
-            feature_attention_mask = feature_attention_mask.permute(1, 0, 2).reshape(feature_attention_mask.shape[1], -1)
+            feature_attention_mask = feature_attention_mask.reshape(-1, feature_attention_mask.shape[-1])
         elif feature_attention_mask is not None and isinstance(feature_attention_mask, list):
             for i in range(len(feature_attention_mask)):
                 feature_attention_mask[i] = feature_attention_mask[i].reshape(-1)
