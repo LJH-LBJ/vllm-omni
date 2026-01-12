@@ -126,7 +126,7 @@ def log_stage_request_stats(
     )
 
 
-def compute_and_log_stage_request_stats(stats: "StageRequestStats") -> None:
+def compute_and_log_stage_request_stats(stats: StageRequestStats) -> None:
     tokens_per_s = (stats.num_tokens_out * 1000.0 / stats.stage_gen_time_ms) if stats.stage_gen_time_ms > 0 else 0.0
     rx_mbps = (
         (float(stats.rx_transfer_bytes) * 8.0) / (max(float(stats.rx_decode_time_ms), MIN_TIME_MS) * 1000.0)
@@ -212,7 +212,7 @@ class RunSummary:
     wall_time_ms: float
     stages: list[dict[str, Any]] = field(default_factory=list)
     transfers: list[dict[str, Any]] = field(default_factory=list)
-    final_stage_id: dict[str, int] | int | None = None
+    final_stage_id: dict[str, int] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -453,13 +453,13 @@ class OrchestratorAggregator:
         self.stage_seen_batches: dict[int, set] = {sid: set() for sid in range(self.num_stages)}
         self.stage_first_ts: list[float | None] = [None for _ in range(self.num_stages)]
         self.stage_last_ts: list[float | None] = [None for _ in range(self.num_stages)]
-        self.final_stage_map: dict[str, int] | int | None = None
+        self.final_stage_map: dict[str, int] | None = None
         self.stage_events: list[StageRequestStats] = []
         self.transfer_events: list[TransferEdgeStats] = []
         self.request_events: list[RequestE2EStats] = []
         self.logger_manager: Any = None
 
-    def set_final_stage_map(self, final_stage_map: dict[str, int] | int | None) -> None:
+    def set_final_stage_map(self, final_stage_map: dict[str, int] | None) -> None:
         self.final_stage_map = final_stage_map
 
     def set_logger_manager(self, manager: Any) -> None:
@@ -675,7 +675,7 @@ class OrchestratorAggregator:
             )
         self._maybe_log_interval()
 
-    def build_run_summary(self, final_stage_id_to_prompt: dict[str, int] | int | None = None) -> RunSummary:
+    def build_run_summary(self, final_stage_id_to_prompt: dict[str, int] | None = None) -> RunSummary:
         if final_stage_id_to_prompt is not None:
             self.set_final_stage_map(final_stage_id_to_prompt)
         stage_summary: list[dict[str, Any]] = []
@@ -716,7 +716,7 @@ class OrchestratorAggregator:
             transfers=transfer_summary,
         )
 
-    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int] | int | None = None) -> dict[str, Any]:
+    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int] | None = None) -> dict[str, Any]:
         summary = self.build_run_summary(final_stage_id_to_prompt)
         return summary.to_dict()
 

@@ -17,7 +17,7 @@ class OmniPrometheusStatLogger(OmniStatLoggerBase):
         super().__init__(interval_s=interval_s, enabled=enabled)
         try:
             from prometheus_client import CollectorRegistry, Gauge
-        except Exception:
+        except ImportError:
             logger.debug("prometheus_client not available; disabling Prometheus stat logger")
             self.enabled = False
             self._registry = None

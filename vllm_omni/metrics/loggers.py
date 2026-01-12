@@ -50,7 +50,7 @@ class OmniStatLoggerManager:
         self,
         aggregator: Any,
         loggers: list[OmniStatLoggerBase] | None = None,
-        final_stage_map_provider: Callable[[], dict[str, int] | int | None] | None = None,
+        final_stage_map_provider: Callable[[], dict[str, int] | None] | None = None,
     ) -> None:
         self.aggregator = aggregator
         self.loggers = loggers or []
