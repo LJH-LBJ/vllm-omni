@@ -317,6 +317,7 @@ class AsyncOmni(OmniBase):
             final_stage_id_for_e2e = get_final_stage_id_for_e2e(
                 output_modalities, self.output_modalities, self.stage_list
             )
+            final_stage_id_to_prompt = {str(request_id): final_stage_id_for_e2e}
 
             # Metrics/aggregation helper
             metrics = OrchestratorMetrics(
@@ -324,7 +325,7 @@ class AsyncOmni(OmniBase):
                 self._enable_stats,
                 _wall_start_ts,
             )
-            metrics.set_final_stage_map({str(request_id): final_stage_id_for_e2e})
+            metrics.set_final_stage_map(final_stage_id_to_prompt)
             stat_logger_manager = OmniStatLoggerManager(
                 aggregator=metrics,
                 loggers=[
@@ -479,7 +480,7 @@ class AsyncOmni(OmniBase):
             try:
                 if stat_logger_manager:
                     stat_logger_manager.force_log()
-                summary = metrics.build_and_log_summary(final_stage_id_for_e2e)
+                summary = metrics.build_and_log_summary(final_stage_id_to_prompt)
                 logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
             except Exception as e:
                 logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
