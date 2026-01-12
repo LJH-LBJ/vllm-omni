@@ -720,6 +720,10 @@ class OrchestratorAggregator:
         summary = self.build_run_summary(final_stage_id_to_prompt)
         return summary.to_dict()
 
+    def build_summary(self, final_stage_id_to_prompt: dict[str, int] | None = None) -> dict[str, Any]:
+        """Alias for clarity; retained build_and_log_summary for backward compatibility."""
+        return self.build_and_log_summary(final_stage_id_to_prompt)
+
 
 # Backward compatible alias
 OrchestratorMetrics = OrchestratorAggregator

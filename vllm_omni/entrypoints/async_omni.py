@@ -480,7 +480,7 @@ class AsyncOmni(OmniBase):
             try:
                 if stat_logger_manager:
                     stat_logger_manager.force_log()
-                summary = metrics.build_and_log_summary(final_stage_id_to_prompt)
+                summary = metrics.build_summary(final_stage_id_to_prompt)
                 logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
             except Exception as e:
                 logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
