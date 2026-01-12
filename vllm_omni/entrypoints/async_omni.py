@@ -310,6 +310,7 @@ class AsyncOmni(OmniBase):
             _req_start_ts: dict[int, float] = {}
             _wall_start_ts: float = time.time()
             # _last_finish_ts: float = _wall_start_ts
+            stat_logger_manager: OmniStatLoggerManager | None = None
 
             # Determine the final stage for E2E stats (highest stage_id with
             # final_output=True; fallback to last stage)

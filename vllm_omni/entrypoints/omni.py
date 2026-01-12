@@ -572,6 +572,7 @@ class Omni(OmniBase):
 
         # Orchestrator keeps stage objects for input derivation
         num_stages = len(self.stage_list)
+        stat_logger_manager: OmniStatLoggerManager | None = None
 
         # Generate globally unique request IDs and map them to original prompts
         request_ids: list[str] = [f"{i}_{uuid.uuid4()}" for i in range(len(request_prompts))]

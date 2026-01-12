@@ -8,6 +8,7 @@ from typing import Any, Iterable
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
+MIN_TIME_MS = 1e-6
 
 
 def log_transfer_tx(
@@ -27,7 +28,7 @@ def log_transfer_tx(
                 "request_id": request_id,
                 "size_bytes": int(size_bytes),
                 "tx_time_ms": float(tx_time_ms),
-                "tx_mbps": (float(size_bytes) * 8.0) / (max(tx_time_ms, 1e-6) * 1000.0),
+                "tx_mbps": (float(size_bytes) * 8.0) / (max(tx_time_ms, MIN_TIME_MS) * 1000.0),
                 "used_shm": bool(used_shm),
             },
             sort_dicts=False,
@@ -54,7 +55,9 @@ def log_transfer_rx(
                 "rx_decode_time_ms": float(rx_decode_time_ms),
                 "in_flight_time_ms": float(in_flight_time_ms),
                 "rx_time_per_kb_ms": (
-                    (float(rx_decode_time_ms) / max(float(rx_bytes) / 1024.0, 1e-6)) if rx_bytes > 0 else 0.0
+                    (float(rx_decode_time_ms) / max(float(rx_bytes) / 1024.0, MIN_TIME_MS))
+                    if rx_bytes > 0
+                    else 0.0
                 ),
             },
             sort_dicts=False,
@@ -85,7 +88,7 @@ def log_transfer_total(
                 "rx_decode_time_ms": float(rx_decode_time_ms),
                 "total_time_ms": float(total_time_ms),
                 "total_time_per_kb_ms": (
-                    float(total_time_ms) / max(float(size_bytes) / 1024.0, 1e-6) if size_bytes > 0 else 0.0
+                    float(total_time_ms) / max(float(size_bytes) / 1024.0, MIN_TIME_MS) if size_bytes > 0 else 0.0
                 ),
             },
             sort_dicts=False,
@@ -126,7 +129,7 @@ def log_stage_request_stats(
 def compute_and_log_stage_request_stats(stats: "StageRequestStats") -> None:
     tokens_per_s = (stats.num_tokens_out * 1000.0 / stats.stage_gen_time_ms) if stats.stage_gen_time_ms > 0 else 0.0
     rx_mbps = (
-        (float(stats.rx_transfer_bytes) * 8.0) / (max(float(stats.rx_decode_time_ms), 1e-6) * 1000.0)
+        (float(stats.rx_transfer_bytes) * 8.0) / (max(float(stats.rx_decode_time_ms), MIN_TIME_MS) * 1000.0)
         if stats.rx_transfer_bytes > 0
         else 0.0
     )
@@ -171,7 +174,7 @@ class StageRequestStats:
     def rx_mbps(self) -> float:
         if self.rx_transfer_bytes <= 0:
             return 0.0
-        return (float(self.rx_transfer_bytes) * 8.0) / (max(float(self.rx_decode_time_ms), 1e-6) * 1000.0)
+        return (float(self.rx_transfer_bytes) * 8.0) / (max(float(self.rx_decode_time_ms), MIN_TIME_MS) * 1000.0)
 
 
 @dataclass
@@ -388,14 +391,14 @@ def build_transfer_summary(
         sum_bytes = float(agg.get("sum_bytes", 0.0))
         sum_ms = float(agg.get("sum_ms", 0.0))
         samples = int(agg.get("count", 0.0))
-        tx_mbps = (sum_bytes * 8.0) / (max(sum_ms, 1e-6) * 1000.0) if sum_bytes > 0 else 0.0
+        tx_mbps = (sum_bytes * 8.0) / (max(sum_ms, MIN_TIME_MS) * 1000.0) if sum_bytes > 0 else 0.0
         sum_rx_bytes = float(agg.get("sum_rx_bytes", 0.0))
         sum_rx_ms = float(agg.get("sum_rx_ms", 0.0))
         samples_rx = int(agg.get("rx_count", 0.0))
-        rx_mbps = (sum_rx_bytes * 8.0) / (max(sum_rx_ms, 1e-6) * 1000.0) if sum_rx_bytes > 0 else 0.0
+        rx_mbps = (sum_rx_bytes * 8.0) / (max(sum_rx_ms, MIN_TIME_MS) * 1000.0) if sum_rx_bytes > 0 else 0.0
         sum_total_ms = float(agg.get("sum_total_ms", 0.0))
         samples_total = int(agg.get("total_count", 0.0))
-        total_mbps = (sum_bytes * 8.0) / (max(sum_total_ms, 1e-6) * 1000.0) if sum_bytes > 0 else 0.0
+        total_mbps = (sum_bytes * 8.0) / (max(sum_total_ms, MIN_TIME_MS) * 1000.0) if sum_bytes > 0 else 0.0
         summary.append(
             {
                 "from_stage": src,
@@ -432,7 +435,7 @@ class OrchestratorAggregator:
     ) -> None:
         self.num_stages = int(num_stages)
         self.enable_debug_events = bool(enable_debug_events)
-        # Backward compatible attribute name
+        # Backward compatible alias for legacy callers that still check enable_stats.
         self.enable_stats = self.enable_debug_events
         self.stage_total_time_ms: list[float] = [0.0 for _ in range(self.num_stages)]
         self.stage_total_tokens: list[int] = [0 for _ in range(self.num_stages)]
