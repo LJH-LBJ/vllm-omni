@@ -38,6 +38,8 @@ from vllm_omni.entrypoints.utils import (
     load_stage_configs_from_yaml,
     resolve_model_config_path,
 )
+from vllm_omni.metrics.loggers import OmniLoggingStatLogger, OmniStatLoggerManager
+from vllm_omni.metrics.prometheus import OmniPrometheusStatLogger
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -597,6 +599,15 @@ class Omni(OmniBase):
             self._enable_stats,
             _wall_start_ts,
         )
+        metrics.set_final_stage_map(final_stage_id_to_prompt)
+        stat_logger_manager = OmniStatLoggerManager(
+            aggregator=metrics,
+            loggers=[
+                OmniLoggingStatLogger(interval_s=10.0, enabled=True),
+                OmniPrometheusStatLogger(interval_s=10.0, enabled=True),
+            ],
+            final_stage_map_provider=lambda: metrics.final_stage_map,
+        )
 
         it = request_id_to_prompt.items()
         if use_tqdm:
@@ -778,6 +789,8 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
+            if stat_logger_manager:
+                stat_logger_manager.force_log()
             summary = metrics.build_and_log_summary(final_stage_id_to_prompt)
             logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
         except Exception as e:

@@ -35,6 +35,8 @@ from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
 from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.metrics.loggers import OmniLoggingStatLogger, OmniStatLoggerManager
+from vllm_omni.metrics.prometheus import OmniPrometheusStatLogger
 
 logger = init_logger(__name__)
 
@@ -321,6 +323,15 @@ class AsyncOmni(OmniBase):
                 self._enable_stats,
                 _wall_start_ts,
             )
+            metrics.set_final_stage_map({str(request_id): final_stage_id_for_e2e})
+            stat_logger_manager = OmniStatLoggerManager(
+                aggregator=metrics,
+                loggers=[
+                    OmniLoggingStatLogger(interval_s=10.0, enabled=True),
+                    OmniPrometheusStatLogger(interval_s=10.0, enabled=True),
+                ],
+                final_stage_map_provider=lambda: metrics.final_stage_map,
+            )
             # Seed stage-0 queue with all requests
             logger.debug(f"[{self._name}] Seeding request into stage-0")
             req_state = ClientRequestState(request_id)
@@ -465,6 +476,8 @@ class AsyncOmni(OmniBase):
 
             # Summarize and print stats
             try:
+                if stat_logger_manager:
+                    stat_logger_manager.force_log()
                 summary = metrics.build_and_log_summary(final_stage_id_for_e2e)
                 logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
             except Exception as e:
