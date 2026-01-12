@@ -69,7 +69,7 @@ class OmniStatLoggerManager:
             lg.log(summary)
             lg.update_ts(now)
 
-    def force_log(self) -> None:
+    def force_log(self) -> RunSummary:
         final_stage = self.final_stage_map_provider() if self.final_stage_map_provider else None
         summary = self.aggregator.build_run_summary(final_stage)
         for lg in self.loggers:
@@ -77,3 +77,4 @@ class OmniStatLoggerManager:
                 continue
             lg.log(summary)
             lg.update_ts(time.time())
+        return summary

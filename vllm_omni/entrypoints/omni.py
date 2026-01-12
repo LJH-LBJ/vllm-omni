@@ -790,10 +790,13 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
+            summary_dict = None
             if stat_logger_manager:
-                stat_logger_manager.force_log()
-            summary = metrics.build_summary(final_stage_id_to_prompt)
-            logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
+                summary_obj = stat_logger_manager.force_log()
+                summary_dict = summary_obj.to_dict()
+            if summary_dict is None:
+                summary_dict = metrics.build_summary(final_stage_id_to_prompt)
+            logger.info("[Summary] %s", pformat(summary_dict, sort_dicts=False))
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
 

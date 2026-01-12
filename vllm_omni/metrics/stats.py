@@ -435,7 +435,7 @@ class OrchestratorAggregator:
     ) -> None:
         self.num_stages = int(num_stages)
         self.enable_debug_events = bool(enable_debug_events)
-        # Backward compatible alias for legacy callers that still check enable_stats.
+        # Backward compatible alias for legacy callers that still check enable_stats; prefer enable_debug_events.
         self.enable_stats = self.enable_debug_events
         self.stage_total_time_ms: list[float] = [0.0 for _ in range(self.num_stages)]
         self.stage_total_tokens: list[int] = [0 for _ in range(self.num_stages)]

@@ -314,10 +314,10 @@ class AsyncOmni(OmniBase):
 
             # Determine the final stage for E2E stats (highest stage_id with
             # final_output=True; fallback to last stage)
-            final_stage_id_for_e2e = get_final_stage_id_for_e2e(
+            final_stage_id = get_final_stage_id_for_e2e(
                 output_modalities, self.output_modalities, self.stage_list
             )
-            final_stage_id_to_prompt = {str(request_id): final_stage_id_for_e2e}
+            final_stage_id_to_prompt = {str(request_id): final_stage_id}
 
             # Metrics/aggregation helper
             metrics = OrchestratorMetrics(
@@ -353,7 +353,7 @@ class AsyncOmni(OmniBase):
             logger.debug(f"[{self._name}] Enqueued request {request_id} to stage-0")
 
             logger.debug(f"[{self._name}] Entering scheduling loop: stages={num_stages}")
-            for stage_id, stage in enumerate(self.stage_list[: final_stage_id_for_e2e + 1]):
+            for stage_id, stage in enumerate(self.stage_list[: final_stage_id + 1]):
                 finished = False
                 while not finished:
                     result = await req_state.queue.get()
@@ -400,7 +400,7 @@ class AsyncOmni(OmniBase):
                         # (only once per request at the designated final stage)
                         try:
                             rid_key = str(req_id)
-                            if stage_id == final_stage_id_for_e2e and rid_key not in metrics.e2e_done and finished:
+                            if stage_id == final_stage_id and rid_key not in metrics.e2e_done and finished:
                                 metrics.on_finalize_request(
                                     stage_id,
                                     req_id,
@@ -436,7 +436,7 @@ class AsyncOmni(OmniBase):
                 stage.set_engine_outputs(engine_outputs)
                 # Forward to next stage if there is one
                 next_stage_id = stage_id + 1
-                if next_stage_id <= final_stage_id_for_e2e and finished:
+                if next_stage_id <= final_stage_id and finished:
                     next_stage: OmniStage = self.stage_list[next_stage_id]
                     next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
                     sp_next: SamplingParams = sampling_params_list[next_stage_id]
@@ -478,10 +478,13 @@ class AsyncOmni(OmniBase):
 
             # Summarize and print stats
             try:
+                summary_dict = None
                 if stat_logger_manager:
-                    stat_logger_manager.force_log()
-                summary = metrics.build_summary(final_stage_id_to_prompt)
-                logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
+                    summary_obj = stat_logger_manager.force_log()
+                    summary_dict = summary_obj.to_dict()
+                if summary_dict is None:
+                    summary_dict = metrics.build_summary(final_stage_id_to_prompt)
+                logger.info("[Summary] %s", pformat(summary_dict, sort_dicts=False))
             except Exception as e:
                 logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
             finally:
