@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pprint import pformat
 from typing import Any, Union
 
@@ -12,8 +12,8 @@ logger = init_logger(__name__)
 
 @dataclass
 class StageStats:
-    total_token: int
-    total_gen_time: float
+    total_token: int = 0
+    total_gen_time: float = 0.0
 
     @property
     def avg_tokens_per_s(self) -> float:
@@ -67,13 +67,15 @@ class TransferEdgeStats:
 @dataclass
 class RequestE2EStats:
     request_id: str
-    e2e_count: int
-    wall_time_ms: float
     e2e_total_ms: float
     e2e_total_tokens: int
     transfers_total_time_ms: float
     transfers_total_bytes: int
     stages: dict[str, Any]
+
+    @property
+    def e2e_tpt(self) -> float:
+        return (self.e2e_total_ms / self.e2e_total_tokens) if self.e2e_total_tokens > 0 else 0.0
 
 
 @dataclass
@@ -349,20 +351,33 @@ def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, Request
         )
     if stats_type == "request_level_metrics":
         logger.info(
-                pformat(
-                    {
-                        "type": stats_type,
-                        "request_id": stats.request_id,
-                        "e2e_time_ms": stats.e2e_total_ms,
-                        "e2e_tpt": (stats.e2e_total_ms / stats.e2e_total_tokens) if stats.e2e_total_tokens > 0 else 0.0,
-                        "e2e_total_tokens": stats.e2e_total_tokens,
-                        "transfers_total_time_ms": float(stats.transfers_total_time_ms),
-                        "transfers_total_bytes": int(stats.transfers_total_bytes),
-                        "stages": stats.stages,
-                    },
-                    sort_dicts=False,
-                )
+            pformat(
+                {
+                    "type": stats_type,
+                    "request_id": stats.request_id,
+                    "e2e_time_ms": stats.e2e_total_ms,
+                    "e2e_tpt": (stats.e2e_total_ms / stats.e2e_total_tokens) if stats.e2e_total_tokens > 0 else 0.0,
+                    "e2e_total_tokens": stats.e2e_total_tokens,
+                    "transfers_total_time_ms": float(stats.transfers_total_time_ms),
+                    "transfers_total_bytes": int(stats.transfers_total_bytes),
+                    "stages": stats.stages,
+                },
+                sort_dicts=False,
             )
+        )
+    if stats_type == "stage_running_avg":
+        logger.info(
+            pformat(
+                {
+                    "type": stats_type,
+                    "stage_id": stats.stage_id,
+                    "total_tokens": stats.stage_stats.total_token,
+                    "total_gen_time_ms": stats.stage_stats.total_gen_time,
+                    "avg_tokens_per_s": stats.stage_stats.avg_tokens_per_s,
+                },
+                sort_dicts=False,
+            )
+        )
 
 
 class OrchestratorAggregator:
@@ -461,18 +476,7 @@ class OrchestratorAggregator:
         if self.enable_stats:  
             log_request_stats(stats, "stage_stats")
             if stats.stage_stats is not None:
-                logger.info(
-                    pformat(
-                        {
-                            "type": "Stage_running_avg",
-                            "stage_id": stats.stage_id,
-                            "total_tokens": stats.stage_stats.total_token,
-                            "total_gen_time_ms": stats.stage_stats.total_gen_time,
-                            "avg_tokens_per_s": stats.stage_stats.avg_tokens_per_s,
-                        },
-                        sort_dicts=False,
-                    )
-                )
+                log_request_stats(stats, "stage_running_avg")
         try:
             batch_id_raw = metrics.get("batch_id", None)
             if batch_id_raw is not None:
@@ -558,7 +562,7 @@ class OrchestratorAggregator:
         self.e2e_done.add(rid_key)
         per_req_record = RequestE2EStats(
             request_id=rid_key,
-            e2e_time_ms=e2e_ms,
+            e2e_total_ms=e2e_ms,
             e2e_total_tokens=total_tokens,
             transfers_total_time_ms=float(pr.get("transfers_ms", 0.0)),
             transfers_total_bytes=int(pr.get("transfers_bytes", 0)),
@@ -568,9 +572,84 @@ class OrchestratorAggregator:
         self.e2e_events.append(per_req_record)
         if self.enable_stats:
             log_request_stats(per_req_record, "request_level_metrics")
-        
+    
+    def merge(self, events: list[Any]) -> dict[str, dict[str, dict[str, float] | int]]:
+        """Compute averages for StageRequestStats/TransferEdgeStats/RequestE2EStats events.
 
-    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int]) -> dict[str, Any]:
+        We infer numeric fields via dataclass metadata to avoid manual listing.
+        Only int/float fields are averaged (bools are skipped to avoid counting flags).
+        Returns a mapping of class name -> {field_name: average} and logs it when
+        stats logging is enabled.
+        """
+
+        buckets: dict[type, list[Any]] = {
+            StageRequestStats: [],
+            TransferEdgeStats: [],
+            RequestE2EStats: [],
+        }
+
+        for event in events:
+            if isinstance(event, StageRequestStats):
+                buckets[StageRequestStats].append(event)
+            elif isinstance(event, TransferEdgeStats):
+                buckets[TransferEdgeStats].append(event)
+            elif isinstance(event, RequestE2EStats):
+                rid_key = str(event.request_id)
+                if rid_key in self.e2e_done:
+                    continue
+                buckets[RequestE2EStats].append(event)
+
+        summary: dict[str, dict[str, float]] = {}
+        counts_all: dict[str, int] = {}
+        # Iterate over all events and sum up numeric fields
+        for cls, cls_events in buckets.items():
+            if not cls_events:
+                continue
+            sums: dict[str, float] = {field.name: self.default_for_type(field.type) for field in fields(cls) if field.type in (int, float)}
+            counts: int = 0
+            for evt in cls_events:
+                for field in fields(cls):
+                    value = getattr(evt, field.name, None)
+                    if isinstance(value, bool) or isinstance(value, str):
+                        continue
+                    if isinstance(value, (int, float)):
+                        sums[field.name] += value
+                    if isinstance(value, dict):
+                        for k, v in value.items():
+                            if isinstance(v, (int, float)):
+                                key_name = f"{field.name}_{k}"
+                                if key_name not in sums:
+                                    sums[key_name] = 0.0
+                                sums[key_name] += float(v)
+                    if isinstance(value, StageStats):
+                        for s_field in fields(StageStats):
+                            s_value = getattr(value, s_field.name, None)
+                            if isinstance(s_value, (int, float)):
+                                key_name = f"{field.name}_{s_field.name}"
+                                if key_name not in sums:
+                                    sums[key_name] = 0.0
+                                sums[key_name] += s_value
+                counts += 1
+            averages = {name: (sums[name] / counts) for name in sums if counts > 0}
+            if averages:
+                summary[cls.__name__] = averages
+                counts_all[cls.__name__] = counts
+
+        return {"averages": summary, "counts": counts_all}
+
+    def reset_events(self) -> None:
+        self.stage_events = []
+        self.transfer_events = []
+        self.e2e_events = []
+
+    @staticmethod
+    def default_for_type(data_type):
+        try:
+            return data_type()
+        except Exception:
+            return None
+
+    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int]) -> OrchestratorStatsSummary:
         # Compute stage summary using wall time between first input and last output per stage
         stage_summary: list[dict[str, Any]] = []
         for sid in range(self.num_stages):
