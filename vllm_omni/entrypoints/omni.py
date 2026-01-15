@@ -778,7 +778,7 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
-            summary = metrics.build_and_log_summary(final_stage_id_to_prompt)
+            summary = metrics.build_and_log_summary(final_stage_id_to_prompt).to_dict()
             logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
