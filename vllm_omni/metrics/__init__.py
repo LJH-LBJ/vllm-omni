@@ -1,17 +1,6 @@
-from __future__ import annotations
-
-"""Compatibility wrappers for orchestrator statistics utilities.
-
-The new metrics architecture lives under vllm_omni.metrics.* following the
-Stats -> Aggregator -> Logger/Exporter layering. This module re-exports the
-core types so existing imports continue to work.
-"""
-
-from vllm_omni.metrics import (  # noqa: F401
-    OmniLoggingStatLogger,
-    OmniPrometheusStatLogger,
-    OmniStatLoggerBase,
-    OmniStatLoggerManager,
+from .loggers import OmniLoggingStatLogger, OmniStatLoggerBase, OmniStatLoggerManager
+from .prometheus import OmniPrometheusStatLogger
+from .stats import (
     OrchestratorAggregator,
     OrchestratorMetrics,
     RequestE2EStats,
@@ -35,9 +24,9 @@ from vllm_omni.metrics import (  # noqa: F401
 
 __all__ = [
     "OmniLoggingStatLogger",
-    "OmniPrometheusStatLogger",
     "OmniStatLoggerBase",
     "OmniStatLoggerManager",
+    "OmniPrometheusStatLogger",
     "OrchestratorAggregator",
     "OrchestratorMetrics",
     "RequestE2EStats",
