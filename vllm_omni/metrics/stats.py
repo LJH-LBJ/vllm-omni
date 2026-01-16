@@ -22,18 +22,18 @@ class StageStats:
 
 @dataclass
 class StageRequestStats:
-    stage_id: Optional[int] = None
-    request_id: Optional[str] = None
     num_tokens_in: int
     num_tokens_out: int
     batch_id: int
     batch_size: int
-    num_engine_outputs: Optional[int] = None
     stage_gen_time_ms: float
     rx_transfer_bytes: int
     rx_decode_time_ms: float
     rx_in_flight_time_ms: float
     stage_stats: StageStats
+    num_engine_outputs: Optional[int] = None
+    stage_id: Optional[int] = None
+    request_id: Optional[str] = None
 
     @property
     def rx_mbps(self) -> float:
