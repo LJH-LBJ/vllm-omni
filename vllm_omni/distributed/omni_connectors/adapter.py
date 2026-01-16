@@ -8,6 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from vllm_omni.entrypoints.stage_utils import OmniStageTaskType
+from vllm_omni.metrics import OrchestratorAggregator
 
 from .utils.logging import get_connector_logger
 
@@ -23,7 +24,7 @@ def try_send_via_connector(
     sampling_params: Any,
     original_prompt: Any,
     next_stage_queue_submit_fn: Callable[[dict[str, Any]], None],
-    metrics: Any,
+    metrics: OrchestratorAggregator,
 ) -> bool:
     """
     Attempts to send data via OmniConnector.

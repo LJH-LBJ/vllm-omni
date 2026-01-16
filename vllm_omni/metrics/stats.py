@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, fields
 from pprint import pformat
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 from vllm.logger import init_logger
 
@@ -22,13 +22,13 @@ class StageStats:
 
 @dataclass
 class StageRequestStats:
-    stage_id: int
-    request_id: str
+    stage_id: Optional[int] = None
+    request_id: Optional[str] = None
     num_tokens_in: int
     num_tokens_out: int
     batch_id: int
     batch_size: int
-    num_engine_outputs: int
+    num_engine_outputs: Optional[int] = None
     stage_gen_time_ms: float
     rx_transfer_bytes: int
     rx_decode_time_ms: float
@@ -45,7 +45,7 @@ class StageRequestStats:
 
     @property
     def tokens_per_s(self) -> float:
-        return (self.num_engine_outputs * 1000.0 / self.stage_gen_time_ms) if self.stage_gen_time_ms > 0 else 0.0
+        return (self.num_engine_outputs * 1000.0 / self.stage_gen_time_ms) if (self.stage_gen_time_ms > 0) else 0.0
 
 
 @dataclass
@@ -389,25 +389,29 @@ class OrchestratorAggregator:
     ) -> None:
         self.num_stages = int(num_stages)
         self.enable_stats = bool(enable_stats)
-        self.stage_total_time_ms: list[float] = [0.0 for _ in range(self.num_stages)]
-        self.stage_total_tokens: list[int] = [0 for _ in range(self.num_stages)]
-        self.stage_req_counts: list[int] = [0 for _ in range(self.num_stages)]
-        self.transfer_agg: dict[tuple[int, int], dict[str, float]] = {}
-        self.transfer_edge_req: dict[tuple[int, int, str], dict[str, float]] = {}
-        self.e2e_total_ms: float = 0.0
-        self.e2e_total_tokens: int = 0
-        self.e2e_count: int = 0
-        self.e2e_done: set[str] = set()
-        self.per_request: dict[str, dict[str, Any]] = {}
-        self.sum_per_request_transfer_ms: float = 0.0
-        self.wall_start_ts: float = float(wall_start_ts)
-        self.last_finish_ts: float = float(wall_start_ts)
-        self.stage_seen_batches: dict[int, set] = {sid: set() for sid in range(self.num_stages)}
-        self.stage_first_ts: list[float | None] = [None for _ in range(self.num_stages)]
-        self.stage_last_ts: list[float | None] = [None for _ in range(self.num_stages)]
-        self.stage_events: list[StageRequestStats] = []
-        self.transfer_events: list[TransferEdgeStats] = []
-        self.e2e_events: list[RequestE2EStats] = []
+        self.init_run_state(wall_start_ts)
+        self.stage_events = []
+        self.transfer_events = []
+        self.e2e_events = []
+    
+    def init_run_state(self, wall_start_ts: float) -> None:
+        # Per-run aggregates and timing state
+        self.stage_total_time_ms = [0.0 for _ in range(self.num_stages)]
+        self.stage_total_tokens = [0 for _ in range(self.num_stages)]
+        self.stage_req_counts = [0 for _ in range(self.num_stages)]
+        self.transfer_agg = {}
+        self.transfer_edge_req = {}
+        self.e2e_total_ms = 0.0
+        self.e2e_total_tokens = 0
+        self.e2e_count = 0
+        self.e2e_done = set()
+        self.per_request = {}
+        self.sum_per_request_transfer_ms = 0.0
+        self.wall_start_ts = float(wall_start_ts)
+        self.last_finish_ts = float(wall_start_ts)
+        self.stage_seen_batches = {sid: set() for sid in range(self.num_stages)}
+        self.stage_first_ts = [None for _ in range(self.num_stages)]
+        self.stage_last_ts = [None for _ in range(self.num_stages)]
 
     @staticmethod
     def _as_stage_request_stats(stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]) -> StageRequestStats:
@@ -472,8 +476,8 @@ class OrchestratorAggregator:
             self.stage_total_tokens,
             stats,
         )
-        self.stage_events.append(stats) # TODO： 最好是融合在原来的位置
-        if self.enable_stats:  
+        self.stage_events.append(stats)
+        if self.enable_stats:
             log_request_stats(stats, "stage_stats")
             if stats.stage_stats is not None:
                 log_request_stats(stats, "stage_running_avg")
@@ -573,69 +577,80 @@ class OrchestratorAggregator:
         if self.enable_stats:
             log_request_stats(per_req_record, "request_level_metrics")
     
-    def merge(self, events: list[Any]) -> dict[str, dict[str, dict[str, float] | int]]:
-        """Compute averages for StageRequestStats/TransferEdgeStats/RequestE2EStats events.
+    def merge(self, events: list[Any]) -> dict[str, Any]:
+        """Compute grouped averages for StageRequestStats/TransferEdgeStats/RequestE2EStats.
 
-        We infer numeric fields via dataclass metadata to avoid manual listing.
-        Only int/float fields are averaged (bools are skipped to avoid counting flags).
-        Returns a mapping of class name -> {field_name: average} and logs it when
-        stats logging is enabled.
+        - StageRequestStats are grouped by stage_id
+        - TransferEdgeStats are grouped by (from_stage, to_stage)
+        - RequestE2EStats are aggregated as a single group
         """
 
-        buckets: dict[type, list[Any]] = {
-            StageRequestStats: [],
-            TransferEdgeStats: [],
-            RequestE2EStats: [],
-        }
+        def _accumulate_numeric(sums: dict[str, float], evt: Any) -> None:
+            for field in fields(type(evt)):
+                value = getattr(evt, field.name, None)
+                if value is None or isinstance(value, (bool, str)):
+                    continue
+                if isinstance(value, (int, float)):
+                    sums[field.name] = sums.get(field.name, 0.0) + float(value)
+                    continue
+                if isinstance(value, dict):
+                    for k, v in value.items():
+                        if isinstance(v, (int, float)):
+                            key_name = f"{field.name}_{k}"
+                            sums[key_name] = sums.get(key_name, 0.0) + float(v)
+                    continue
+                if isinstance(value, StageStats):
+                    for s_field in fields(StageStats):
+                        s_value = getattr(value, s_field.name, None)
+                        if isinstance(s_value, (int, float)):
+                            key_name = f"{field.name}_{s_field.name}"
+                            sums[key_name] = sums.get(key_name, 0.0) + float(s_value)
+
+        stage_sums: dict[int, dict[str, float]] = {}
+        stage_counts: dict[int, int] = {}
+        transfer_sums: dict[tuple[int, int], dict[str, float]] = {}
+        transfer_counts: dict[tuple[int, int], int] = {}
+        e2e_sums: dict[str, float] = {}
+        e2e_count = 0
 
         for event in events:
             if isinstance(event, StageRequestStats):
-                buckets[StageRequestStats].append(event)
-            elif isinstance(event, TransferEdgeStats):
-                buckets[TransferEdgeStats].append(event)
-            elif isinstance(event, RequestE2EStats):
-                rid_key = str(event.request_id)
-                if rid_key in self.e2e_done:
+                if event.stage_id is None:
                     continue
-                buckets[RequestE2EStats].append(event)
+                sid = int(event.stage_id)
+                sums = stage_sums.setdefault(sid, {})
+                _accumulate_numeric(sums, event)
+                stage_counts[sid] = stage_counts.get(sid, 0) + 1
+            elif isinstance(event, TransferEdgeStats):
+                key = (int(event.from_stage), int(event.to_stage))
+                sums = transfer_sums.setdefault(key, {})
+                _accumulate_numeric(sums, event)
+                transfer_counts[key] = transfer_counts.get(key, 0) + 1
+            elif isinstance(event, RequestE2EStats):
+                _accumulate_numeric(e2e_sums, event)
+                e2e_count += 1
 
-        summary: dict[str, dict[str, float]] = {}
-        counts_all: dict[str, int] = {}
-        # Iterate over all events and sum up numeric fields
-        for cls, cls_events in buckets.items():
-            if not cls_events:
-                continue
-            sums: dict[str, float] = {field.name: self.default_for_type(field.type) for field in fields(cls) if field.type in (int, float)}
-            counts: int = 0
-            for evt in cls_events:
-                for field in fields(cls):
-                    value = getattr(evt, field.name, None)
-                    if isinstance(value, bool) or isinstance(value, str):
-                        continue
-                    if isinstance(value, (int, float)):
-                        sums[field.name] += value
-                    if isinstance(value, dict):
-                        for k, v in value.items():
-                            if isinstance(v, (int, float)):
-                                key_name = f"{field.name}_{k}"
-                                if key_name not in sums:
-                                    sums[key_name] = 0.0
-                                sums[key_name] += float(v)
-                    if isinstance(value, StageStats):
-                        for s_field in fields(StageStats):
-                            s_value = getattr(value, s_field.name, None)
-                            if isinstance(s_value, (int, float)):
-                                key_name = f"{field.name}_{s_field.name}"
-                                if key_name not in sums:
-                                    sums[key_name] = 0.0
-                                sums[key_name] += s_value
-                counts += 1
-            averages = {name: (sums[name] / counts) for name in sums if counts > 0}
-            if averages:
-                summary[cls.__name__] = averages
-                counts_all[cls.__name__] = counts
+        def _avg_map(sums: dict[str, float], count: int) -> dict[str, float]:
+            return {name: (sums[name] / count) for name in sums} if count > 0 else {}
 
-        return {"averages": summary, "counts": counts_all}
+        stage_avgs = {str(sid): _avg_map(sums, stage_counts.get(sid, 0)) for sid, sums in stage_sums.items()}
+        transfer_avgs = {
+            f"{src}->{dst}": _avg_map(sums, transfer_counts.get((src, dst), 0))
+            for (src, dst), sums in transfer_sums.items()
+        }
+
+        return {
+            "averages": {
+                "StageRequestStats": {"by_stage": stage_avgs},
+                "TransferEdgeStats": {"by_edge": transfer_avgs},
+                "RequestE2EStats": _avg_map(e2e_sums, e2e_count),
+            },
+            "counts": {
+                "e2e": int(e2e_count),
+                "stage": {str(sid): int(cnt) for sid, cnt in stage_counts.items()},
+                "transfer": {f"{src}->{dst}": int(cnt) for (src, dst), cnt in transfer_counts.items()},
+            },
+        }
 
     def reset_events(self) -> None:
         self.stage_events = []

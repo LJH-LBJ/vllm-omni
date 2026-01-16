@@ -16,6 +16,7 @@ from vllm.plugins.io_processors import get_io_processor
 from vllm.sampling_params import SamplingParams
 from vllm.tokenizers import TokenizerLike
 from vllm.v1.engine.exceptions import EngineDeadError
+import vllm.envs as envs
 
 # Internal imports (our code)
 from vllm_omni.config import OmniModelConfig
@@ -24,9 +25,6 @@ from vllm_omni.distributed.omni_connectors.adapter import try_send_via_connector
 from vllm_omni.distributed.ray_utils.utils import try_close_ray
 from vllm_omni.engine.input_processor import OmniInputProcessor
 from vllm_omni.entrypoints.client_request_state import ClientRequestState
-from vllm_omni.entrypoints.log_utils import (
-    OrchestratorMetrics,
-)
 from vllm_omni.entrypoints.omni import OmniBase
 from vllm_omni.entrypoints.omni_stage import OmniStage
 from vllm_omni.entrypoints.stage_utils import SHUTDOWN_TASK, OmniStageTaskType
@@ -34,12 +32,13 @@ from vllm_omni.entrypoints.stage_utils import maybe_load_from_ipc as _load
 from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
+from vllm_omni.metrics import OmniLoggingStatLogger, OrchestratorAggregator
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
 
 
-def _weak_close_cleanup_async(stage_list, stage_in_queues, ray_pg, output_handler):
+def _weak_close_cleanup_async(stage_list, stage_in_queues, ray_pg, output_handler, log_stats_task):
     """Weak reference cleanup function for AsyncOmni instances."""
     if stage_list:
         for q in stage_in_queues:
@@ -56,7 +55,8 @@ def _weak_close_cleanup_async(stage_list, stage_in_queues, ray_pg, output_handle
     # Cancel output handler
     if output_handler is not None:
         output_handler.cancel()
-
+    if log_stats_task is not None:
+        log_stats_task.cancel()
 
 class AsyncOmni(OmniBase):
     """Asynchronous unified entry point supporting multi-stage pipelines for LLM and Diffusion models.
@@ -105,6 +105,22 @@ class AsyncOmni(OmniBase):
 
         super().__init__(*args, **kwargs)
 
+        num_stages = len(self.stage_list)
+        self.metrics = OrchestratorAggregator(
+            num_stages=num_stages,
+            enable_stats=self._enable_stats,
+            wall_start_ts=0.0, # will be reset at generate() time, just a placeholder here
+        )
+        self.stats_logger = OmniLoggingStatLogger(self.metrics, self._enable_stats)
+        if self.stats_logger.enable_stats:
+            async def _force_log():
+                while True:
+                    await asyncio.sleep(envs.VLLM_LOG_STATS_INTERVAL)
+                    await self.stats_logger.do_log_stats()
+            self.log_stats_task = asyncio.create_task(_force_log())
+        else:
+            self.log_stats_task = None
+
         # Register weak reference cleanup (called on garbage collection)
         self._weak_finalizer = weakref.finalize(
             self,
@@ -113,6 +129,7 @@ class AsyncOmni(OmniBase):
             self._stage_in_queues,
             self._ray_pg,
             self.output_handler,
+            self.log_stats_task,
         )
 
     def _create_default_diffusion_stage_cfg(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -319,11 +336,8 @@ class AsyncOmni(OmniBase):
             )
 
             # Metrics/aggregation helper
-            metrics = OrchestratorMetrics(
-                num_stages,
-                self._enable_stats,
-                _wall_start_ts,
-            )
+            metrics = self.metrics
+            metrics.init_run_state(_wall_start_ts)
             # Seed stage-0 queue with all requests
             logger.debug(f"[{self._name}] Seeding request into stage-0")
             req_state = ClientRequestState(request_id)
@@ -459,15 +473,7 @@ class AsyncOmni(OmniBase):
                     logger.debug(f"[{self._name}] Request {req_id} fully completed")
 
             logger.debug(f"[{self._name}] All requests completed")
-
-            # Summarize and print stats
-            try:
-                summary = metrics.build_and_log_summary(final_stage_id_for_e2e).to_dict()
-                logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
-            except Exception as e:
-                logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
-            finally:
-                self.request_states.pop(request_id, None)
+            self.request_states.pop(request_id, None)
         except (asyncio.CancelledError, GeneratorExit):
             await self.abort(request_id)
             logger.info("[AsyncOrchestrator] Request %s aborted.", request_id)

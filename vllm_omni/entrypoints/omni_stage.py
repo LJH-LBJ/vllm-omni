@@ -34,7 +34,7 @@ from vllm_omni.distributed.ray_utils.utils import kill_ray_actor, start_ray_acto
 from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs
 from vllm_omni.entrypoints.async_omni_diffusion import AsyncOmniDiffusion
 from vllm_omni.entrypoints.async_omni_llm import AsyncOmniLLM
-from vllm_omni.entrypoints.log_utils import count_tokens_from_outputs
+from vllm_omni.metrics import count_tokens_from_outputs
 from vllm_omni.entrypoints.omni_diffusion import OmniDiffusion
 from vllm_omni.entrypoints.omni_llm import OmniLLM
 from vllm_omni.entrypoints.stage_utils import (
@@ -1383,13 +1383,11 @@ def make_request_stats(
     rx_transfer_bytes: int,
     rx_in_flight_time_ms: float,
 ):
-    from vllm_omni.entrypoints.log_utils import (
-        StageRequestMetrics,
-    )
+    from vllm_omni.metrics import StageRequestStats
 
     num_tokens_in = count_prompt_tokens_from_outputs(req_output)
     num_tokens_out = count_tokens_from_outputs(req_output)
-    return StageRequestMetrics(
+    return StageRequestStats(
         num_tokens_in=num_tokens_in,
         num_tokens_out=num_tokens_out,
         stage_gen_time_ms=stage_gen_time_ms,
@@ -1403,6 +1401,6 @@ def make_request_stats(
 
 
 def make_stage_stats(_agg_total_tokens: int, _agg_total_gen_time_ms: float):
-    from vllm_omni.entrypoints.log_utils import StageStats
+    from vllm_omni.metrics import StageStats
 
     return StageStats(total_token=_agg_total_tokens, total_gen_time=_agg_total_gen_time_ms)

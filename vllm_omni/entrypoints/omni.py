@@ -16,6 +16,7 @@ from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 from vllm.inputs import PromptType
 from vllm.logger import init_logger
+import vllm.envs as envs
 
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.distributed.omni_connectors import (
@@ -28,7 +29,6 @@ from vllm_omni.distributed.ray_utils.utils import (
     get_ray_queue_class,
     try_close_ray,
 )
-from vllm_omni.entrypoints.log_utils import OrchestratorMetrics
 from vllm_omni.entrypoints.omni_stage import OmniStage
 from vllm_omni.entrypoints.stage_utils import SHUTDOWN_TASK, OmniStageTaskType
 from vllm_omni.entrypoints.stage_utils import maybe_load_from_ipc as _load
@@ -39,6 +39,7 @@ from vllm_omni.entrypoints.utils import (
     resolve_model_config_path,
 )
 from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.metrics import OrchestratorAggregator
 
 logger = init_logger(__name__)
 
@@ -592,7 +593,7 @@ class Omni(OmniBase):
             final_stage_id_to_prompt[rid] = final_stage_id_for_e2e
 
         # Metrics/aggregation helper
-        metrics = OrchestratorMetrics(
+        metrics = OrchestratorAggregator(
             num_stages,
             self._enable_stats,
             _wall_start_ts,
