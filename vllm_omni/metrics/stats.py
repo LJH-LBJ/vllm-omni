@@ -601,20 +601,20 @@ class OrchestratorAggregator:
                 if value is None or isinstance(value, (bool, str)):
                     continue
                 if isinstance(value, (int, float)):
-                    sums[field.name] = sums.get(field.name, 0.0) + float(value)
+                    sums[field.name] = sums.get(field.name, 0.0) + value
                     continue
                 if isinstance(value, dict):
                     for k, v in value.items():
                         if isinstance(v, (int, float)):
                             key_name = f"{field.name}_{k}"
-                            sums[key_name] = sums.get(key_name, 0.0) + float(v)
+                            sums[key_name] = sums.get(key_name, 0.0) + v
                     continue
                 if isinstance(value, StageStats):
                     for s_field in fields(StageStats):
                         s_value = getattr(value, s_field.name, None)
                         if isinstance(s_value, (int, float)):
                             key_name = f"{field.name}_{s_field.name}"
-                            sums[key_name] = sums.get(key_name, 0.0) + float(s_value)
+                            sums[key_name] = sums.get(key_name, 0.0) + s_value
 
         stage_sums: dict[int, dict[str, float]] = {}
         stage_counts: dict[int, int] = {}
