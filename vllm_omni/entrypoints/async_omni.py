@@ -112,14 +112,19 @@ class AsyncOmni(OmniBase):
             wall_start_ts=0.0, # will be reset at generate() time, just a placeholder here
         )
         self.stats_logger = OmniLoggingStatLogger(self.metrics, self._enable_stats)
-        if self.stats_logger.enable_stats:
-            async def _force_log():
-                while True:
-                    await asyncio.sleep(envs.VLLM_LOG_STATS_INTERVAL)
-                    await self.stats_logger.do_log_stats()
-            self.log_stats_task = asyncio.create_task(_force_log())
-        else:
-            self.log_stats_task = None
+        # if self.stats_logger.enable_stats:
+        #     async def _force_log():
+        #         while True:
+        #             await asyncio.sleep(envs.VLLM_LOG_STATS_INTERVAL)
+        #             await self.stats_logger.do_log_stats()
+        #     self.log_stats_task = asyncio.create_task(_force_log())
+        # else:
+        #     self.log_stats_task = None
+        async def _force_log():
+            while True:
+                await asyncio.sleep(envs.VLLM_LOG_STATS_INTERVAL)
+                await self.stats_logger.do_log_stats()
+        self.log_stats_task = asyncio.create_task(_force_log())
 
         # Register weak reference cleanup (called on garbage collection)
         self._weak_finalizer = weakref.finalize(

@@ -56,6 +56,12 @@ class TransferEdgeStats:
     size_bytes: int
     tx_time_ms: float
     used_shm: bool = False
+    rx_decode_time_ms: float = 0.0
+    in_flight_time_ms: float = 0.0
+
+    @property
+    def total_time_ms(self) -> float:
+        return float(self.tx_time_ms) + float(self.rx_decode_time_ms) + float(self.in_flight_time_ms)
 
 
 @dataclass
@@ -487,7 +493,20 @@ class OrchestratorAggregator:
             self.per_request,
             stats,
         )
-        if self.enable_stats and stats.stage_id > 0:
+        if combined is not None and stats.stage_id is not None and stats.stage_id > 0:
+            size_b_c, tx_ms_c, _total_ms_c = combined
+            tx_event = TransferEdgeStats(
+                from_stage=int(stats.stage_id) - 1,
+                to_stage=int(stats.stage_id),
+                request_id=req_id,
+                size_bytes=int(size_b_c),
+                tx_time_ms=float(tx_ms_c),
+                rx_decode_time_ms=float(stats.rx_decode_time_ms),
+                in_flight_time_ms=float(stats.rx_in_flight_time_ms),
+            )
+            self.transfer_events.append(tx_event)
+
+        if self.enable_stats and stats.stage_id is not None and stats.stage_id > 0:
             log_request_stats(stats, "transfer_rx_stats")
             if combined is not None:
                 size_b_c, tx_ms_c, total_ms_c = combined

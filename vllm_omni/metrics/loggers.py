@@ -16,12 +16,13 @@ class OmniLoggingStatLogger:
         self.last_e2e_total_tokens = 0
         self.last_e2e_total_ms = 0.0
     
-    def do_log_stats(self) -> None:
+    async def do_log_stats(self) -> None:
         """Log the aggregated stats if logging is enabled and engine is not idle."""
-        if not self.enable_stats:
-            # Clear events to avoid memory growth when stats logging is disabled
-            self.aggregator.reset_events()
-            return
+        # if not self.enable_stats:
+        #     # Clear events to avoid memory growth when stats logging is disabled
+        #     self.aggregator.reset_events()
+        #     return
+        self._update_engine_idle()
         log_fn = logger.debug if self.engine_is_idle else logger.info
         self._merge()  # Merge all events into a summary
         log_fn("[OmniStats Summary] %s", pformat(self.summary, sort_dicts=False))
