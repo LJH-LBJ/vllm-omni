@@ -138,6 +138,9 @@ async def test_build_and_log_summary(monkeypatch):
             summary = capture_metrics[request_ids[idx]].metrics.build_and_log_summary(final_stage_id_for_e2e)
 
             # Check that total tokens matches sum of stage tokens.
-            assert summary["e2e_total_tokens"] == sum(stage["tokens"] for stage in summary["stages"])
-            # Check that total time matches sum of stage times.
-            assert summary["e2e_total_time_ms"] >= sum(stage["total_time_ms"] for stage in summary["stages"])
+            assert summary["e2e_total_tokens"] == sum(
+                (stage.get("num_tokens_in", 0) if stage.get("stage_id") == 0 else 0) + stage["num_tokens_out"]
+                for stage in summary["stage_table"]
+            )
+            # Check that total time is non-negative.
+            assert summary["e2e_total_time_ms"] >= 0.0

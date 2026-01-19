@@ -1,6 +1,4 @@
 from __future__ import annotations
-from dataclasses import asdict
-
 from vllm_omni.metrics import OmniLoggingStatLogger
 from vllm_omni.metrics import OrchestratorAggregator
 from vllm_omni.metrics.stats import RequestE2EStats, StageRequestStats, StageStats, TransferEdgeStats
@@ -43,12 +41,13 @@ def test_orchestrator_aggregator_builds_summary() -> None:
     agg.on_finalize_request(1, "r1", req_start_ts=0.0)
 
     summary = agg.build_and_log_summary(final_stage_id_to_prompt={"r1": 1})
-    data = asdict(summary)
-    assert data["e2e_requests"] == 1
-    assert len(data["stages"]) == 2
-    assert data["stages"][0]["requests"] == 1
-    assert data["transfers"][0]["samples"] == 1
-    assert data["transfers"][0]["total_mbps"] >= 0.0
+    assert summary["e2e_requests"] == 1
+    assert len(summary["stage_table"]) == 2
+    assert summary["stage_table"][0]["stage_id"] == 0
+    assert summary["stage_table"][1]["stage_id"] == 1
+    assert summary["trans_table"][0]["from_stage"] == 0
+    assert summary["trans_table"][0]["to_stage"] == 1
+    assert summary["trans_table"][0]["size_bytes"] >= 0
 
 
 def test_logger_clears_events_when_disabled() -> None:

@@ -38,7 +38,7 @@ from vllm_omni.outputs import OmniRequestOutput
 logger = init_logger(__name__)
 
 
-def _weak_close_cleanup_async(stage_list, stage_in_queues, ray_pg, output_handler, log_stats_task):
+def _weak_close_cleanup_async(stage_list, stage_in_queues, ray_pg, output_handler):
     """Weak reference cleanup function for AsyncOmni instances."""
     if stage_list:
         for q in stage_in_queues:
@@ -55,8 +55,6 @@ def _weak_close_cleanup_async(stage_list, stage_in_queues, ray_pg, output_handle
     # Cancel output handler
     if output_handler is not None:
         output_handler.cancel()
-    if log_stats_task is not None:
-        log_stats_task.cancel()
 
 class AsyncOmni(OmniBase):
     """Asynchronous unified entry point supporting multi-stage pipelines for LLM and Diffusion models.
@@ -105,27 +103,6 @@ class AsyncOmni(OmniBase):
 
         super().__init__(*args, **kwargs)
 
-        num_stages = len(self.stage_list)
-        self.metrics = OrchestratorAggregator(
-            num_stages=num_stages,
-            enable_stats=self._enable_stats,
-            wall_start_ts=0.0, # will be reset at generate() time, just a placeholder here
-        )
-        self.stats_logger = OmniLoggingStatLogger(self.metrics, self._enable_stats)
-        # if self.stats_logger.enable_stats:
-        #     async def _force_log():
-        #         while True:
-        #             await asyncio.sleep(envs.VLLM_LOG_STATS_INTERVAL)
-        #             await self.stats_logger.do_log_stats()
-        #     self.log_stats_task = asyncio.create_task(_force_log())
-        # else:
-        #     self.log_stats_task = None
-        async def _force_log():
-            while True:
-                await asyncio.sleep(envs.VLLM_LOG_STATS_INTERVAL)
-                await self.stats_logger.do_log_stats()
-        self.log_stats_task = asyncio.create_task(_force_log())
-
         # Register weak reference cleanup (called on garbage collection)
         self._weak_finalizer = weakref.finalize(
             self,
@@ -134,7 +111,6 @@ class AsyncOmni(OmniBase):
             self._stage_in_queues,
             self._ray_pg,
             self.output_handler,
-            self.log_stats_task,
         )
 
     def _create_default_diffusion_stage_cfg(self, kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -341,8 +317,11 @@ class AsyncOmni(OmniBase):
             )
 
             # Metrics/aggregation helper
-            metrics = self.metrics
-            metrics.init_run_state(_wall_start_ts)
+            metrics = OrchestratorAggregator(
+                num_stages=num_stages,
+                enable_stats=self._enable_stats,
+                wall_start_ts=_wall_start_ts, # will be reset at generate() time, just a placeholder here
+            )
             # Seed stage-0 queue with all requests
             logger.debug(f"[{self._name}] Seeding request into stage-0")
             req_state = ClientRequestState(request_id)
@@ -478,7 +457,13 @@ class AsyncOmni(OmniBase):
                     logger.debug(f"[{self._name}] Request {req_id} fully completed")
 
             logger.debug(f"[{self._name}] All requests completed")
-            self.request_states.pop(request_id, None)
+            # Summarize and print stats
+            try:
+                metrics.build_and_log_summary(final_stage_id_for_e2e)
+            except Exception as e:
+                logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
+            finally:
+                self.request_states.pop(request_id, None)
         except (asyncio.CancelledError, GeneratorExit):
             await self.abort(request_id)
             logger.info("[AsyncOrchestrator] Request %s aborted.", request_id)

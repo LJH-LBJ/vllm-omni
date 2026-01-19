@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, fields
 from pprint import pformat
 from typing import Any, Optional, Union
 
@@ -103,7 +103,7 @@ def record_stage_metrics(
         stage_req_counts[stats.stage_id] += 1
         stage_total_tokens[stats.stage_id] += int(stats.num_tokens_out)
         rid_key = str(stats.request_id)
-        pr = per_request.setdefault(rid_key, {"stages": {}, "transfers_ms": 0.0, "transfers_bytes": 0})
+        pr = per_request.setdefault(rid_key, {"stages": {}})
         pr_stages = pr["stages"]  # type: ignore[index]
         stage_data: dict[str, Any] = {
             "stage_gen_time_ms": float(stats.stage_gen_time_ms),
@@ -118,87 +118,65 @@ def record_stage_metrics(
         pass
 
 
-def aggregate_rx_and_maybe_total(
-    transfer_edge_req: dict[tuple[int, int, str], dict[str, float]],
-    transfer_agg: dict[tuple[int, int], dict[str, float]],
-    per_request: dict[str, dict[str, Any]],
-    stats: StageRequestStats,
-) -> tuple[int, float, float] | None:
-    try:
-        # Update RX aggregates for (stage_id-1 -> stage_id)
-        if stats.stage_id > 0:
-            key = (stats.stage_id - 1, stats.stage_id)
-            agg = transfer_agg.get(key)
-            if agg is None:
-                agg = {
-                    "sum_bytes": 0.0,
-                    "sum_ms": 0.0,
-                    "count": 0.0,
-                    "sum_rx_bytes": 0.0,
-                    "sum_rx_ms": 0.0,
-                    "rx_count": 0.0,
-                    "sum_total_ms": 0.0,
-                    "total_count": 0.0,
-                }
-                transfer_agg[key] = agg
-            agg["sum_rx_bytes"] += float(stats.rx_transfer_bytes)
-            agg["sum_rx_ms"] += float(stats.rx_decode_time_ms)
-            agg["rx_count"] += 1.0
-
-            # Try combine with sender-side timing if present
-            rid_key = str(stats.request_id)
-            s = transfer_edge_req.get((stats.stage_id - 1, stats.stage_id, rid_key))
-            if s is None:
-                return None
-            tx_ms = float(s.get("tx_ms", 0.0))
-            size_b = float(s.get("size_bytes", stats.rx_transfer_bytes))
-            total_ms = tx_ms + float(stats.rx_in_flight_time_ms) + float(stats.rx_decode_time_ms)
-            agg["sum_total_ms"] += total_ms
-            agg["total_count"] += 1.0
-            # accumulate per-request transfer totals
-            try:
-                pr = per_request.setdefault(rid_key, {"stages": {}, "transfers_ms": 0.0, "transfers_bytes": 0})
-                pr["transfers_ms"] = float(pr.get("transfers_ms", 0.0)) + total_ms  # type: ignore[index]
-                pr["transfers_bytes"] = int(pr.get("transfers_bytes", 0)) + int(stats.rx_transfer_bytes)  # type: ignore[index]
-            except Exception:
-                pass
-            return int(size_b), float(tx_ms), float(total_ms)
-        return None
-    except Exception:
-        return None
+def _get_or_create_transfer_event(
+    transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
+    from_stage: int,
+    to_stage: int,
+    request_id: str,
+) -> TransferEdgeStats:
+    key = (from_stage, to_stage, request_id)
+    evt = transfer_events.get(key)
+    if evt is None:
+        evt = TransferEdgeStats(
+            from_stage=from_stage,
+            to_stage=to_stage,
+            request_id=request_id,
+            size_bytes=0,
+            tx_time_ms=0.0,
+            used_shm=False,
+            rx_decode_time_ms=0.0,
+            in_flight_time_ms=0.0,
+        )
+        transfer_events[key] = evt
+    return evt
 
 
-def record_sender_transfer_agg(
-    transfer_agg: dict[tuple[int, int], dict[str, float]],
-    transfer_edge_req: dict[tuple[int, int, str], dict[str, float]],
+def record_transfer_tx(
+    transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
     stats: TransferEdgeStats,
 ) -> None:
     try:
-        key = (stats.from_stage, stats.to_stage)
-        agg = transfer_agg.get(key)
-        if agg is None:
-            agg = {
-                "sum_bytes": 0.0,
-                "sum_ms": 0.0,
-                "count": 0.0,
-                "sum_rx_bytes": 0.0,
-                "sum_rx_ms": 0.0,
-                "rx_count": 0.0,
-                "sum_total_ms": 0.0,
-                "total_count": 0.0,
-            }
-            transfer_agg[key] = agg
-        agg["sum_bytes"] += float(stats.size_bytes)
-        agg["sum_ms"] += float(stats.tx_time_ms)
-        agg["count"] += 1.0
-        # Store sender-side timing for per-request combination
-        rid_key = str(stats.request_id)
-        transfer_edge_req[(stats.from_stage, stats.to_stage, rid_key)] = {
-            "tx_ms": float(stats.tx_time_ms),
-            "size_bytes": float(stats.size_bytes),
-        }
+        evt = _get_or_create_transfer_event(
+            transfer_events,
+            int(stats.from_stage),
+            int(stats.to_stage),
+            str(stats.request_id),
+        )
+        evt.size_bytes = int(stats.size_bytes)
+        evt.tx_time_ms = float(stats.tx_time_ms)
+        evt.used_shm = bool(stats.used_shm)
     except Exception:
         pass
+
+
+def record_transfer_rx(
+    transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
+    stats: StageRequestStats,
+) -> TransferEdgeStats | None:
+    try:
+        if stats.stage_id is None or stats.stage_id <= 0:
+            return None
+        from_stage = int(stats.stage_id) - 1
+        to_stage = int(stats.stage_id)
+        rid_key = str(stats.request_id)
+        evt = _get_or_create_transfer_event(transfer_events, from_stage, to_stage, rid_key)
+        if evt.size_bytes == 0:
+            evt.size_bytes = int(stats.rx_transfer_bytes)
+        evt.rx_decode_time_ms = float(stats.rx_decode_time_ms)
+        evt.in_flight_time_ms = float(stats.rx_in_flight_time_ms)
+        return evt
+    except Exception:
+        return None
 
 
 def count_tokens_from_outputs(engine_outputs: list[Any]) -> int:
@@ -215,46 +193,50 @@ def count_tokens_from_outputs(engine_outputs: list[Any]) -> int:
     return total
 
 
-def build_stage_summary(
-    stage_req_counts: list[int],
-    stage_total_tokens: list[int],
-    stage_total_time_ms: list[float],
-) -> list[dict[str, Any]]:
-    summary: list[dict[str, Any]] = []
-    for sid in range(len(stage_req_counts)):
-        reqs = stage_req_counts[sid]
-        tokens = stage_total_tokens[sid]
-        total_ms = float(stage_total_time_ms[sid])
-        avg_req = (total_ms / reqs) if reqs > 0 else 0.0
-        avg_tok = (tokens * 1000.0 / total_ms) if total_ms > 0 else 0.0
-        summary.append(
-            {
-                "stage_id": sid,
-                "requests": int(reqs),
-                "tokens": int(tokens),
-                "total_time_ms": total_ms,
-                "avg_time_per_request_ms": avg_req,
-                "avg_tokens_per_s": avg_tok,
-            }
-        )
-    return summary
-
-
 def build_transfer_summary(
-    transfer_agg: dict[tuple[int, int], dict[str, float]],
+    transfer_events: list[TransferEdgeStats],
 ) -> list[dict[str, Any]]:
+    agg: dict[tuple[int, int], dict[str, float]] = {}
+    for evt in transfer_events:
+        key = (int(evt.from_stage), int(evt.to_stage))
+        bucket = agg.setdefault(
+            key,
+            {
+                "sum_bytes": 0.0,
+                "sum_ms": 0.0,
+                "count": 0.0,
+                "sum_rx_bytes": 0.0,
+                "sum_rx_ms": 0.0,
+                "rx_count": 0.0,
+                "sum_total_ms": 0.0,
+                "total_count": 0.0,
+            },
+        )
+        if evt.size_bytes > 0:
+            bucket["sum_bytes"] += float(evt.size_bytes)
+            bucket["count"] += 1.0
+        if evt.tx_time_ms > 0:
+            bucket["sum_ms"] += float(evt.tx_time_ms)
+        if evt.rx_decode_time_ms > 0:
+            bucket["sum_rx_bytes"] += float(evt.size_bytes)
+            bucket["sum_rx_ms"] += float(evt.rx_decode_time_ms)
+            bucket["rx_count"] += 1.0
+        if evt.total_time_ms > 0:
+            bucket["sum_total_ms"] += float(evt.total_time_ms)
+            bucket["total_count"] += 1.0
+
     summary: list[dict[str, Any]] = []
-    for (src, dst), agg in transfer_agg.items():
-        sum_bytes = float(agg.get("sum_bytes", 0.0))
-        sum_ms = float(agg.get("sum_ms", 0.0))
-        samples = int(agg.get("count", 0.0))
+    for (src, dst), a in agg.items():
+        sum_bytes = float(a.get("sum_bytes", 0.0))
+        sum_ms = float(a.get("sum_ms", 0.0))
+        samples = int(a.get("count", 0.0))
         tx_mbps = (sum_bytes * 8.0) / (max(sum_ms, 1e-6) * 1000.0) if sum_bytes > 0 else 0.0
-        sum_rx_bytes = float(agg.get("sum_rx_bytes", 0.0))
-        sum_rx_ms = float(agg.get("sum_rx_ms", 0.0))
-        samples_rx = int(agg.get("rx_count", 0.0))
+        sum_rx_bytes = float(a.get("sum_rx_bytes", 0.0))
+        sum_rx_ms = float(a.get("sum_rx_ms", 0.0))
+        samples_rx = int(a.get("rx_count", 0.0))
         rx_mbps = (sum_rx_bytes * 8.0) / (max(sum_rx_ms, 1e-6) * 1000.0) if sum_rx_bytes > 0 else 0.0
-        sum_total_ms = float(agg.get("sum_total_ms", 0.0))
-        samples_total = int(agg.get("total_count", 0.0))
+        sum_total_ms = float(a.get("sum_total_ms", 0.0))
+        samples_total = int(a.get("total_count", 0.0))
         total_mbps = (sum_bytes * 8.0) / (max(sum_total_ms, 1e-6) * 1000.0) if sum_bytes > 0 else 0.0
         summary.append(
             {
@@ -337,7 +319,7 @@ def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, Request
                     "from_stage": stats.stage_id - 1,
                     "to_stage": stats.stage_id,
                     "request_id": stats.request_id,
-                    "size_bytes": int(*kwargs.get("size_bytes", 0)),
+                    "size_bytes": int(kwargs.get("size_bytes", 0)),
                     "tx_time_ms": float(kwargs.get("tx_time_ms", 0.0)),
                     "in_flight_time_ms": stats.rx_in_flight_time_ms,
                     "rx_decode_time_ms": stats.rx_decode_time_ms,
@@ -380,6 +362,27 @@ def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, Request
         )
 
 
+def _format_table(title: str, rows: list[dict[str, Any]], columns: list[str]) -> str:
+    if not rows:
+        return f"[{title}] <empty>"
+
+    widths: dict[str, int] = {}
+    for col in columns:
+        max_len = len(col)
+        for row in rows:
+            value = row.get(col, "")
+            max_len = max(max_len, len(str(value)))
+        widths[col] = max_len
+
+    header = " | ".join(col.ljust(widths[col]) for col in columns)
+    sep = "-+-".join("-" * widths[col] for col in columns)
+    body = [
+        " | ".join(str(row.get(col, "")).ljust(widths[col]) for col in columns)
+        for row in rows
+    ]
+    return "\n".join([f"[{title}]", header, sep, *body])
+
+
 class OrchestratorAggregator:
     def __init__(
         self,
@@ -391,7 +394,7 @@ class OrchestratorAggregator:
         self.enable_stats = bool(enable_stats)
         self.init_run_state(wall_start_ts)
         self.stage_events = []
-        self.transfer_events = []
+        self.transfer_events = {}
         self.e2e_events = []
     
     def init_run_state(self, wall_start_ts: float) -> None:
@@ -399,14 +402,11 @@ class OrchestratorAggregator:
         self.stage_total_time_ms = [0.0 for _ in range(self.num_stages)]
         self.stage_total_tokens = [0 for _ in range(self.num_stages)]
         self.stage_req_counts = [0 for _ in range(self.num_stages)]
-        self.transfer_agg = {}
-        self.transfer_edge_req = {}
         self.e2e_total_ms = 0.0
         self.e2e_total_tokens = 0
         self.e2e_count = 0
         self.e2e_done = set()
         self.per_request = {}
-        self.sum_per_request_transfer_ms = 0.0
         self.wall_start_ts = float(wall_start_ts)
         self.last_finish_ts = float(wall_start_ts)
         self.stage_seen_batches = {sid: set() for sid in range(self.num_stages)}
@@ -487,32 +487,16 @@ class OrchestratorAggregator:
                     self.stage_seen_batches[stats.stage_id].add(batch_id)
         except Exception:
             pass
-        combined = aggregate_rx_and_maybe_total(
-            self.transfer_edge_req,
-            self.transfer_agg,
-            self.per_request,
-            stats,
-        )
-        if combined is not None and stats.stage_id is not None and stats.stage_id > 0:
-            size_b_c, tx_ms_c, _total_ms_c = combined
-            tx_event = TransferEdgeStats(
-                from_stage=int(stats.stage_id) - 1,
-                to_stage=int(stats.stage_id),
-                request_id=req_id,
-                size_bytes=int(size_b_c),
-                tx_time_ms=float(tx_ms_c),
-                rx_decode_time_ms=float(stats.rx_decode_time_ms),
-                in_flight_time_ms=float(stats.rx_in_flight_time_ms),
-            )
-            self.transfer_events.append(tx_event)
-
+        evt = record_transfer_rx(self.transfer_events, stats)
         if self.enable_stats and stats.stage_id is not None and stats.stage_id > 0:
             log_request_stats(stats, "transfer_rx_stats")
-            if combined is not None:
-                size_b_c, tx_ms_c, total_ms_c = combined
+            if evt is not None and (evt.tx_time_ms > 0.0 or evt.size_bytes > 0):
                 log_request_stats(
-                    stats, "transfer_total_stats", size_bytes=int(size_b_c),
-                    tx_time_ms=float(tx_ms_c), total_time_ms=float(total_ms_c)
+                    stats,
+                    "transfer_total_stats",
+                    size_bytes=int(evt.size_bytes),
+                    tx_time_ms=float(evt.tx_time_ms),
+                    total_time_ms=float(evt.total_time_ms),
                 )
 
     def on_forward(
@@ -537,12 +521,8 @@ class OrchestratorAggregator:
         if self.stage_first_ts[to_stage] is None:
             self.stage_first_ts[to_stage] = time.time()
         if self.enable_stats:
-            log_request_stats(stats, "Transfer_edge_stats")
-        record_sender_transfer_agg(
-            self.transfer_agg,
-            self.transfer_edge_req,
-            stats,
-        )
+            log_request_stats(stats, "transfer_stats")
+        record_transfer_tx(self.transfer_events, stats)
 
     def on_finalize_request(
         self,
@@ -561,7 +541,7 @@ class OrchestratorAggregator:
 
         # Sum tokens from all stages for this request
         # Include input tokens from stage 0 + output tokens from all stages
-        pr = self.per_request.setdefault(rid_key, {"stages": {}, "transfers_ms": 0.0, "transfers_bytes": 0})
+        pr = self.per_request.setdefault(rid_key, {"stages": {}})
         total_tokens = 0
         stages_info = pr.get("stages", {})
         for sid, stage_data in stages_info.items():
@@ -578,11 +558,22 @@ class OrchestratorAggregator:
             request_id=rid_key,
             e2e_total_ms=e2e_ms,
             e2e_total_tokens=total_tokens,
-            transfers_total_time_ms=float(pr.get("transfers_ms", 0.0)),
-            transfers_total_bytes=int(pr.get("transfers_bytes", 0)),
+            transfers_total_time_ms=float(
+                sum(
+                    evt.total_time_ms
+                    for evt in self.transfer_events.values()
+                    if evt.request_id == rid_key
+                )
+            ),
+            transfers_total_bytes=int(
+                sum(
+                    evt.size_bytes
+                    for evt in self.transfer_events.values()
+                    if evt.request_id == rid_key
+                )
+            ),
             stages=stages_info,
         )
-        self.sum_per_request_transfer_ms += float(pr.get("transfers_ms", 0.0))
         self.e2e_events.append(per_req_record)
         if self.enable_stats:
             log_request_stats(per_req_record, "request_level_metrics")
@@ -664,52 +655,86 @@ class OrchestratorAggregator:
 
     def reset_events(self) -> None:
         self.stage_events = []
-        self.transfer_events = []
+        self.transfer_events = {}
         self.e2e_events = []
 
-    @staticmethod
-    def default_for_type(data_type):
-        try:
-            return data_type()
-        except Exception:
-            return None
+    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int]) -> dict[str, Any]:
+        # Build raw event tables for stages and transfers (same schema per stage/edge)
+        stage_summary = [asdict(evt) for evt in self.stage_events]
+        stage_summary.sort(key=lambda e: (e.get("stage_id", -1), str(e.get("request_id", ""))))
+        transfer_summary = [asdict(evt) for evt in self.transfer_events.values()]
+        transfer_summary.sort(key=lambda e: (e.get("from_stage", -1), e.get("to_stage", -1), str(e.get("request_id", ""))))
+        e2e_summary = [
+            {k: v for k, v in asdict(evt).items() if k != "stages"}
+            for evt in self.e2e_events
+        ]
+        e2e_summary.sort(key=lambda e: str(e.get("request_id", "")))
 
-    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int]) -> OrchestratorStatsSummary:
-        # Compute stage summary using wall time between first input and last output per stage
-        stage_summary: list[dict[str, Any]] = []
-        for sid in range(self.num_stages):
-            first_ts = self.stage_first_ts[sid]
-            last_ts = self.stage_last_ts[sid]
-            total_ms = (
-                (max(0.0, (last_ts - first_ts)) * 1000.0) if (first_ts is not None and last_ts is not None) else 0.0
-            )
-            reqs = self.stage_req_counts[sid]
-            tokens = self.stage_total_tokens[sid]
-            avg_req = (total_ms / reqs) if reqs > 0 else 0.0
-            avg_tok = (tokens * 1000.0 / total_ms) if total_ms > 0 else 0.0
-            stage_summary.append(
-                {
-                    "stage_id": sid,
-                    "requests": int(reqs),
-                    "tokens": int(tokens),
-                    "total_time_ms": float(total_ms),
-                    "avg_time_per_request_ms": float(avg_req),
-                    "avg_tokens_per_s": float(avg_tok),
-                }
-            )
-        transfer_summary = build_transfer_summary(self.transfer_agg)
         e2e_avg_req = (self.e2e_total_ms / self.e2e_count) if self.e2e_count > 0 else 0.0
         e2e_avg_tok = (self.e2e_total_tokens * 1000.0 / self.e2e_total_ms) if self.e2e_total_ms > 0 else 0.0
         wall_time_ms = max(0.0, (self.last_finish_ts - self.wall_start_ts) * 1000.0)
-        return OrchestratorStatsSummary(
-            e2e_requests=int(self.e2e_count),
-            e2e_total_time_ms=float(wall_time_ms),
-            e2e_sum_time_ms=float(self.e2e_total_ms),
-            e2e_total_tokens=int(self.e2e_total_tokens),
-            e2e_avg_time_per_request_ms=e2e_avg_req,
-            e2e_avg_tokens_per_s=e2e_avg_tok,
-            wall_time_ms=wall_time_ms,
-            final_stage_id=final_stage_id_to_prompt,
-            stages=stage_summary,
-            transfers=transfer_summary,
+        logger.info(
+            "\n%s",
+            _format_table(
+                "stage",
+                stage_summary,
+                [
+                    "stage_id",
+                    "request_id",
+                    "batch_id",
+                    "batch_size",
+                    "num_tokens_in",
+                    "num_tokens_out",
+                    "num_engine_outputs",
+                    "stage_gen_time_ms",
+                    "rx_transfer_bytes",
+                    "rx_decode_time_ms",
+                    "rx_in_flight_time_ms",
+                ],
+            ),
         )
+        logger.info(
+            "\n%s",
+            _format_table(
+                "trans",
+                transfer_summary,
+                [
+                    "from_stage",
+                    "to_stage",
+                    "request_id",
+                    "size_bytes",
+                    "tx_time_ms",
+                    "rx_decode_time_ms",
+                    "in_flight_time_ms",
+                    "used_shm",
+                ],
+            ),
+        )
+        logger.info(
+            "\n%s",
+            _format_table(
+                "e2e",
+                e2e_summary,
+                [
+                    "request_id",
+                    "e2e_total_ms",
+                    "e2e_total_tokens",
+                    "transfers_total_time_ms",
+                    "transfers_total_bytes",
+                ],
+            ),
+        )
+
+        return {
+            "e2e_requests": int(self.e2e_count),
+            "e2e_total_time_ms": float(wall_time_ms),
+            "e2e_sum_time_ms": float(self.e2e_total_ms),
+            "e2e_total_tokens": int(self.e2e_total_tokens),
+            "e2e_avg_time_per_request_ms": float(e2e_avg_req),
+            "e2e_avg_tokens_per_s": float(e2e_avg_tok),
+            "wall_time_ms": float(wall_time_ms),
+            "final_stage_id": final_stage_id_to_prompt,
+            "stage_table": stage_summary,
+            "trans_table": transfer_summary,
+            "e2e_table": e2e_summary,
+        }
