@@ -55,13 +55,7 @@ class TransferEdgeStats:
     request_id: str
     size_bytes: int
     tx_time_ms: float
-    rx_decode_time_ms: float
-    rx_in_flight_time_ms: float
     used_shm: bool = False
-
-    @property
-    def total_time_ms(self) -> float:
-        return self.tx_time_ms + self.rx_in_flight_time_ms + self.rx_decode_time_ms
 
 
 @dataclass
@@ -434,14 +428,13 @@ class OrchestratorAggregator:
                 request_id=req_id,
                 num_tokens_in=int(metrics.get("num_tokens_in", 0)),
                 num_tokens_out=int(metrics.get("num_tokens_out", 0)),
-                batch_id=int(metrics.get("batch_id", -1)),
-                batch_size=int(metrics.get("batch_size", 0)),
-                num_engine_outputs=int(metrics.get("num_engine_outputs", 0)),
-                stage_gen_time_ms=float(metrics.get("stage_gen_time_ms", 0.0)),
-                tokens_per_s=float(metrics.get("tokens_per_s", 0.0)),
-                rx_transfer_bytes=int(metrics.get("rx_transfer_bytes", 0)),
-                rx_decode_time_ms=float(metrics.get("rx_decode_time_ms", 0.0)),
-                rx_in_flight_time_ms=float(metrics.get("rx_in_flight_time_ms", 0.0)),
+                batch_id=metrics.get("batch_id", -1),
+                batch_size=metrics.get("batch_size"),
+                num_engine_outputs=metrics.get("num_engine_outputs"),
+                stage_gen_time_ms=metrics.get("stage_gen_time_ms"),
+                rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")),
+                rx_decode_time_ms=metrics.get("rx_decode_time_ms"),
+                rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0),
                 stage_stats=stage_stats,
             )
 
@@ -461,8 +454,6 @@ class OrchestratorAggregator:
                 request_id=req_id,
                 size_bytes=int(metrics.get("size_bytes", 0)),
                 tx_time_ms=float(metrics.get("tx_time_ms", 0.0)),
-                rx_decode_time_ms=float(metrics.get("rx_decode_time_ms", 0.0)),
-                rx_in_flight_time_ms=float(metrics.get("rx_in_flight_time_ms", 0.0)),
                 used_shm=bool(metrics.get("used_shm", False)),
             )
 
@@ -522,7 +513,7 @@ class OrchestratorAggregator:
             size_bytes=int(size_bytes),
             tx_time_ms=float(tx_ms),
             used_shm=bool(used_shm),
-        ) 
+        )
         stats = self._as_transfer_edge_stats(from_stage, to_stage, req_id, metrics)
         if self.stage_first_ts[to_stage] is None:
             self.stage_first_ts[to_stage] = time.time()
