@@ -1,4 +1,5 @@
 from __future__ import annotations
+from dataclasses import asdict
 
 from vllm_omni.metrics import OmniLoggingStatLogger
 from vllm_omni.metrics import OrchestratorAggregator
@@ -42,7 +43,7 @@ def test_orchestrator_aggregator_builds_summary() -> None:
     agg.on_finalize_request(1, "r1", req_start_ts=0.0)
 
     summary = agg.build_and_log_summary(final_stage_id_to_prompt={"r1": 1})
-    data = summary.to_dict()
+    data = asdict(summary)
     assert data["e2e_requests"] == 1
     assert len(data["stages"]) == 2
     assert data["stages"][0]["requests"] == 1
@@ -138,7 +139,7 @@ def test_merge_groups_by_stage_and_edge() -> None:
             size_bytes=100,
             tx_time_ms=2.0,
             rx_decode_time_ms=1.0,
-            rx_in_flight_time_ms=1.0,
+            in_flight_time_ms=1.0,
             used_shm=False,
         ),
         RequestE2EStats(
