@@ -327,9 +327,10 @@ class AsyncOmni(OmniBase):
             req_state = ClientRequestState(request_id)
             req_state.metrics = metrics
             self.request_states[request_id] = req_state
+
+            _req_start_ts[request_id] = time.time()
             # Mark first input time for stage-0
             metrics.stage_first_ts[0] = metrics.stage_first_ts[0] or time.time()
-
             sp0: SamplingParams = sampling_params_list[0]  # type: ignore[index]
             task = {
                 "request_id": request_id,
@@ -337,7 +338,6 @@ class AsyncOmni(OmniBase):
                 "sampling_params": sp0,
             }
             self.stage_list[0].submit(task)
-            _req_start_ts[request_id] = time.time()
             logger.debug(f"[{self._name}] Enqueued request {request_id} to stage-0")
 
             logger.debug(f"[{self._name}] Entering scheduling loop: stages={num_stages}")
@@ -420,7 +420,10 @@ class AsyncOmni(OmniBase):
                 next_stage_id = stage_id + 1
                 if next_stage_id <= final_stage_id_for_e2e and finished:
                     next_stage: OmniStage = self.stage_list[next_stage_id]
+                    _prep_t0 = time.perf_counter()
                     next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
+                    _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0
+                    metrics.record_stage_preprocess_time(next_stage_id, req_id, _prep_ms)
                     sp_next: SamplingParams = sampling_params_list[next_stage_id]
 
                     # Check if we have a connector for this edge
