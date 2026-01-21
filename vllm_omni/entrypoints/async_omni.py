@@ -364,6 +364,8 @@ class AsyncOmni(OmniBase):
                     metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
                     try:
                         _m = asdict(result.get("metrics"))
+                        # stage_gen_time_ms is the time of generating every chunk in this stage
+                        metrics.accumulated_gen_time_ms[req_id] += metrics.get("stage_gen_time_ms", 0.0)
                         if _m is not None and finished:
                             metrics.on_stage_metrics(stage_id, req_id, _m)
                     except Exception as e:
@@ -421,6 +423,7 @@ class AsyncOmni(OmniBase):
                 next_stage_id = stage_id + 1
                 if next_stage_id <= final_stage_id_for_e2e and finished:
                     next_stage: OmniStage = self.stage_list[next_stage_id]
+                    # Derive inputs for the next stage, record preprocess time
                     _prep_t0 = time.perf_counter()
                     next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
                     _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0

@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pprint import pformat
+from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
 from vllm.logger import init_logger
@@ -33,6 +34,7 @@ class StageRequestStats:
     stage_stats: StageStats
     stage_id: Optional[int] = None
     request_id: Optional[str] = None
+    preprocess_time_ms: float = 0.0
 
     @property
     def rx_mbps(self) -> float:
@@ -297,6 +299,7 @@ class OrchestratorAggregator:
         self.last_finish_ts = float(wall_start_ts)
         self.stage_first_ts = [None for _ in range(self.num_stages)]
         self.stage_last_ts = [None for _ in range(self.num_stages)]
+        self.accumulated_gen_time_ms: defaultdict[str, float] = defaultdict(float) # {request_id: accumulated_gen_time_ms}
 
     @staticmethod
     def _as_stage_request_stats(stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]) -> StageRequestStats:
@@ -321,7 +324,7 @@ class OrchestratorAggregator:
                 num_tokens_out=int(metrics.get("num_tokens_out", 0)),
                 batch_id=metrics.get("batch_id", -1),
                 batch_size=metrics.get("batch_size"),
-                stage_gen_time_ms=stage_stats.total_gen_time_ms if stage_stats else 0.0,
+                stage_gen_time_ms=self.accumulated_gen_time_ms.pop(req_id, 0.0),
                 rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")),
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms"),
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0),
@@ -355,7 +358,7 @@ class OrchestratorAggregator:
         if req_id in self.stage_events:
             for stats in self.stage_events[req_id]:
                 if stats.stage_id == stage_id:
-                    stats.stage_gen_time_ms += float(prep_time_ms)
+                    stats.preprocess_time_ms = float(prep_time_ms)
                     break
         else:
             logger.warning(
@@ -449,12 +452,20 @@ class OrchestratorAggregator:
         else:
             final_stage_id_map = final_stage_id_to_prompt
 
+        stage_wall_time_ms = [
+            ((self.stage_last_ts[i] - self.stage_first_ts[i]) * 1000.0)
+            if (self.stage_first_ts[i] is not None and self.stage_last_ts[i] is not None)
+            else 0.0
+            for i in range(self.num_stages)
+        ]
+
         overall_summary = {
             "e2e_requests": int(self.e2e_count),
             "e2e_wall_time_ms":  float(wall_time_ms),
             "e2e_total_tokens": int(self.e2e_total_tokens),
             "e2e_avg_time_per_request_ms":  float(e2e_avg_req),
             "e2e_avg_tokens_per_s": float(e2e_avg_tok),
+            "stage_wall_time_ms": stage_wall_time_ms,
         }
 
         # Print overall summary
