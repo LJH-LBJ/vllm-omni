@@ -32,7 +32,7 @@ from vllm_omni.entrypoints.stage_utils import maybe_load_from_ipc as _load
 from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
-from vllm_omni.metrics import OmniLoggingStatLogger, OrchestratorAggregator
+from vllm_omni.metrics import OrchestratorAggregator
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)

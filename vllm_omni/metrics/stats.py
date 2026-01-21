@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import time
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass
 from pprint import pformat
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
-from prettytable import PrettyTable
 from vllm.logger import init_logger
+from vllm_omni.metrics.utils import _build_field_defs, _build_row, _format_table, _get_field_names
 
 logger = init_logger(__name__)
 
@@ -14,19 +14,18 @@ logger = init_logger(__name__)
 @dataclass
 class StageStats:
     total_token: int = 0
-    total_gen_time: float = 0.0
+    total_gen_time_ms: float = 0.0
 
     @property
     def avg_tokens_per_s(self) -> float:
-        return (self.total_token * 1000.0 / self.total_gen_time) if self.total_gen_time > 0 else 0.0
-
+        return (self.total_token * 1000.0 / self.total_gen_time_ms) if self.total_gen_time_ms > 0 else 0.0
 
 @dataclass
 class StageRequestStats:
-    num_tokens_in: int
-    num_tokens_out: int
     batch_id: int
     batch_size: int
+    num_tokens_in: int
+    num_tokens_out: int
     stage_gen_time_ms: float
     rx_transfer_bytes: int
     rx_decode_time_ms: float
@@ -75,6 +74,31 @@ class RequestE2EStats:
     @property
     def e2e_tpt(self) -> float:
         return (self.e2e_total_ms / self.e2e_total_tokens) if self.e2e_total_tokens > 0 else 0.0
+
+# === Field Configuration ===
+# Fields requiring unit conversion:  original_field_name -> (display_name, transform_fn)
+FIELD_TRANSFORMS: dict[str, tuple[str, Callable[[Any], Any]]] = {
+    "rx_transfer_bytes":  ("rx_transfer_kbytes", lambda v: v / 1024.0),
+    "size_bytes": ("size_kbytes", lambda v: v / 1024.0),
+    "transfers_total_bytes": ("transfers_total_kbytes", lambda v: v / 1024.0),
+}
+
+# Fields to exclude from table display for each event type
+STAGE_EXCLUDE = {"stage_stats", "stage_id", "request_id"}
+TRANSFER_EXCLUDE = {"from_stage", "to_stage", "request_id", "used_shm"}
+E2E_EXCLUDE = {"request_id"}
+
+# Overall summary fields (manually defined since it's not a dataclass)
+OVERALL_FIELDS = [
+    "e2e_requests",
+    "e2e_wall_time_ms",
+    "e2e_total_tokens",
+    "e2e_avg_time_per_request_ms",
+    "e2e_avg_tokens_per_s",
+]
+STAGE_FIELDS = _build_field_defs(StageRequestStats, STAGE_EXCLUDE, FIELD_TRANSFORMS)
+TRANSFER_FIELDS = _build_field_defs(TransferEdgeStats, TRANSFER_EXCLUDE, FIELD_TRANSFORMS)
+E2E_FIELDS = _build_field_defs(RequestE2EStats, E2E_EXCLUDE, FIELD_TRANSFORMS)
 
 def _get_or_create_transfer_event(
     transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
@@ -255,52 +279,12 @@ def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, Request
                     "type": stats_type,
                     "stage_id": stats.stage_id,
                     "total_tokens": stats.stage_stats.total_token,
-                    "total_gen_time_ms": stats.stage_stats.total_gen_time,
+                    "total_gen_time_ms": stats.stage_stats.total_gen_time_ms,
                     "avg_tokens_per_s": stats.stage_stats.avg_tokens_per_s,
                 },
                 sort_dicts=False,
             )
         )
-
-
-def _format_table(
-    title: str,
-    rows: list[dict[str, Any]],
-    columns: list[str] | None = None,
-    *,
-    exclude_columns: list[str] | None = None,
-    include_columns: list[str] | None = None,
-) -> str:
-    if not rows:
-        return f"[{title}] <empty>"
-    # Determine columns if not provided
-    if columns is None:
-        columns = []
-        seen: set[str] = set()
-        for row in rows:
-            for key in row.keys():
-                if key not in seen:
-                    columns.append(key)
-                    seen.add(key)
-        if include_columns:
-            columns = [c for c in columns if c in set(include_columns)]
-        if exclude_columns:
-            columns = [c for c in columns if c not in set(exclude_columns)]
-    # Format values
-    def _format_value(value: Any) -> str:
-        if isinstance(value, bool):
-            return str(value)
-        if isinstance(value, int):
-            return str(value)
-        if isinstance(value, float):
-            return f"{value:.3f}"
-        return str(value)
-
-    table = PrettyTable()
-    table.field_names = columns
-    for row in rows:
-        table.add_row([_format_value(row.get(col, "")) for col in columns])
-    return "\n".join([f"[{title}]", table.get_string()])
 
 
 class OrchestratorAggregator:
@@ -343,7 +327,7 @@ class OrchestratorAggregator:
                 ss = metrics["stage_stats"]
                 stage_stats = StageStats(
                     total_token=int(ss.get("total_token", 0)),
-                    total_gen_time=float(ss.get("total_gen_time", 0.0)),
+                    total_gen_time_ms=float(ss.get("total_gen_time_ms", 0.0)),
                 )
             return StageRequestStats(
                 stage_id=stage_id,
@@ -469,137 +453,101 @@ class OrchestratorAggregator:
         self.e2e_events.append(per_req_record)
         if self.enable_stats:
             log_request_stats(per_req_record, "request_level_metrics")
-    
-    def merge(self, events: list[Any]) -> dict[str, Any]:
-        """Compute grouped averages for StageRequestStats/TransferEdgeStats/RequestE2EStats.
-
-        - StageRequestStats are grouped by stage_id
-        - TransferEdgeStats are grouped by (from_stage, to_stage)
-        - RequestE2EStats are aggregated as a single group
-        """
-
-        def _accumulate_numeric(sums: dict[str, float], evt: Any) -> None:
-            for field in fields(type(evt)):
-                value = getattr(evt, field.name, None)
-                if value is None or isinstance(value, (bool, str)):
-                    continue
-                if isinstance(value, (int, float)):
-                    sums[field.name] = sums.get(field.name, 0.0) + value
-                    continue
-                if isinstance(value, dict):
-                    for k, v in value.items():
-                        if isinstance(v, (int, float)):
-                            key_name = f"{field.name}_{k}"
-                            sums[key_name] = sums.get(key_name, 0.0) + v
-                    continue
-                if isinstance(value, StageStats):
-                    for s_field in fields(StageStats):
-                        s_value = getattr(value, s_field.name, None)
-                        if isinstance(s_value, (int, float)):
-                            key_name = f"{field.name}_{s_field.name}"
-                            sums[key_name] = sums.get(key_name, 0.0) + s_value
-
-        stage_sums: dict[int, dict[str, float]] = {}
-        stage_counts: dict[int, int] = {}
-        transfer_sums: dict[tuple[int, int], dict[str, float]] = {}
-        transfer_counts: dict[tuple[int, int], int] = {}
-        e2e_sums: dict[str, float] = {}
-        e2e_count = 0
-
-        for event in events:
-            if isinstance(event, StageRequestStats):
-                if event.stage_id is None:
-                    continue
-                sid = int(event.stage_id)
-                sums = stage_sums.setdefault(sid, {})
-                _accumulate_numeric(sums, event)
-                stage_counts[sid] = stage_counts.get(sid, 0) + 1
-            elif isinstance(event, TransferEdgeStats):
-                key = (int(event.from_stage), int(event.to_stage))
-                sums = transfer_sums.setdefault(key, {})
-                _accumulate_numeric(sums, event)
-                transfer_counts[key] = transfer_counts.get(key, 0) + 1
-            elif isinstance(event, RequestE2EStats):
-                _accumulate_numeric(e2e_sums, event)
-                e2e_count += 1
-
-        def _avg_map(sums: dict[str, float], count: int) -> dict[str, float]:
-            return {name: (sums[name] / count) for name in sums} if count > 0 else {}
-
-        stage_avgs = {str(sid): _avg_map(sums, stage_counts.get(sid, 0)) for sid, sums in stage_sums.items()}
-        transfer_avgs = {
-            f"{src}->{dst}": _avg_map(sums, transfer_counts.get((src, dst), 0))
-            for (src, dst), sums in transfer_sums.items()
-        }
-
-        return {
-            "averages": {
-                "StageRequestStats": {"by_stage": stage_avgs},
-                "TransferEdgeStats": {"by_edge": transfer_avgs},
-                "RequestE2EStats": _avg_map(e2e_sums, e2e_count),
-            },
-            "counts": {
-                "e2e": int(e2e_count),
-                "stage": {str(sid): int(cnt) for sid, cnt in stage_counts.items()},
-                "transfer": {f"{src}->{dst}": int(cnt) for (src, dst), cnt in transfer_counts.items()},
-            },
-        }
-
-    def reset_events(self) -> None:
-        self.stage_events = {}
-        self.transfer_events = {}
-        self.e2e_events = []
 
     def build_and_log_summary(self, final_stage_id_to_prompt: Union[dict[str, int], int]) -> dict[str, Any]:
-        # Build raw event tables for stages and transfers (same schema per stage/edge)
-        stage_summary = [asdict(evt) for evts in self.stage_events.values() for evt in evts]
-        stage_summary.sort(key=lambda e: (str(e.get("request_id", "")), e.get("stage_id", -1)))
-        transfer_summary = [asdict(evt) for evt in self.transfer_events.values()]
-        transfer_summary.sort(key=lambda e: (str(e.get("request_id", "")), e.get("from_stage", -1), e.get("to_stage", -1)))
-        e2e_summary = [
-            {k: v for k, v in asdict(evt).items() if k != "stages"}
-            for evt in self.e2e_events
-        ]
-        e2e_summary.sort(key=lambda e: str(e.get("request_id", "")))
-
         wall_time_ms = max(0.0, (self.last_finish_ts - self.wall_start_ts) * 1000.0)
         e2e_avg_req = (wall_time_ms / self.e2e_count) if self.e2e_count > 0 else 0.0
         e2e_avg_tok = (self.e2e_total_tokens * 1000.0 / wall_time_ms) if wall_time_ms > 0 else 0.0
 
         if isinstance(final_stage_id_to_prompt, int):
-            rid = str(stage_summary[-1]["request_id"] if stage_summary else "*")
-            final_stage_id_map: dict[str, int] = {rid: int(final_stage_id_to_prompt)}
+            final_stage_id_map:  dict[str, int] = {"*": int(final_stage_id_to_prompt)}
         else:
             final_stage_id_map = final_stage_id_to_prompt
 
-        overall_summary = [
-            {
-                "e2e_requests": int(self.e2e_count),
-                "e2e_wall_time_ms": float(wall_time_ms),
-                "e2e_total_tokens": int(self.e2e_total_tokens),
-                "e2e_avg_time_per_request_ms": float(e2e_avg_req),
-                "e2e_avg_tokens_per_s": float(e2e_avg_tok),
-            }
-        ]
+        overall_summary = {
+            "e2e_requests": int(self.e2e_count),
+            "e2e_wall_time_ms":  float(wall_time_ms),
+            "e2e_total_tokens": int(self.e2e_total_tokens),
+            "e2e_avg_time_per_request_ms":  float(e2e_avg_req),
+            "e2e_avg_tokens_per_s": float(e2e_avg_tok),
+        }
 
-        for title, rows in [
-            ("overall", overall_summary),
-            ("stage", stage_summary),
-            ("trans", transfer_summary),
-            ("e2e", e2e_summary),
-        ]:
-            logger.debug(
-                "\n%s",
-                _format_table(
-                    title,
-                    rows,
-                ),
+        # Print overall summary
+        logger.info(
+            "\n%s",
+            _format_table("Overall Summary", overall_summary, OVERALL_FIELDS),
+        )
+
+        all_request_ids = sorted(set(self.stage_events.keys()) | {e.request_id for e in self.e2e_events})
+
+        result_stage_table = []
+        result_trans_table = []
+        result_e2e_table = []
+
+        for rid in all_request_ids: 
+            # === Stage table (columns = stage_id) ===
+            stage_evts = sorted(
+                self.stage_events.get(rid, []),
+                key=lambda e: e.stage_id if e.stage_id is not None else -1,
             )
+            stage_rows = [
+                {"stage_id": evt.stage_id, **_build_row(evt, STAGE_FIELDS)}
+                for evt in stage_evts
+            ]
+            result_stage_table.append({"request_id": rid, "stages": stage_rows})
+
+            if stage_rows:
+                logger.info(
+                    "\n%s",
+                    _format_table(
+                        f"StageRequestStats [request_id={rid}]",
+                        stage_rows,
+                        column_key="stage_id",
+                        value_fields=_get_field_names(STAGE_FIELDS),
+                    ),
+                )
+
+            # === Transfer table (columns = edge) ===
+            transfer_evts = sorted(
+                [e for e in self.transfer_events.values() if e.request_id == rid],
+                key=lambda e: (e.from_stage, e.to_stage),
+            )
+            transfer_rows = [
+                {"edge": f"{evt.from_stage}->{evt.to_stage}", **_build_row(evt, TRANSFER_FIELDS)}
+                for evt in transfer_evts
+            ]
+            result_trans_table.append({"request_id": rid, "transfers": transfer_rows})
+
+            if transfer_rows:
+                logger.info(
+                    "\n%s",
+                    _format_table(
+                        f"TransferEdgeStats [request_id={rid}]",
+                        transfer_rows,
+                        column_key="edge",
+                        value_fields=_get_field_names(TRANSFER_FIELDS),
+                    ),
+                )
+
+            # === E2E table (single column) ===
+            e2e_evt = next((e for e in self.e2e_events if e.request_id == rid), None)
+            if e2e_evt:
+                e2e_data = _build_row(e2e_evt, E2E_FIELDS)
+                result_e2e_table.append({"request_id": rid, **e2e_data})
+
+                logger.info(
+                    "\n%s",
+                    _format_table(
+                        f"RequestE2EStats [request_id={rid}]",
+                        e2e_data,
+                        _get_field_names(E2E_FIELDS),
+                    ),
+                )
 
         return {
-            "final_stage_id": final_stage_id_map,
+            "final_stage_id":  final_stage_id_map,
             "overall_summary": overall_summary,
-            "stage_table": stage_summary,
-            "trans_table": transfer_summary,
-            "e2e_table": e2e_summary,
+            "stage_table": result_stage_table,
+            "trans_table": result_trans_table,
+            "e2e_table": result_e2e_table,
         }

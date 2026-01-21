@@ -1467,4 +1467,4 @@ def make_request_stats(
 def make_stage_stats(_agg_total_tokens: int, _agg_total_gen_time_ms: float):
     from vllm_omni.metrics import StageStats
 
-    return StageStats(total_token=_agg_total_tokens, total_gen_time=_agg_total_gen_time_ms)
+    return StageStats(total_token=_agg_total_tokens, total_gen_time_ms=_agg_total_gen_time_ms)

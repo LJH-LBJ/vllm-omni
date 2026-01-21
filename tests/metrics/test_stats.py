@@ -1,5 +1,4 @@
 from __future__ import annotations
-from vllm_omni.metrics import OmniLoggingStatLogger
 from vllm_omni.metrics import OrchestratorAggregator
 from vllm_omni.metrics.stats import RequestE2EStats, StageRequestStats, StageStats, TransferEdgeStats
 
@@ -64,7 +63,7 @@ def test_logger_clears_events_when_disabled() -> None:
             rx_transfer_bytes=0,
             rx_decode_time_ms=0.0,
             rx_in_flight_time_ms=0.0,
-            stage_stats=StageStats(total_token=1, total_gen_time=1.0),
+            stage_stats=StageStats(total_token=1, total_gen_time_ms=1.0),
         )
     )
     agg.e2e_events.append(
@@ -77,8 +76,6 @@ def test_logger_clears_events_when_disabled() -> None:
             stages={},
         )
     )
-    logger = OmniLoggingStatLogger(agg, enable_stats=False)
-    logger.do_log_stats()
 
     assert not agg.stage_events
     assert not agg.transfer_events
@@ -99,7 +96,7 @@ def test_merge_groups_by_stage_and_edge() -> None:
             rx_transfer_bytes=0,
             rx_decode_time_ms=0.0,
             rx_in_flight_time_ms=0.0,
-            stage_stats=StageStats(total_token=4, total_gen_time=10.0),
+            stage_stats=StageStats(total_token=4, total_gen_time_ms=10.0),
         ),
         StageRequestStats(
             stage_id=0,
@@ -112,7 +109,7 @@ def test_merge_groups_by_stage_and_edge() -> None:
             rx_transfer_bytes=0,
             rx_decode_time_ms=0.0,
             rx_in_flight_time_ms=0.0,
-            stage_stats=StageStats(total_token=6, total_gen_time=20.0),
+            stage_stats=StageStats(total_token=6, total_gen_time_ms=20.0),
         ),
         StageRequestStats(
             stage_id=1,
@@ -125,7 +122,7 @@ def test_merge_groups_by_stage_and_edge() -> None:
             rx_transfer_bytes=128,
             rx_decode_time_ms=1.0,
             rx_in_flight_time_ms=1.0,
-            stage_stats=StageStats(total_token=10, total_gen_time=15.0),
+            stage_stats=StageStats(total_token=10, total_gen_time_ms=15.0),
         ),
         TransferEdgeStats(
             from_stage=0,
