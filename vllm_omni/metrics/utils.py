@@ -1,4 +1,3 @@
-from ctypes import Union
 from dataclasses import fields
 from typing import Any, Callable, Optional
 from prettytable import PrettyTable
@@ -115,3 +114,16 @@ def _format_table(
             table.add_row([field] + row_values)
 
     return "\n".join([f"[{title}]", table.get_string()])
+
+def count_tokens_from_outputs(engine_outputs: list[Any]) -> int:
+    total = 0
+    for _ro in engine_outputs:
+        try:
+            outs = getattr(_ro, "outputs", None)
+            if outs and len(outs) > 0:
+                tokens = getattr(outs[0], "token_ids", None)
+                if tokens is not None:
+                    total += len(tokens)
+        except Exception:
+            pass
+    return total

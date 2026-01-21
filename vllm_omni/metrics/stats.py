@@ -169,21 +169,6 @@ def record_transfer_rx(
     except Exception:
         return None
 
-
-def count_tokens_from_outputs(engine_outputs: list[Any]) -> int:
-    total = 0
-    for _ro in engine_outputs:
-        try:
-            outs = getattr(_ro, "outputs", None)
-            if outs and len(outs) > 0:
-                tokens = getattr(outs[0], "token_ids", None)
-                if tokens is not None:
-                    total += len(tokens)
-        except Exception:
-            pass
-    return total
-
-
 def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, RequestE2EStats], stats_type: str, **kwargs) -> None:
     if stats_type == "stage_stats":
         logger.info(
@@ -336,7 +321,7 @@ class OrchestratorAggregator:
                 num_tokens_out=int(metrics.get("num_tokens_out", 0)),
                 batch_id=metrics.get("batch_id", -1),
                 batch_size=metrics.get("batch_size"),
-                stage_gen_time_ms=metrics.get("stage_gen_time_ms"),
+                stage_gen_time_ms=stage_stats.total_gen_time_ms if stage_stats else 0.0,
                 rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")),
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms"),
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0),
@@ -485,6 +470,21 @@ class OrchestratorAggregator:
         result_e2e_table = []
 
         for rid in all_request_ids: 
+            # === E2E table (single column) ===
+            e2e_evt = next((e for e in self.e2e_events if e.request_id == rid), None)
+            if e2e_evt:
+                e2e_data = _build_row(e2e_evt, E2E_FIELDS)
+                result_e2e_table.append({"request_id": rid, **e2e_data})
+
+                logger.info(
+                    "\n%s",
+                    _format_table(
+                        f"RequestE2EStats [request_id={rid}]",
+                        e2e_data,
+                        _get_field_names(E2E_FIELDS),
+                    ),
+                )
+
             # === Stage table (columns = stage_id) ===
             stage_evts = sorted(
                 self.stage_events.get(rid, []),
@@ -526,21 +526,6 @@ class OrchestratorAggregator:
                         transfer_rows,
                         column_key="edge",
                         value_fields=_get_field_names(TRANSFER_FIELDS),
-                    ),
-                )
-
-            # === E2E table (single column) ===
-            e2e_evt = next((e for e in self.e2e_events if e.request_id == rid), None)
-            if e2e_evt:
-                e2e_data = _build_row(e2e_evt, E2E_FIELDS)
-                result_e2e_table.append({"request_id": rid, **e2e_data})
-
-                logger.info(
-                    "\n%s",
-                    _format_table(
-                        f"RequestE2EStats [request_id={rid}]",
-                        e2e_data,
-                        _get_field_names(E2E_FIELDS),
                     ),
                 )
 
