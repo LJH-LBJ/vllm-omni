@@ -32,7 +32,6 @@ class StageRequestStats:
     rx_decode_time_ms: float
     rx_in_flight_time_ms: float
     stage_stats: StageStats
-    num_engine_outputs: Optional[int] = None
     stage_id: Optional[int] = None
     request_id: Optional[str] = None
 
@@ -46,7 +45,7 @@ class StageRequestStats:
 
     @property
     def tokens_per_s(self) -> float:
-        return (self.num_engine_outputs * 1000.0 / self.stage_gen_time_ms) if (self.stage_gen_time_ms > 0) else 0.0
+        return (self.num_tokens_out * 1000.0 / self.stage_gen_time_ms) if (self.stage_gen_time_ms > 0) else 0.0
 
 
 @dataclass
@@ -353,7 +352,6 @@ class OrchestratorAggregator:
                 num_tokens_out=int(metrics.get("num_tokens_out", 0)),
                 batch_id=metrics.get("batch_id", -1),
                 batch_size=metrics.get("batch_size"),
-                num_engine_outputs=metrics.get("num_engine_outputs"),
                 stage_gen_time_ms=metrics.get("stage_gen_time_ms"),
                 rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")),
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms"),
