@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, fields
 from pprint import pformat
 from typing import Any, Optional, Union
 
+from prettytable import PrettyTable
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
@@ -273,7 +274,7 @@ def _format_table(
 ) -> str:
     if not rows:
         return f"[{title}] <empty>"
-
+    # Determine columns if not provided
     if columns is None:
         columns = []
         seen: set[str] = set()
@@ -286,7 +287,7 @@ def _format_table(
             columns = [c for c in columns if c in set(include_columns)]
         if exclude_columns:
             columns = [c for c in columns if c not in set(exclude_columns)]
-
+    # Format values
     def _format_value(value: Any) -> str:
         if isinstance(value, bool):
             return str(value)
@@ -296,21 +297,11 @@ def _format_table(
             return f"{value:.3f}"
         return str(value)
 
-    widths: dict[str, int] = {}
-    for col in columns:
-        max_len = len(col)
-        for row in rows:
-            value = _format_value(row.get(col, ""))
-            max_len = max(max_len, len(value))
-        widths[col] = max_len
-
-    header = " | ".join(col.ljust(widths[col]) for col in columns)
-    sep = "-+-".join("-" * widths[col] for col in columns)
-    body = [
-        " | ".join(_format_value(row.get(col, "")).ljust(widths[col]) for col in columns)
-        for row in rows
-    ]
-    return "\n".join([f"[{title}]", header, sep, *body])
+    table = PrettyTable()
+    table.field_names = columns
+    for row in rows:
+        table.add_row([_format_value(row.get(col, "")) for col in columns])
+    return "\n".join([f"[{title}]", table.get_string()])
 
 
 class OrchestratorAggregator:
