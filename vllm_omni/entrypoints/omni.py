@@ -701,6 +701,8 @@ class Omni(OmniBase):
                     if _m is not None:
                         if not isinstance(_m, dict):
                             _m = asdict(_m)
+                        # stage_gen_time_ms is the time of generating every chunk in this stage
+                        metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
                         metrics.on_stage_metrics(stage_id, req_id, _m)
                         if pbar:
                             elapsed = pbar.format_dict["elapsed"] or 1e-6
@@ -759,7 +761,11 @@ class Omni(OmniBase):
                 if next_stage_id <= final_stage_id_to_prompt[req_id]:
                     next_stage: OmniStage = self.stage_list[next_stage_id]
                     try:
+                        # Derive inputs for the next stage, record preprocess time
+                        _prep_t0 = time.perf_counter()
                         next_inputs = next_stage.process_engine_inputs(self.stage_list, [request_id_to_prompt[req_id]])
+                        _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0
+                        metrics.record_stage_preprocess_time(next_stage_id, req_id, _prep_ms)
                     except Exception as e:
                         logger.exception(
                             f"[{self._name}] Process engine inputs error for req {req_id}"
