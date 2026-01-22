@@ -365,7 +365,7 @@ class AsyncOmni(OmniBase):
                     try:
                         _m = asdict(result.get("metrics"))
                         # stage_gen_time_ms is the time of generating every chunk in this stage
-                        metrics.accumulated_gen_time_ms[req_id] += metrics.get("stage_gen_time_ms", 0.0)
+                        metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
                         if _m is not None and finished:
                             metrics.on_stage_metrics(stage_id, req_id, _m)
                     except Exception as e:

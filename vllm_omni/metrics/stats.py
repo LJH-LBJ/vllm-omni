@@ -301,8 +301,7 @@ class OrchestratorAggregator:
         self.stage_last_ts = [None for _ in range(self.num_stages)]
         self.accumulated_gen_time_ms: defaultdict[str, float] = defaultdict(float) # {request_id: accumulated_gen_time_ms}
 
-    @staticmethod
-    def _as_stage_request_stats(stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]) -> StageRequestStats:
+    def _as_stage_request_stats(self, stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]) -> StageRequestStats:
         'Convert dict to StageRequestStats if needed.'
         if isinstance(metrics, StageRequestStats):
             stats = metrics
