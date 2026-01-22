@@ -90,14 +90,8 @@ STAGE_EXCLUDE = {"stage_stats", "stage_id", "request_id"}
 TRANSFER_EXCLUDE = {"from_stage", "to_stage", "request_id", "used_shm"}
 E2E_EXCLUDE = {"request_id"}
 
-# Overall summary fields (manually defined since it's not a dataclass)
-OVERALL_FIELDS = [
-    "e2e_requests",
-    "e2e_wall_time_ms",
-    "e2e_total_tokens",
-    "e2e_avg_time_per_request_ms",
-    "e2e_avg_tokens_per_s",
-]
+# Decide the order of overall summary fields, or None for auto
+OVERALL_FIELDS: list[str] | None = None
 STAGE_FIELDS = _build_field_defs(StageRequestStats, STAGE_EXCLUDE, FIELD_TRANSFORMS)
 TRANSFER_FIELDS = _build_field_defs(TransferEdgeStats, TRANSFER_EXCLUDE, FIELD_TRANSFORMS)
 E2E_FIELDS = _build_field_defs(RequestE2EStats, E2E_EXCLUDE, FIELD_TRANSFORMS)
@@ -468,9 +462,10 @@ class OrchestratorAggregator:
         }
 
         # Print overall summary
+        overall_fields = OVERALL_FIELDS or list(overall_summary.keys())
         logger.info(
             "\n%s",
-            _format_table("Overall Summary", overall_summary, OVERALL_FIELDS),
+            _format_table("Overall Summary", overall_summary, overall_fields),
         )
 
         all_request_ids = sorted(set(self.stage_events.keys()) | {e.request_id for e in self.e2e_events})

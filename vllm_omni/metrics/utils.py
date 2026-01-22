@@ -1,5 +1,5 @@
 from dataclasses import fields
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Union
 from prettytable import PrettyTable
 
 def _build_field_defs(
