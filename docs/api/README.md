@@ -122,5 +122,3 @@ Worker classes and model runners for distributed inference.
 ## Metrics
 
 - [vllm_omni.metrics.OrchestratorAggregator][]
-- [vllm_omni.metrics.StageRequestStats][]
-- [vllm_omni.metrics.StageStats][]
