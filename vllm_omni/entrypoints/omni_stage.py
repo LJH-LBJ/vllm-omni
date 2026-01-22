@@ -1259,7 +1259,7 @@ async def _stage_worker_async(
         try:
             sent_ts = float(task.get("sent_ts", None)) if isinstance(task, dict) else None
             if sent_ts is not None:
-                _in_flight_ms_by_rid[rid] = (_recv_dequeue_ts - sent_ts) * 1000.0
+                _in_flight_ms_by_rid[rid] = max(0.0, (_recv_dequeue_ts - sent_ts) * 1000.0)
             else:
                 _in_flight_ms_by_rid[rid] = 0.0
         except Exception:

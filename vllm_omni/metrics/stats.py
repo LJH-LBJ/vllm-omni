@@ -86,7 +86,7 @@ FIELD_TRANSFORMS: dict[str, tuple[str, Callable[[Any], Any]]] = {
 }
 
 # Fields to exclude from table display for each event type
-STAGE_EXCLUDE = {"stage_stats", "stage_id", "request_id"}
+STAGE_EXCLUDE = {"stage_stats", "stage_id", "request_id", "rx_transfer_bytes", "rx_decode_time_ms", "rx_in_flight_time_ms"}
 TRANSFER_EXCLUDE = {"from_stage", "to_stage", "request_id", "used_shm"}
 E2E_EXCLUDE = {"request_id"}
 
@@ -321,9 +321,9 @@ class OrchestratorAggregator:
                 batch_id=metrics.get("batch_id", -1),
                 batch_size=metrics.get("batch_size"),
                 stage_gen_time_ms=self.accumulated_gen_time_ms.pop(req_id, 0.0),
-                rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")),
-                rx_decode_time_ms=metrics.get("rx_decode_time_ms"),
-                rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0),
+                rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")) if stage_id > 0 else 0.0,
+                rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
+                rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,
                 stage_stats=stage_stats,
             )
 
