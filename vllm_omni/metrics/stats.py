@@ -35,6 +35,7 @@ class StageRequestStats:
     stage_id: Optional[int] = None
     request_id: Optional[str] = None
     preprocess_time_ms: float = 0.0
+    diffusion_accumulated_time_ms: dict[str, float] = None
 
     @property
     def rx_mbps(self) -> float:
@@ -294,6 +295,7 @@ class OrchestratorAggregator:
         self.stage_first_ts = [None for _ in range(self.num_stages)]
         self.stage_last_ts = [None for _ in range(self.num_stages)]
         self.accumulated_gen_time_ms: defaultdict[str, float] = defaultdict(float) # {request_id: accumulated_gen_time_ms}
+        self.diffusion_accumulated_time_ms: defaultdict[str, defaultdict[str, float]] = defaultdict(lambda: defaultdict(float)) # {request_id: diffusion_accumulated_time_ms}
 
     def _as_stage_request_stats(self, stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]) -> StageRequestStats:
         'Convert dict to StageRequestStats if needed.'
@@ -325,6 +327,7 @@ class OrchestratorAggregator:
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,
                 stage_stats=stage_stats,
+                diffusion_accumulated_time_ms=self.diffusion_accumulated_time_ms.pop(req_id, None)
             )
 
     def on_stage_metrics(self, stage_id: int, req_id: Any, metrics: StageRequestStats | dict[str, Any]) -> None:
@@ -498,10 +501,20 @@ class OrchestratorAggregator:
                 self.stage_events.get(rid, []),
                 key=lambda e: e.stage_id if e.stage_id is not None else -1,
             )
+            # if the stage is diffusion, remove preprocess_time_ms field 
+            # because it is not recorded in StageRequestStats.preprocess_time_ms
+            local_exclude = STAGE_EXCLUDE.copy()
+            if self.diffusion_accumulated_time_ms.get(rid) is not None and "preprocess_time_ms" in self.diffusion_accumulated_time_ms[rid]:
+                local_exclude.add("preprocess_time_ms")
+                local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
+            else:
+                local_stage_fields = STAGE_FIELDS
+
             stage_rows = [
-                {"stage_id": evt.stage_id, **_build_row(evt, STAGE_FIELDS)}
+                {"stage_id": evt.stage_id, **_build_row(evt, local_stage_fields)}
                 for evt in stage_evts
             ]
+
             result_stage_table.append({"request_id": rid, "stages": stage_rows})
 
             if stage_rows:
@@ -511,7 +524,7 @@ class OrchestratorAggregator:
                         f"StageRequestStats [request_id={rid}]",
                         stage_rows,
                         column_key="stage_id",
-                        value_fields=_get_field_names(STAGE_FIELDS),
+                        value_fields=_get_field_names(local_stage_fields),
                     ),
                 )
 

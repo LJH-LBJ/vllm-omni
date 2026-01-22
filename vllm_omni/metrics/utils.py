@@ -100,7 +100,11 @@ def _format_table(
         table.align["Value"] = "r"
         for field in value_fields:
             if field in data:
-                table.add_row([field, _format_value(data[field])])
+                if isinstance(data[field], dict):
+                    for sub_key, sub_value in data[field].items():
+                        table.add_row([f"{sub_key}", _format_value(sub_value)])
+                else:
+                    table.add_row([field, _format_value(data[field])])
 
     # Multi-column mode: data is a list of dicts
     else:

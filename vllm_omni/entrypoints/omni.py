@@ -703,6 +703,11 @@ class Omni(OmniBase):
                             _m = asdict(_m)
                         # stage_gen_time_ms is the time of generating every chunk in this stage
                         metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
+                        if stage.stage_type == "diffusion":
+                            # For diffusion stages, we also accumulate diffusion time
+                            diffusion_time: dict = getattr(engine_outputs, "metrics", None)
+                            for key, value in diffusion_time.items():
+                                metrics.diffusion_accumulated_time_ms[req_id][key] += value
                         metrics.on_stage_metrics(stage_id, req_id, _m)
                         if pbar:
                             elapsed = pbar.format_dict["elapsed"] or 1e-6
