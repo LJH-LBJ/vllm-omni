@@ -306,10 +306,13 @@ class OrchestratorAggregator:
             stage_stats = None
             if "stage_stats" in metrics:
                 ss = metrics["stage_stats"]
-                stage_stats = StageStats(
-                    total_token=int(ss.get("total_token", 0)),
-                    total_gen_time_ms=float(ss.get("total_gen_time_ms", 0.0)),
-                )
+                if ss is not None:
+                    stage_stats = StageStats(
+                        total_token=int(ss.get("total_token", 0)),
+                        total_gen_time_ms=float(ss.get("total_gen_time_ms", 0.0)),
+                    )
+                else:
+                    stage_stats = None
             return StageRequestStats(
                 stage_id=stage_id,
                 request_id=req_id,
