@@ -87,6 +87,8 @@ def _format_table(
             return f"{value:,}"
         if isinstance(value, float):
             return f"{value:,.3f}"
+        if isinstance(value, list):
+            return ", ".join(str(f"{v:,.3f}") for v in value)
         return str(value)
 
     table = PrettyTable()
