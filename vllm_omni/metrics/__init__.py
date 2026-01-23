@@ -1,4 +1,4 @@
-from .stats import OrchestratorAggregator, StageStats, StageRequestStats
+from .stats import OrchestratorAggregator, StageRequestStats, StageStats
 from .utils import count_tokens_from_outputs
 
 __all__ = [

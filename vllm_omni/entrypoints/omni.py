@@ -9,14 +9,12 @@ import weakref
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
-from pprint import pformat
 from typing import Any
 
 from omegaconf import OmegaConf
 from tqdm.auto import tqdm
 from vllm.inputs import PromptType
 from vllm.logger import init_logger
-import vllm.envs as envs
 
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.distributed.omni_connectors import (
@@ -38,8 +36,8 @@ from vllm_omni.entrypoints.utils import (
     load_stage_configs_from_yaml,
     resolve_model_config_path,
 )
-from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.metrics import OrchestratorAggregator
+from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
 

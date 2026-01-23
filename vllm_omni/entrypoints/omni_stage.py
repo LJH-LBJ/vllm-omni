@@ -35,7 +35,6 @@ from vllm_omni.distributed.ray_utils.utils import kill_ray_actor, start_ray_acto
 from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs
 from vllm_omni.entrypoints.async_omni_diffusion import AsyncOmniDiffusion
 from vllm_omni.entrypoints.async_omni_llm import AsyncOmniLLM
-from vllm_omni.metrics import count_tokens_from_outputs
 from vllm_omni.entrypoints.omni_diffusion import OmniDiffusion
 from vllm_omni.entrypoints.omni_llm import OmniLLM
 from vllm_omni.entrypoints.stage_utils import (
@@ -47,6 +46,7 @@ from vllm_omni.entrypoints.stage_utils import (
     set_stage_devices,
 )
 from vllm_omni.inputs.data import OmniTokensPrompt
+from vllm_omni.metrics import count_tokens_from_outputs
 from vllm_omni.utils import detect_device_type
 
 logger = init_logger(__name__)

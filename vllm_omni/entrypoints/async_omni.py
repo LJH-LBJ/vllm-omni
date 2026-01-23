@@ -5,7 +5,6 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import asdict
-from pprint import pformat
 from typing import Any
 
 from vllm.config import VllmConfig
@@ -16,7 +15,6 @@ from vllm.plugins.io_processors import get_io_processor
 from vllm.sampling_params import SamplingParams
 from vllm.tokenizers import TokenizerLike
 from vllm.v1.engine.exceptions import EngineDeadError
-import vllm.envs as envs
 
 # Internal imports (our code)
 from vllm_omni.config import OmniModelConfig
@@ -55,6 +53,7 @@ def _weak_close_cleanup_async(stage_list, stage_in_queues, ray_pg, output_handle
     # Cancel output handler
     if output_handler is not None:
         output_handler.cancel()
+
 
 class AsyncOmni(OmniBase):
     """Asynchronous unified entry point supporting multi-stage pipelines for LLM and Diffusion models.
@@ -321,7 +320,7 @@ class AsyncOmni(OmniBase):
             metrics = OrchestratorAggregator(
                 num_stages=num_stages,
                 enable_stats=self._enable_stats,
-                wall_start_ts=_wall_start_ts, # will be reset at generate() time, just a placeholder here
+                wall_start_ts=_wall_start_ts,  # will be reset at generate() time, just a placeholder here
             )
             # Seed stage-0 queue with all requests
             logger.debug(f"[{self._name}] Seeding request into stage-0")

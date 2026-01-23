@@ -1,35 +1,39 @@
+from collections.abc import Callable
 from dataclasses import fields
-from typing import Any, Callable, Optional, Union
+from typing import Any
+
 from prettytable import PrettyTable
 
+
 def _build_field_defs(
-        cls: type,
-        exclude: set[str],
-        transforms: dict[str, tuple[str, Callable]] | None = None,
-    ) -> list[tuple[str, Callable[[Any], Any]]]:
-        """Auto-generate field definitions from a dataclass.
+    cls: type,
+    exclude: set[str],
+    transforms: dict[str, tuple[str, Callable]] | None = None,
+) -> list[tuple[str, Callable[[Any], Any]]]:
+    """Auto-generate field definitions from a dataclass.
 
-        Args:
-            cls: The dataclass type to extract fields from.
-            exclude: Set of field names to exclude from output.
-            transforms: Optional mapping of field transformations.
-                Format: {original_name: (display_name, transform_fn)}
+    Args:
+        cls: The dataclass type to extract fields from.
+        exclude: Set of field names to exclude from output.
+        transforms: Optional mapping of field transformations.
+            Format: {original_name: (display_name, transform_fn)}
 
-        Returns:
-            List of (display_name, getter_fn) tuples for table generation.
-        """
-        transforms = transforms or {}
-        result = []
-        for f in fields(cls):
-            if f.name in exclude:
-                continue
-            if f.name in transforms:
-                display_name, transform_fn = transforms[f.name]
-                # Capture variables in closure to avoid late binding issues
-                result.append((display_name, lambda e, fn=transform_fn, n=f.name: fn(getattr(e, n))))
-            else:
-                result.append((f.name, lambda e, n=f.name: getattr(e, n)))
-        return result
+    Returns:
+        List of (display_name, getter_fn) tuples for table generation.
+    """
+    transforms = transforms or {}
+    result = []
+    for f in fields(cls):
+        if f.name in exclude:
+            continue
+        if f.name in transforms:
+            display_name, transform_fn = transforms[f.name]
+            # Capture variables in closure to avoid late binding issues
+            result.append((display_name, lambda e, fn=transform_fn, n=f.name: fn(getattr(e, n))))
+        else:
+            result.append((f.name, lambda e, n=f.name: getattr(e, n)))
+    return result
+
 
 def _build_row(evt: Any, field_defs: list[tuple[str, Callable]]) -> dict[str, Any]:
     """Build a row dict from an event object using field definitions.
@@ -43,6 +47,7 @@ def _build_row(evt: Any, field_defs: list[tuple[str, Callable]]) -> dict[str, An
     """
     return {name: getter(evt) for name, getter in field_defs}
 
+
 def _get_field_names(field_defs: list[tuple[str, Callable]]) -> list[str]:
     """Extract field names from field definitions.
 
@@ -54,11 +59,12 @@ def _get_field_names(field_defs: list[tuple[str, Callable]]) -> list[str]:
     """
     return [name for name, _ in field_defs]
 
+
 def _format_table(
     title: str,
-    data: Union[dict[str, Any], list[dict[str, Any]]],
+    data: dict[str, Any] | list[dict[str, Any]],
     value_fields: list[str],
-    column_key: Optional[str] = None,
+    column_key: str | None = None,
     column_prefix: str = "",
 ) -> str:
     """Format a table for display.
@@ -115,11 +121,12 @@ def _format_table(
         table.align["Field"] = "l"
         for col in col_headers:
             table.align[col] = "r"
-        for field in value_fields: 
+        for field in value_fields:
             row_values = [_format_value(r.get(field, "")) for r in data]
             table.add_row([field] + row_values)
 
     return "\n".join([f"[{title}]", table.get_string()])
+
 
 def count_tokens_from_outputs(engine_outputs: list[Any]) -> int:
     total = 0

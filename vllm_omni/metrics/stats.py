@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import time
+from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from pprint import pformat
-from collections import defaultdict
-from typing import Any, Callable, Optional, Union
+from typing import Any
 
 from vllm.logger import init_logger
+
 from vllm_omni.metrics.utils import _build_field_defs, _build_row, _format_table, _get_field_names
 
 logger = init_logger(__name__)
@@ -21,6 +23,7 @@ class StageStats:
     def avg_tokens_per_s(self) -> float:
         return (self.total_token * 1000.0 / self.total_gen_time_ms) if self.total_gen_time_ms > 0 else 0.0
 
+
 @dataclass
 class StageRequestStats:
     batch_id: int
@@ -32,8 +35,8 @@ class StageRequestStats:
     rx_decode_time_ms: float
     rx_in_flight_time_ms: float
     stage_stats: StageStats
-    stage_id: Optional[int] = None
-    request_id: Optional[str] = None
+    stage_id: int | None = None
+    request_id: str | None = None
     preprocess_time_ms: float = 0.0
     diffusion_accumulated_time_ms: dict[str, float] = None
 
@@ -78,16 +81,24 @@ class RequestE2EStats:
     def e2e_tpt(self) -> float:
         return (self.e2e_total_ms / self.e2e_total_tokens) if self.e2e_total_tokens > 0 else 0.0
 
+
 # === Field Configuration ===
 # Fields requiring unit conversion:  original_field_name -> (display_name, transform_fn)
 FIELD_TRANSFORMS: dict[str, tuple[str, Callable[[Any], Any]]] = {
-    "rx_transfer_bytes":  ("rx_transfer_kbytes", lambda v: v / 1024.0),
+    "rx_transfer_bytes": ("rx_transfer_kbytes", lambda v: v / 1024.0),
     "size_bytes": ("size_kbytes", lambda v: v / 1024.0),
     "transfers_total_bytes": ("transfers_total_kbytes", lambda v: v / 1024.0),
 }
 
 # Fields to exclude from table display for each event type
-STAGE_EXCLUDE = {"stage_stats", "stage_id", "request_id", "rx_transfer_bytes", "rx_decode_time_ms", "rx_in_flight_time_ms"}
+STAGE_EXCLUDE = {
+    "stage_stats",
+    "stage_id",
+    "request_id",
+    "rx_transfer_bytes",
+    "rx_decode_time_ms",
+    "rx_in_flight_time_ms",
+}
 TRANSFER_EXCLUDE = {"from_stage", "to_stage", "request_id", "used_shm"}
 E2E_EXCLUDE = {"request_id"}
 
@@ -96,6 +107,7 @@ OVERALL_FIELDS: list[str] | None = None
 STAGE_FIELDS = _build_field_defs(StageRequestStats, STAGE_EXCLUDE, FIELD_TRANSFORMS)
 TRANSFER_FIELDS = _build_field_defs(TransferEdgeStats, TRANSFER_EXCLUDE, FIELD_TRANSFORMS)
 E2E_FIELDS = _build_field_defs(RequestE2EStats, E2E_EXCLUDE, FIELD_TRANSFORMS)
+
 
 def _get_or_create_transfer_event(
     transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
@@ -166,7 +178,10 @@ def record_transfer_rx(
     except Exception:
         return None
 
-def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, RequestE2EStats], stats_type: str, **kwargs) -> None:
+
+def log_request_stats(
+    stats: StageRequestStats | TransferEdgeStats | RequestE2EStats, stats_type: str, **kwargs
+) -> None:
     if stats_type == "stage_stats":
         logger.info(
             pformat(
@@ -213,7 +228,9 @@ def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, Request
                     "rx_decode_time_ms": float(stats.rx_decode_time_ms),
                     "in_flight_time_ms": float(stats.rx_in_flight_time_ms),
                     "rx_time_per_kb_ms": (
-                        (float(stats.rx_decode_time_ms) / max(float(stats.rx_transfer_bytes) / 1024.0, 1e-6)) if stats.rx_transfer_bytes > 0 else 0.0
+                        (float(stats.rx_decode_time_ms) / max(float(stats.rx_transfer_bytes) / 1024.0, 1e-6))
+                        if stats.rx_transfer_bytes > 0
+                        else 0.0
                     ),
                 },
                 sort_dicts=False,
@@ -233,7 +250,9 @@ def log_request_stats(stats: Union[StageRequestStats, TransferEdgeStats, Request
                     "rx_decode_time_ms": stats.rx_decode_time_ms,
                     "total_time_ms": float(kwargs.get("total_time_ms", 0.0)),
                     "total_time_per_kb_ms": (
-                        float(kwargs.get("total_time_ms", 0.0)) / max(float(kwargs.get("size_bytes", 0)) / 1024.0, 1e-6) if kwargs.get("size_bytes", 0) > 0 else 0.0
+                        float(kwargs.get("total_time_ms", 0.0)) / max(float(kwargs.get("size_bytes", 0)) / 1024.0, 1e-6)
+                        if kwargs.get("size_bytes", 0) > 0
+                        else 0.0
                     ),
                 },
                 sort_dicts=False,
@@ -280,9 +299,11 @@ class OrchestratorAggregator:
         self.enable_stats = bool(enable_stats)
         self.init_run_state(wall_start_ts)
         self.stage_events: dict[str, list[StageRequestStats]] = {}
-        self.transfer_events: dict[tuple[int, int, str], TransferEdgeStats] = {} # Key: (from_stage, to_stage, request_id)
+        self.transfer_events: dict[
+            tuple[int, int, str], TransferEdgeStats
+        ] = {}  # Key: (from_stage, to_stage, request_id)
         self.e2e_events: list[RequestE2EStats] = []
-    
+
     def init_run_state(self, wall_start_ts: float) -> None:
         # Per-run aggregates and timing state
         self.stage_total_tokens = [0 for _ in range(self.num_stages)]
@@ -294,11 +315,17 @@ class OrchestratorAggregator:
         self.last_finish_ts = float(wall_start_ts)
         self.stage_first_ts = [None for _ in range(self.num_stages)]
         self.stage_last_ts = [None for _ in range(self.num_stages)]
-        self.accumulated_gen_time_ms: defaultdict[str, float] = defaultdict(float) # {request_id: accumulated_gen_time_ms}
-        self.diffusion_accumulated_time_ms: defaultdict[str, defaultdict[str, float]] = defaultdict(lambda: defaultdict(float)) # {request_id: diffusion_accumulated_time_ms}
+        self.accumulated_gen_time_ms: defaultdict[str, float] = defaultdict(
+            float
+        )  # {request_id: accumulated_gen_time_ms}
+        self.diffusion_accumulated_time_ms: defaultdict[str, defaultdict[str, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )  # {request_id: diffusion_accumulated_time_ms}
 
-    def _as_stage_request_stats(self, stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]) -> StageRequestStats:
-        'Convert dict to StageRequestStats if needed.'
+    def _as_stage_request_stats(
+        self, stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]
+    ) -> StageRequestStats:
+        "Convert dict to StageRequestStats if needed."
         if isinstance(metrics, StageRequestStats):
             stats = metrics
             stats.stage_id = stage_id
@@ -327,7 +354,7 @@ class OrchestratorAggregator:
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,
                 stage_stats=stage_stats,
-                diffusion_accumulated_time_ms=self.diffusion_accumulated_time_ms.pop(req_id, None)
+                diffusion_accumulated_time_ms=self.diffusion_accumulated_time_ms.pop(req_id, None),
             )
 
     def on_stage_metrics(self, stage_id: int, req_id: Any, metrics: StageRequestStats | dict[str, Any]) -> None:
@@ -423,31 +450,23 @@ class OrchestratorAggregator:
             e2e_total_ms=e2e_ms,
             e2e_total_tokens=total_tokens,
             transfers_total_time_ms=float(
-                sum(
-                    evt.total_time_ms
-                    for evt in self.transfer_events.values()
-                    if evt.request_id == rid_key
-                )
+                sum(evt.total_time_ms for evt in self.transfer_events.values() if evt.request_id == rid_key)
             ),
             transfers_total_bytes=int(
-                sum(
-                    evt.size_bytes
-                    for evt in self.transfer_events.values()
-                    if evt.request_id == rid_key
-                )
+                sum(evt.size_bytes for evt in self.transfer_events.values() if evt.request_id == rid_key)
             ),
         )
         self.e2e_events.append(per_req_record)
         if self.enable_stats:
             log_request_stats(per_req_record, "request_level_metrics")
 
-    def build_and_log_summary(self, final_stage_id_to_prompt: Union[dict[str, int], int]) -> dict[str, Any]:
+    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int] | int) -> dict[str, Any]:
         wall_time_ms = max(0.0, (self.last_finish_ts - self.wall_start_ts) * 1000.0)
         e2e_avg_req = (wall_time_ms / self.e2e_count) if self.e2e_count > 0 else 0.0
         e2e_avg_tok = (self.e2e_total_tokens * 1000.0 / wall_time_ms) if wall_time_ms > 0 else 0.0
 
         if isinstance(final_stage_id_to_prompt, int):
-            final_stage_id_map:  dict[str, int] = {"*": int(final_stage_id_to_prompt)}
+            final_stage_id_map: dict[str, int] = {"*": int(final_stage_id_to_prompt)}
         else:
             final_stage_id_map = final_stage_id_to_prompt
 
@@ -460,9 +479,9 @@ class OrchestratorAggregator:
 
         overall_summary = {
             "e2e_requests": int(self.e2e_count),
-            "e2e_wall_time_ms":  float(wall_time_ms),
+            "e2e_wall_time_ms": float(wall_time_ms),
             "e2e_total_tokens": int(self.e2e_total_tokens),
-            "e2e_avg_time_per_request_ms":  float(e2e_avg_req),
+            "e2e_avg_time_per_request_ms": float(e2e_avg_req),
             "e2e_avg_tokens_per_s": float(e2e_avg_tok),
             "stage_wall_time_ms": stage_wall_time_ms,
         }
@@ -480,7 +499,7 @@ class OrchestratorAggregator:
         result_trans_table = []
         result_e2e_table = []
 
-        for rid in all_request_ids: 
+        for rid in all_request_ids:
             # === E2E table (single column) ===
             e2e_evt = next((e for e in self.e2e_events if e.request_id == rid), None)
             if e2e_evt:
@@ -501,19 +520,19 @@ class OrchestratorAggregator:
                 self.stage_events.get(rid, []),
                 key=lambda e: e.stage_id if e.stage_id is not None else -1,
             )
-            # if the stage is diffusion, remove preprocess_time_ms field 
+            # if the stage is diffusion, remove preprocess_time_ms field
             # because it is not recorded in StageRequestStats.preprocess_time_ms
             local_exclude = STAGE_EXCLUDE.copy()
-            if self.diffusion_accumulated_time_ms.get(rid) is not None and "preprocess_time_ms" in self.diffusion_accumulated_time_ms[rid]:
+            if (
+                self.diffusion_accumulated_time_ms.get(rid) is not None
+                and "preprocess_time_ms" in self.diffusion_accumulated_time_ms[rid]
+            ):
                 local_exclude.add("preprocess_time_ms")
                 local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
             else:
                 local_stage_fields = STAGE_FIELDS
 
-            stage_rows = [
-                {"stage_id": evt.stage_id, **_build_row(evt, local_stage_fields)}
-                for evt in stage_evts
-            ]
+            stage_rows = [{"stage_id": evt.stage_id, **_build_row(evt, local_stage_fields)} for evt in stage_evts]
 
             result_stage_table.append({"request_id": rid, "stages": stage_rows})
 
@@ -551,7 +570,7 @@ class OrchestratorAggregator:
                 )
 
         return {
-            "final_stage_id":  final_stage_id_map,
+            "final_stage_id": final_stage_id_map,
             "overall_summary": overall_summary,
             "stage_table": result_stage_table,
             "trans_table": result_trans_table,
