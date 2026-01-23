@@ -521,29 +521,39 @@ class OrchestratorAggregator:
                 key=lambda e: e.stage_id if e.stage_id is not None else -1,
             )
             # if the stage is diffusion, remove preprocess_time_ms field
-            # because it is not recorded in StageRequestStats.preprocess_time_ms
+            # because it is already included in diffusion_accumulated_time_ms
             local_exclude = STAGE_EXCLUDE.copy()
-            if (
-                self.diffusion_accumulated_time_ms.get(rid) is not None
-                and "preprocess_time_ms" in self.diffusion_accumulated_time_ms[rid]
-            ):
+            if self.diffusion_accumulated_time_ms.get(rid) is not None:
                 local_exclude.add("preprocess_time_ms")
-                local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
-            else:
-                local_stage_fields = STAGE_FIELDS
+            local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
 
-            stage_rows = [{"stage_id": evt.stage_id, **_build_row(evt, local_stage_fields)} for evt in stage_evts]
+            # if diffusion_accumulated_time_ms is present, expand it into multiple columns
+            # then remove diffusion_accumulated_time_ms from the table
+            stage_rows = []
+            for evt in stage_evts:
+                row = {"stage_id": evt.stage_id, **_build_row(evt, local_stage_fields)}
+                if evt.diffusion_accumulated_time_ms:
+                    row.update(evt.diffusion_accumulated_time_ms)
+                row.pop("diffusion_accumulated_time_ms", None)  # Remove the dict itself
+                stage_rows.append(row)
 
             result_stage_table.append({"request_id": rid, "stages": stage_rows})
 
             if stage_rows:
+                # Collect all possible value fields from stage_rows
+                all_value_fields = set()
+                for row in stage_rows:
+                    all_value_fields.update(row.keys())
+                all_value_fields.discard("stage_id")  # Remove column_key
+                value_fields_list = sorted(all_value_fields)
+
                 logger.info(
                     "\n%s",
                     _format_table(
                         f"StageRequestStats [request_id={rid}]",
                         stage_rows,
                         column_key="stage_id",
-                        value_fields=_get_field_names(local_stage_fields),
+                        value_fields=value_fields_list,
                     ),
                 )
 

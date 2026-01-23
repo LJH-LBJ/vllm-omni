@@ -704,6 +704,8 @@ class Omni(OmniBase):
                         if stage.stage_type == "diffusion":
                             # For diffusion stages, we also accumulate diffusion time
                             diffusion_time: dict = getattr(engine_outputs, "metrics", None)
+                            if isinstance(diffusion_time, list):
+                                diffusion_time = diffusion_time[0]
                             for key, value in diffusion_time.items():
                                 metrics.diffusion_accumulated_time_ms[req_id][key] += value
                         metrics.on_stage_metrics(stage_id, req_id, _m)
