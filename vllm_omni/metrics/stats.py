@@ -221,8 +221,8 @@ def log_request_stats(
             pformat(
                 {
                     "type": stats_type,
-                    "from_stage": stats.from_stage,
-                    "to_stage": stats.to_stage,
+                    "from_stage": stats.stage_id - 1,
+                    "to_stage": stats.stage_id,
                     "request_id": stats.request_id,
                     "rx_bytes": int(stats.rx_transfer_bytes),
                     "rx_decode_time_ms": float(stats.rx_decode_time_ms),

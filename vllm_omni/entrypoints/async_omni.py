@@ -433,7 +433,7 @@ class AsyncOmni(OmniBase):
                     _prep_t0 = time.perf_counter()
                     next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
                     _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0
-                    metrics.record_stage_preprocess_time(next_stage_id, req_id, _prep_ms)
+                    metrics.record_stage_preprocess_time(stage_id, req_id, _prep_ms)
                     sp_next: SamplingParams = sampling_params_list[next_stage_id]
 
                     # Check if we have a connector for this edge
@@ -472,7 +472,8 @@ class AsyncOmni(OmniBase):
             logger.debug(f"[{self._name}] All requests completed")
             # Summarize and print stats
             try:
-                metrics.build_and_log_summary(final_stage_id_for_e2e)
+                if self._enable_stats:
+                    metrics.build_and_log_summary(final_stage_id_for_e2e)
             except Exception as e:
                 logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
             finally:

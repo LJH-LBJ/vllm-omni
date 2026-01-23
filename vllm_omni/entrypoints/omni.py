@@ -770,7 +770,7 @@ class Omni(OmniBase):
                         _prep_t0 = time.perf_counter()
                         next_inputs = next_stage.process_engine_inputs(self.stage_list, [request_id_to_prompt[req_id]])
                         _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0
-                        metrics.record_stage_preprocess_time(next_stage_id, req_id, _prep_ms)
+                        metrics.record_stage_preprocess_time(stage_id, req_id, _prep_ms)
                     except Exception as e:
                         logger.exception(
                             f"[{self._name}] Process engine inputs error for req {req_id}"
@@ -824,7 +824,8 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
-            metrics.build_and_log_summary(final_stage_id_to_prompt)
+            if self._enable_stats:
+                metrics.build_and_log_summary(final_stage_id_to_prompt)
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
 
