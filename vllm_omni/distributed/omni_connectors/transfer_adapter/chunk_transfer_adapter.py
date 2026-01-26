@@ -172,7 +172,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
             # Mark as finished for consumption
             self._finished_load_reqs.add(req_id)
-            logger.debug(f"[Stage-{stage_id}] Received one chunk for key {connector_get_key}")
+            logger.info(
+                "[Stage-%s] Recv chunk req_id=%s external_req_id=%s key=%s summary={%s}",
+                stage_id,
+                req_id,
+                external_req_id,
+                connector_get_key,
+                self._summarize_chunk_payload(payload_data),
+            )
             return True
 
         return False
@@ -200,8 +207,24 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             elif isinstance(value, list) and key in origin_payload:
                 payload_data[key] = origin_payload[key] + value
 
+        for key, value in origin_payload.items():
+            if key not in payload_data:
+                payload_data[key] = value
+
         self.request_payload[req_id] = payload_data
         return payload_data
+
+    @staticmethod
+    def _summarize_chunk_payload(payload_data: dict[str, Any]) -> str:
+        parts: list[str] = []
+        for key, value in payload_data.items():
+            if isinstance(value, torch.Tensor):
+                parts.append(f"{key}=tensor{tuple(value.shape)}")
+            elif isinstance(value, list):
+                parts.append(f"{key}=list[{len(value)}]")
+            else:
+                parts.append(f"{key}={value}")
+        return ", ".join(parts)
 
     def _send_single_request(self, task: dict):
         pooling_output = task["pooling_output"]
@@ -239,6 +262,13 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if success:
             self.put_req_chunk[request_id] += 1
             logger.debug(f"[Stage-{stage_id}] Sent {connector_put_key}")
+            logger.info(
+                "[Stage-%s] Send chunk req_id=%s key=%s summary={%s}",
+                stage_id,
+                request_id,
+                connector_put_key,
+                self._summarize_chunk_payload(payload_data),
+            )
 
         if is_finished:
             self.code_prompt_token_ids.pop(request_id, None)

@@ -230,6 +230,7 @@ class OmniARScheduler(VLLMScheduler):
         # to avoid expensive operations inside the loop.
         stopped_running_reqs: set[Request] = set()
         stopped_preempted_reqs: set[Request] = set()
+        actual_num_computed = getattr(model_runner_output, "actual_num_computed_tokens", None) or {}
         for req_id, num_tokens_scheduled in num_scheduled_tokens.items():
             assert num_tokens_scheduled > 0
             if failed_kv_load_req_ids and req_id in failed_kv_load_req_ids:
@@ -241,6 +242,12 @@ class OmniARScheduler(VLLMScheduler):
                 # request is aborted while the model is executing it (e.g.,
                 # in pipeline parallelism or async scheduling).
                 continue
+
+            # Talker prefill: actual tokens computed can be less than scheduled (system stripped).
+            if req_id in actual_num_computed:
+                actual = actual_num_computed[req_id]
+                request.num_computed_tokens -= num_tokens_scheduled
+                request.num_computed_tokens += actual
 
             req_index = model_runner_output.req_id_to_index[req_id]
             generated_token_ids = sampled_token_ids[req_index] if sampled_token_ids else []

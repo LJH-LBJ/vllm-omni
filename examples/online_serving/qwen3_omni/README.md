@@ -36,6 +36,11 @@ cd examples/online_serving/qwen3_omni
 python openai_chat_completion_client_for_multimodal_generation.py --query-type use_image --port 8091 --host "localhost"
 ```
 
+When streaming is enabled (`stream=True`), multiple WAV files will be generated. To combine them into a single audio file, use:
+```bash
+ python combine_audio.py -o output.wav --use-wave --allow-different-params audio_*.wav
+```
+
 The Python client supports the following command-line arguments:
 
 - `--query-type` (or `-q`): Query type (default: `use_video`). Options: `text`, `use_audio`, `use_image`, `use_video`
