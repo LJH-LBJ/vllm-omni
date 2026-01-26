@@ -325,9 +325,8 @@ class AsyncOmni(OmniBase):
             req_state = ClientRequestState(request_id)
             req_state.metrics = metrics
             self.request_states[request_id] = req_state
-
+            _req_start_ts[request_id] = time.time()
             if self.async_chunk:
-                _req_start_ts[request_id] = time.time()
                 stage_queues = {stage_id: asyncio.Queue() for stage_id in range(num_stages)}
                 req_state.stage_queues = stage_queues
                 for i in range(num_stages):
@@ -364,7 +363,6 @@ class AsyncOmni(OmniBase):
                 ):
                     yield output
             else:
-
                 sp0: SamplingParams = sampling_params_list[0]  # type: ignore[index]
                 task = {
                     "request_id": request_id,
@@ -373,7 +371,6 @@ class AsyncOmni(OmniBase):
                 }
                 self.stage_list[0].submit(task)
 
-                _req_start_ts[request_id] = time.time()
                 # Mark first input time for stage-0
                 metrics.stage_first_ts[0] = metrics.stage_first_ts[0] or time.time()
                 logger.info(
