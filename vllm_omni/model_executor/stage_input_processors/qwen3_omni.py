@@ -63,6 +63,28 @@ def _ensure_list(x):
     return list(x)
 
 
+def _get_current_thinker_chunk_token_ids(
+    pooling_output: dict[str, Any],
+    request: OmniEngineCoreRequest,
+) -> list[int] | Any:
+    """Return only the newly produced thinker token ids for this chunk."""
+    all_token_ids = _ensure_list(request.all_token_ids)
+    if not isinstance(all_token_ids, list):
+        return all_token_ids
+
+    chunk_len = 0
+    thinker_embeddings = pooling_output.get("0")
+    thinker_hidden_states = pooling_output.get("24")
+    if isinstance(thinker_embeddings, torch.Tensor):
+        chunk_len = int(thinker_embeddings.shape[0])
+    elif isinstance(thinker_hidden_states, torch.Tensor):
+        chunk_len = int(thinker_hidden_states.shape[0])
+
+    if chunk_len <= 0 or chunk_len >= len(all_token_ids):
+        return all_token_ids
+    return all_token_ids[-chunk_len:]
+
+
 def _validate_stage_inputs(stage_list, engine_input_source):
     if not engine_input_source:
         raise ValueError("engine_input_source cannot be empty")
@@ -98,6 +120,9 @@ def thinker2talker_async_chunk(
 
     request_id = request.external_req_id
     chunk_id = transfer_manager.put_req_chunk[request_id]
+    output_token_ids = request.output_token_ids
+    # Convert ConstantList to regular list for OmniSerializer serialization
+    output_token_ids = _ensure_list(output_token_ids)
     if chunk_id == 0:
         all_token_ids = request.all_token_ids  # prefill + decode
         prompt_token_ids = request.prompt_token_ids
@@ -132,11 +157,11 @@ def thinker2talker_async_chunk(
                 (save_payload.get("thinker_hidden_states"), talker_additional_info.get("thinker_hidden_states")),
                 dim=0,
             )
+        print(
+            f"thinker2talker_async_chunk: {_get_current_thinker_chunk_token_ids(pooling_output, request)}, "
+            f"is_finished: {is_finished}"
+        )
     else:
-        output_token_ids = request.output_token_ids
-        # Convert ConstantList to regular list for OmniSerializer serialization
-        output_token_ids = _ensure_list(output_token_ids)
-
         talker_additional_info = {
             "finished": torch.tensor(is_finished, dtype=torch.bool),
         }

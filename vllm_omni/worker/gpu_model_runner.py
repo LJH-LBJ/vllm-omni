@@ -1241,6 +1241,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             # Overlay custom prompt_embeds per request for the prompt portion;
             # collect additional_information (tensor/list) for prefill portion only
             decode_req_ids = []
+            preprocess_seg_lens = []
             for req_index, req_id in enumerate(self.input_batch.req_ids):
                 req_infos = self.model_intermediate_buffer.get(req_id, {})
 
@@ -1279,9 +1280,12 @@ class OmniGPUModelRunner(GPUModelRunner):
 
                 # update the inputs_embeds and input_ids
                 seg_len = min(span_len, req_embeds.shape[0])
+                preprocess_seg_lens.append(seg_len)
                 inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
                 if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
                     input_ids[s : s + seg_len] = req_input_ids
+
+            self._preprocess_seg_lens = preprocess_seg_lens
 
             # run talker mtp decode
             if self.has_talker_mtp:

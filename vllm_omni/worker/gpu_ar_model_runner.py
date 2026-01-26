@@ -56,6 +56,7 @@ class ExecuteModelState(NamedTuple):
     multimodal_outputs: Any
     # slot_mappings for attention/drafter (aligned with upstream v1 API)
     slot_mappings: dict[str, torch.Tensor] | list[dict[str, torch.Tensor]] | None = None
+    actual_num_computed_tokens: dict[str, int] | None = None
 
 
 class GPUARModelRunner(OmniGPUModelRunner):
@@ -95,6 +96,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
         scheduler_output: SchedulerOutput,
         intermediate_tensors: IntermediateTensors | None = None,
     ) -> OmniModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:
+        logger.info("enter execute_model")
         if self.execute_model_state is not None:
             raise RuntimeError("State error: sample_tokens() must be called after execute_model() returns None.")
 
@@ -266,6 +268,31 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 ec_connector_output,
             ) = self._preprocess(scheduler_output, num_tokens_padded, intermediate_tensors)
 
+            # Qwen3-Omni Talker preprocess strips system tokens, so the actual token count
+            # per request can be less than what the scheduler scheduled.
+            # Adjust logits_indices to point to the last *valid* token.
+            if getattr(self.model, "model_stage", None) == "talker":
+                seg_lens = getattr(self, "_preprocess_seg_lens", None)
+                if seg_lens:
+                    adjusted = []
+                    actual_num_computed_tokens = {}
+                    for i in range(num_reqs):
+                        req_id = self.input_batch.req_ids[i]
+                        start = int(self.query_start_loc.cpu[i])
+                        actual = seg_lens[i]
+                        actual_num_computed_tokens[req_id] = actual
+                        adjusted.append(start + max(actual, 1) - 1)
+                    logits_indices = torch.tensor(
+                        adjusted,
+                        dtype=logits_indices.dtype,
+                        device=logits_indices.device,
+                    )
+                    self._omni_actual_num_computed_tokens = actual_num_computed_tokens
+                else:
+                    self._omni_actual_num_computed_tokens = None
+            else:
+                self._omni_actual_num_computed_tokens = None
+
         # Set cudagraph mode to none if calc_kv_scales is true.
         # KV scales calculation involves dynamic operations that are incompatible
         # with CUDA graph capture.
@@ -320,7 +347,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 aux_hidden_states = None
 
             hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
-
             if not self.broadcast_pp_output:
                 # Common case.
                 if not get_pp_group().is_last_rank:
@@ -338,7 +364,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         num_scheduled_tokens_np,
                         kv_connector_output,
                     )
-
                 sample_hidden_states = hidden_states[logits_indices]
                 # Try with sampling_metadata first; fall back to without for models that don't support it
                 try:
@@ -393,6 +418,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: pass slot_mappings for drafter
+            getattr(self, "_omni_actual_num_computed_tokens", None),
         )
         self.kv_connector_output = kv_connector_output
 
@@ -435,6 +461,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: unpack slot_mappings for drafter
+            actual_num_computed_tokens,
         ) = self.execute_model_state
         self.execute_model_state = None
 
@@ -636,6 +663,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 cudagraph_stats=cudagraph_stats,
             )
             output.kv_extracted_req_ids = kv_extracted_req_ids
+            output.actual_num_computed_tokens = actual_num_computed_tokens
 
         if not self.use_async_scheduling:
             return output
