@@ -246,7 +246,7 @@ class OmniBase:
         )
 
         # Initialize stats paths
-        self._enable_stats: bool = bool(log_stats)
+        self.log_stats: bool = bool(log_stats)
 
         self.worker_backend = worker_backend
         self.ray_address = ray_address
@@ -671,7 +671,7 @@ class Omni(OmniBase):
         # Metrics/aggregation helper
         metrics = OrchestratorAggregator(
             num_stages,
-            self._enable_stats,
+            self.log_stats,
             _wall_start_ts,
         )
 
@@ -874,7 +874,7 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
-            if self._enable_stats:
+            if self.log_stats:
                 metrics.build_and_log_summary(final_stage_id_to_prompt)
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")

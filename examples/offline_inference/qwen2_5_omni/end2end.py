@@ -322,7 +322,7 @@ def main(args):
         query_result = query_func()
     omni_llm = Omni(
         model=model_name,
-        log_stats=args.enable_stats,
+        log_stats=args.log_stats,
         stage_init_timeout=args.stage_init_timeout,
         batch_timeout=args.batch_timeout,
         init_timeout=args.init_timeout,

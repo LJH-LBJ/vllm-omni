@@ -293,11 +293,11 @@ class OrchestratorAggregator:
     def __init__(
         self,
         num_stages: int,
-        enable_stats: bool,
+        log_stats: bool,
         wall_start_ts: float,
     ) -> None:
         self.num_stages = int(num_stages)
-        self.enable_stats = bool(enable_stats)
+        self.log_stats = bool(log_stats)
         self.init_run_state(wall_start_ts)
         self.stage_events: dict[str, list[StageRequestStats]] = {}
         self.transfer_events: dict[
@@ -366,13 +366,13 @@ class OrchestratorAggregator:
         if stats.stage_id == 0:
             self.stage_total_tokens[stats.stage_id] += int(stats.num_tokens_in)
         self.stage_events.setdefault(str(stats.request_id), []).append(stats)
-        if self.enable_stats:
+        if self.log_stats:
             log_request_stats(stats, "stage_stats")
             if stats.stage_stats is not None:
                 log_request_stats(stats, "stage_running_avg")
 
         evt = record_transfer_rx(self.transfer_events, stats)
-        if self.enable_stats and stats.stage_id is not None and stats.stage_id > 0:
+        if self.log_stats and stats.stage_id is not None and stats.stage_id > 0:
             log_request_stats(stats, "transfer_rx_stats")
             if evt is not None and (evt.tx_time_ms > 0.0 or evt.size_bytes > 0):
                 log_request_stats(
@@ -417,7 +417,7 @@ class OrchestratorAggregator:
             tx_time_ms=tx_ms,
             used_shm=used_shm,
         )
-        if self.enable_stats and evt is not None:
+        if self.log_stats and evt is not None:
             log_request_stats(evt, "transfer_tx_stats")
 
     def on_finalize_request(
@@ -460,7 +460,7 @@ class OrchestratorAggregator:
             ),
         )
         self.e2e_events.append(per_req_record)
-        if self.enable_stats:
+        if self.log_stats:
             log_request_stats(per_req_record, "request_level_metrics")
 
     def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int] | int) -> dict[str, Any]:

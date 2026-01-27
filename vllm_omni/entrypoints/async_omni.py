@@ -320,7 +320,7 @@ class AsyncOmni(OmniBase):
             # Metrics/aggregation helper
             metrics = OrchestratorAggregator(
                 num_stages=num_stages,
-                enable_stats=self._enable_stats,
+                log_stats=self.log_stats,
                 wall_start_ts=_wall_start_ts,  # will be reset at generate() time, just a placeholder here
             )
             req_state = ClientRequestState(request_id)
@@ -395,7 +395,7 @@ class AsyncOmni(OmniBase):
 
             # Summarize and print stats
             try:
-                if self._enable_stats:
+                if self.log_stats:
                     metrics.build_and_log_summary(final_stage_id_for_e2e)
             except Exception as e:
                 logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
