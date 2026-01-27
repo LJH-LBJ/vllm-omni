@@ -736,7 +736,7 @@ class Omni(OmniBase):
                         if stage.final_output_type == "audio":
                             if isinstance(engine_outputs, list):
                                 engine_output = engine_outputs[0]
-                            if (multimodal_output := engine_output.multimodal_output['audio']) is not None:
+                            if (multimodal_output := engine_output.multimodal_output["audio"]) is not None:
                                 nframes = int(multimodal_output[-1].shape[0])
                                 metrics.stage_events[req_id][stage_id].audio_generated_frames += nframes
                         if pbar:

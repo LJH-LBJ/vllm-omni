@@ -355,7 +355,9 @@ class OrchestratorAggregator:
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,
                 stage_stats=stage_stats,
-                diffusion_metrics={k: int(v) for k, v in self.diffusion_metrics.pop(req_id, {}).items()} if req_id in self.diffusion_metrics else None,
+                diffusion_metrics={k: int(v) for k, v in self.diffusion_metrics.pop(req_id, {}).items()}
+                if req_id in self.diffusion_metrics
+                else None,
             )
 
     def on_stage_metrics(self, stage_id: int, req_id: Any, metrics: StageRequestStats | dict[str, Any]) -> None:
