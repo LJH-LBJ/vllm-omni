@@ -431,7 +431,8 @@ class AsyncOmni(OmniBase):
 
                 if output_to_yield:
                     if (
-                        output_to_yield.final_output_type == "audio" and engine_outputs.finished
+                        output_to_yield.final_output_type == "audio"
+                        and engine_outputs.finished
                         and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
                     ):
                         nframes = int(multimodal_output[-1].shape[0])
@@ -463,7 +464,8 @@ class AsyncOmni(OmniBase):
                 )
                 if output_to_yield:
                     if (
-                        output_to_yield.final_output_type == "audio" and engine_outputs.finished
+                        output_to_yield.final_output_type == "audio"
+                        and engine_outputs.finished
                         and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
                     ):
                         nframes = int(multimodal_output[-1].shape[0])
