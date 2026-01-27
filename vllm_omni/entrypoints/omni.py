@@ -725,6 +725,10 @@ class Omni(OmniBase):
                             _m = asdict(_m)
                         # stage_gen_time_ms is the time of generating every chunk in this stage
                         metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
+                        if stage.final_output_type == "audio" and \
+                        (multimodal_output := engine_outputs.multimodal_output['audio']) is not None:
+                            nframes = int(multimodal_output[-1].shape[0])
+                            metrics.stage_events[req_id][stage_id].audio_generated_frames += nframes
                         if stage.stage_type == "diffusion":
                             # For diffusion stages, we also accumulate diffusion time
                             diffusion_time: dict = getattr(engine_outputs, "metrics", None)
