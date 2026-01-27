@@ -431,11 +431,14 @@ class AsyncOmni(OmniBase):
 
                 if output_to_yield:
                     if (
-                        output_to_yield.final_output_type == "audio"
+                        output_to_yield.final_output_type == "audio" and engine_outputs.finished
                         and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
                     ):
                         nframes = int(multimodal_output[-1].shape[0])
-                        metrics.stage_events[req_id][stage_id].audio_generated_frames += nframes
+                        stage_list = metrics.stage_events[req_id]
+                        for stage in stage_list:
+                            if stage.stage_id == stage_id:
+                                stage.audio_generated_frames += nframes
                     yield output_to_yield
 
     async def _process_sequential_results(
@@ -460,7 +463,7 @@ class AsyncOmni(OmniBase):
                 )
                 if output_to_yield:
                     if (
-                        output_to_yield.final_output_type == "audio"
+                        output_to_yield.final_output_type == "audio" and engine_outputs.finished
                         and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
                     ):
                         nframes = int(multimodal_output[-1].shape[0])
