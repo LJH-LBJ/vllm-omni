@@ -206,9 +206,16 @@ class OmniBase:
         log_stats = kwargs.get("log_stats", False)
 
         ### base engine args
-        tokenizer = kwargs.get("tokenizer", None)
+        from dataclasses import fields
+        from vllm.config.model import ModelConfig
 
-        base_engine_args = {"tokenizer": tokenizer} if tokenizer is not None else None
+        def filter_engine_args(kwargs: dict[str, Any]) -> dict[str, Any]:
+            model_config_fields = {f.name for f in fields(ModelConfig)}
+            model_config_fields.discard("model")
+            return {k: v for k, v in kwargs.items() if k in model_config_fields}
+        base_engine_args = filter_engine_args(kwargs)
+        if not base_engine_args:
+            base_engine_args = None
 
         # Load stage configurations from YAML
         if stage_configs_path is None:
