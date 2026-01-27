@@ -9,7 +9,7 @@ from typing import Any
 
 from vllm.logger import init_logger
 
-from vllm_omni.metrics.utils import _build_field_defs, _build_row, _format_table, _get_field_names
+from vllm_omni.metrics.utils import _build_field_defs, _build_row, _format_table
 
 logger = init_logger(__name__)
 
@@ -501,7 +501,6 @@ class OrchestratorAggregator:
         result_stage_table = []
         result_trans_table = []
         result_e2e_table = []
-
 
         for rid in all_request_ids:
             # === E2E table (single column) ===
