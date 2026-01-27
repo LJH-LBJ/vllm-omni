@@ -39,6 +39,7 @@ class StageRequestStats:
     request_id: str | None = None
     preprocess_time_ms: float = 0.0
     diffusion_accumulated_time_ms: dict[str, float] = None
+    audio_generated_frames: int = 0
 
     @property
     def rx_mbps(self) -> float:
@@ -320,7 +321,7 @@ class OrchestratorAggregator:
         )  # {request_id: accumulated_gen_time_ms}
         self.diffusion_accumulated_time_ms: defaultdict[str, defaultdict[str, float]] = defaultdict(
             lambda: defaultdict(float)
-        )  # {request_id: diffusion_accumulated_time_ms}
+        )  # {request_id: {diffusion_time_key: accumulated_time_ms}}
 
     def _as_stage_request_stats(
         self, stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]
