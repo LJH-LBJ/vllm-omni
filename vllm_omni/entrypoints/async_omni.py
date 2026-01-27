@@ -420,6 +420,7 @@ class AsyncOmni(OmniBase):
                 if all_stages_finished[stage_id]:
                     continue
                 result = await req_state.stage_queues[stage_id].get()
+                req_id = result.get("request_id")
                 logger.info(f"[{self._name}] Received result from stage-{stage_id}: {result}")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
                     result, stage, stage_id, metrics, req_start_ts, wall_start_ts, final_stage_id_for_e2e
@@ -428,6 +429,10 @@ class AsyncOmni(OmniBase):
                 all_stages_finished[stage_id] = finished
 
                 if output_to_yield:
+                    if output_to_yield.final_output_type == "audio" and \
+                        (multimodal_output := output_to_yield.request_output.multimodal_output['audio']) is not None:
+                        nframes = int(multimodal_output[-1].shape[0])
+                        metrics.stage_events[req_id][stage_id].audio_generated_frames += nframes
                     yield output_to_yield
 
     async def _process_sequential_results(
