@@ -554,15 +554,20 @@ class OrchestratorAggregator:
             if stage_rows:
                 # filter out all-zero fields for logging
                 all_value_fields = set()
-                nonzero_fields = set()
                 for row in stage_rows:
-                    for k, v in row.items():
-                        if k == "stage_id":
-                            continue
-                        all_value_fields.add(k)
-                        if v not in (0, 0.000, None, ""):
-                            nonzero_fields.add(k)
-                value_fields_list = sorted(nonzero_fields)
+                    for k in row.keys():
+                        if k != "stage_id":
+                            all_value_fields.add(k)
+                value_fields_list = []
+                for field in sorted(all_value_fields):
+                    all_zero = True
+                    for row in stage_rows:
+                        v = row.get(field, None)
+                        if v not in (0, 0.0, 0.000, None, ""):
+                            all_zero = False
+                            break
+                    if not all_zero:
+                        value_fields_list.append(field)
 
                 if value_fields_list:
                     logger.info(
@@ -589,15 +594,20 @@ class OrchestratorAggregator:
             if transfer_rows:
                 # filter out all-zero fields for logging
                 all_value_fields = set()
-                nonzero_fields = set()
                 for row in transfer_rows:
-                    for k, v in row.items():
-                        if k == "edge":
-                            continue
-                        all_value_fields.add(k)
-                        if v not in (0, 0.000, None, ""):
-                            nonzero_fields.add(k)
-                value_fields_list = sorted(nonzero_fields)
+                    for k in row.keys():
+                        if k != "edge":
+                            all_value_fields.add(k)
+                value_fields_list = []
+                for field in sorted(all_value_fields):
+                    all_zero = True
+                    for row in transfer_rows:
+                        v = row.get(field, None)
+                        if v not in (0, 0.0, 0.000, None, ""):
+                            all_zero = False
+                            break
+                    if not all_zero:
+                        value_fields_list.append(field)
 
                 if value_fields_list:
                     logger.info(
