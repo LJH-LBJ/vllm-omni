@@ -490,11 +490,17 @@ class OrchestratorAggregator:
         }
 
         # Print overall summary
-        overall_fields = OVERALL_FIELDS or list(overall_summary.keys())
-        logger.info(
-            "\n%s",
-            _format_table("Overall Summary", overall_summary, overall_fields),
-        )
+        # filter out all-zero fields for logging
+        overall_fields = []
+        for k in (OVERALL_FIELDS or list(overall_summary.keys())):
+            v = overall_summary.get(k, None)
+            if v not in (0, 0.0, 0.000, None, "", [], {}):
+                overall_fields.append(k)
+        if overall_fields:
+            logger.info(
+                "\n%s",
+                _format_table("Overall Summary", overall_summary, overall_fields),
+            )
 
         all_request_ids = sorted(set(self.stage_events.keys()) | {e.request_id for e in self.e2e_events})
 
