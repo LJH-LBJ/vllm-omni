@@ -731,7 +731,7 @@ class Omni(OmniBase):
                             if isinstance(diffusion_time, list):
                                 diffusion_time = diffusion_time[0]
                             for key, value in diffusion_time.items():
-                                metrics.diffusion_accumulated_time_ms[req_id][key] += value
+                                metrics.diffusion_metrics[req_id][key] += value
                         metrics.on_stage_metrics(stage_id, req_id, _m)
                         if pbar:
                             elapsed = pbar.format_dict["elapsed"] or 1e-6

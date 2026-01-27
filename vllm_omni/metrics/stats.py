@@ -38,7 +38,7 @@ class StageRequestStats:
     stage_id: int | None = None
     request_id: str | None = None
     preprocess_time_ms: float = 0.0
-    diffusion_accumulated_time_ms: dict[str, float] = None
+    diffusion_metrics: dict[str, int] = None
     audio_generated_frames: int = 0
 
     @property
@@ -319,9 +319,9 @@ class OrchestratorAggregator:
         self.accumulated_gen_time_ms: defaultdict[str, float] = defaultdict(
             float
         )  # {request_id: accumulated_gen_time_ms}
-        self.diffusion_accumulated_time_ms: defaultdict[str, defaultdict[str, float]] = defaultdict(
+        self.diffusion_metrics: defaultdict[str, defaultdict[str, float]] = defaultdict(
             lambda: defaultdict(float)
-        )  # {request_id: {diffusion_time_key: accumulated_time_ms}}
+        )  # {request_id: {diffusion_metrics_key: accumulated_metrics_data}}
 
     def _as_stage_request_stats(
         self, stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]
@@ -355,7 +355,7 @@ class OrchestratorAggregator:
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,
                 stage_stats=stage_stats,
-                diffusion_accumulated_time_ms=self.diffusion_accumulated_time_ms.pop(req_id, None),
+                diffusion_metrics=self.diffusion_metrics.pop(req_id, None),
             )
 
     def on_stage_metrics(self, stage_id: int, req_id: Any, metrics: StageRequestStats | dict[str, Any]) -> None:
@@ -522,20 +522,20 @@ class OrchestratorAggregator:
                 key=lambda e: e.stage_id if e.stage_id is not None else -1,
             )
             # if the stage is diffusion, remove preprocess_time_ms field
-            # because it is already included in diffusion_accumulated_time_ms
+            # because it is already included in diffusion_metrics
             local_exclude = STAGE_EXCLUDE.copy()
-            if self.diffusion_accumulated_time_ms.get(rid) is not None:
+            if self.diffusion_metrics.get(rid) is not None:
                 local_exclude.add("preprocess_time_ms")
             local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
 
-            # if diffusion_accumulated_time_ms is present, expand it into multiple columns
-            # then remove diffusion_accumulated_time_ms from the table
+            # if diffusion_metrics is present, expand it into multiple columns
+            # then remove diffusion_metrics from the table
             stage_rows = []
             for evt in stage_evts:
                 row = {"stage_id": evt.stage_id, **_build_row(evt, local_stage_fields)}
-                if evt.diffusion_accumulated_time_ms:
-                    row.update(evt.diffusion_accumulated_time_ms)
-                row.pop("diffusion_accumulated_time_ms", None)  # Remove the dict itself
+                if evt.diffusion_metrics:
+                    row.update(evt.diffusion_metrics)
+                row.pop("diffusion_metrics", None)  # Remove the dict itself
                 stage_rows.append(row)
 
             result_stage_table.append({"request_id": rid, "stages": stage_rows})
@@ -546,7 +546,7 @@ class OrchestratorAggregator:
                 for row in stage_rows:
                     all_value_fields.update(row.keys())
                 all_value_fields.discard("stage_id")  # Remove column_key
-                value_fields_list = list(all_value_fields)
+                value_fields_list = sorted(all_value_fields)
                 logger.info(
                     "\n%s",
                     _format_table(

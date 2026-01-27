@@ -547,11 +547,11 @@ class AsyncOmni(OmniBase):
             metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
             if stage.stage_type == "diffusion":
                 # For diffusion stages, we also accumulate diffusion time
-                diffusion_time: dict = getattr(engine_outputs, "metrics", {})
-                if isinstance(diffusion_time, list):
-                    diffusion_time = diffusion_time[0]
-                for key, value in diffusion_time.items():
-                    metrics.diffusion_accumulated_time_ms[req_id][key] += value
+                diffusion_metrics: dict = getattr(engine_outputs, "metrics", {})
+                if isinstance(diffusion_metrics, list):
+                    diffusion_metrics = diffusion_metrics[0]
+                for key, value in diffusion_metrics.items():
+                    metrics.diffusion_metrics[req_id][key] += value
             if _m is not None and finished:
                 metrics.on_stage_metrics(stage_id, req_id, _m)
         except Exception as e:
