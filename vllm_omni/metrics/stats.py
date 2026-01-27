@@ -494,7 +494,7 @@ class OrchestratorAggregator:
         overall_fields = []
         for k in (OVERALL_FIELDS or list(overall_summary.keys())):
             v = overall_summary.get(k, None)
-            if v not in (0, 0.0, 0.000, None, "", [], {}):
+            if v not in (0, 0.0, 0.000, None, ""):
                 overall_fields.append(k)
         if overall_fields:
             logger.info(
