@@ -111,6 +111,8 @@ class DiffusionEngine:
                 prompt = prompt[0] if prompt else None
 
             metrics = {}
+            metrics["image_num"] = request.num_outputs_per_prompt
+            metrics["resolution"] = request.resolution
             if output.trajectory_timesteps is not None:
                 metrics["trajectory_timesteps"] = output.trajectory_timesteps
 
@@ -151,6 +153,8 @@ class DiffusionEngine:
                 output_idx += num_outputs
 
                 metrics = {}
+                metrics["image_num"] = request.num_outputs_per_prompt
+                metrics["resolution"] = request.resolution
                 if output.trajectory_timesteps is not None:
                     metrics["trajectory_timesteps"] = output.trajectory_timesteps
 

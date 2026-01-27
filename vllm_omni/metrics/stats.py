@@ -546,8 +546,7 @@ class OrchestratorAggregator:
                 for row in stage_rows:
                     all_value_fields.update(row.keys())
                 all_value_fields.discard("stage_id")  # Remove column_key
-                value_fields_list = sorted(all_value_fields)
-
+                value_fields_list = list(all_value_fields)
                 logger.info(
                     "\n%s",
                     _format_table(
