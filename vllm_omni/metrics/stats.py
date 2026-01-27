@@ -502,6 +502,7 @@ class OrchestratorAggregator:
         result_trans_table = []
         result_e2e_table = []
 
+
         for rid in all_request_ids:
             # === E2E table (single column) ===
             e2e_evt = next((e for e in self.e2e_events if e.request_id == rid), None)
@@ -509,14 +510,22 @@ class OrchestratorAggregator:
                 e2e_data = _build_row(e2e_evt, E2E_FIELDS)
                 result_e2e_table.append({"request_id": rid, **e2e_data})
 
-                logger.info(
-                    "\n%s",
-                    _format_table(
-                        f"RequestE2EStats [request_id={rid}]",
-                        e2e_data,
-                        _get_field_names(E2E_FIELDS),
-                    ),
-                )
+                # filter out all-zero fields for logging
+                nonzero_e2e_fields = set()
+                for k, v in e2e_data.items():
+                    if v not in (0, 0.000, None, ""):
+                        nonzero_e2e_fields.add(k)
+                value_fields_e2e = sorted(nonzero_e2e_fields)
+
+                if value_fields_e2e:
+                    logger.info(
+                        "\n%s",
+                        _format_table(
+                            f"RequestE2EStats [request_id={rid}]",
+                            e2e_data,
+                            value_fields=value_fields_e2e,
+                        ),
+                    )
 
             # === Stage table (columns = stage_id) ===
             stage_evts = sorted(
@@ -543,21 +552,28 @@ class OrchestratorAggregator:
             result_stage_table.append({"request_id": rid, "stages": stage_rows})
 
             if stage_rows:
-                # Collect all possible value fields from stage_rows
+                # filter out all-zero fields for logging
                 all_value_fields = set()
+                nonzero_fields = set()
                 for row in stage_rows:
-                    all_value_fields.update(row.keys())
-                all_value_fields.discard("stage_id")  # Remove column_key
-                value_fields_list = sorted(all_value_fields)
-                logger.info(
-                    "\n%s",
-                    _format_table(
-                        f"StageRequestStats [request_id={rid}]",
-                        stage_rows,
-                        column_key="stage_id",
-                        value_fields=value_fields_list,
-                    ),
-                )
+                    for k, v in row.items():
+                        if k == "stage_id":
+                            continue
+                        all_value_fields.add(k)
+                        if v not in (0, 0.000, None, ""):
+                            nonzero_fields.add(k)
+                value_fields_list = sorted(nonzero_fields)
+
+                if value_fields_list:
+                    logger.info(
+                        "\n%s",
+                        _format_table(
+                            f"StageRequestStats [request_id={rid}]",
+                            stage_rows,
+                            column_key="stage_id",
+                            value_fields=value_fields_list,
+                        ),
+                    )
 
             # === Transfer table (columns = edge) ===
             transfer_evts = sorted(
@@ -571,15 +587,28 @@ class OrchestratorAggregator:
             result_trans_table.append({"request_id": rid, "transfers": transfer_rows})
 
             if transfer_rows:
-                logger.info(
-                    "\n%s",
-                    _format_table(
-                        f"TransferEdgeStats [request_id={rid}]",
-                        transfer_rows,
-                        column_key="edge",
-                        value_fields=_get_field_names(TRANSFER_FIELDS),
-                    ),
-                )
+                # filter out all-zero fields for logging
+                all_value_fields = set()
+                nonzero_fields = set()
+                for row in transfer_rows:
+                    for k, v in row.items():
+                        if k == "edge":
+                            continue
+                        all_value_fields.add(k)
+                        if v not in (0, 0.000, None, ""):
+                            nonzero_fields.add(k)
+                value_fields_list = sorted(nonzero_fields)
+
+                if value_fields_list:
+                    logger.info(
+                        "\n%s",
+                        _format_table(
+                            f"TransferEdgeStats [request_id={rid}]",
+                            transfer_rows,
+                            column_key="edge",
+                            value_fields=value_fields_list,
+                        ),
+                    )
 
         return {
             "final_stage_id": final_stage_id_map,
