@@ -6,7 +6,7 @@ import weakref
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import asdict
 from pprint import pformat
-from typing import Any
+from typing import Any, Optional
 
 from vllm.config import VllmConfig
 from vllm.inputs.preprocess import InputPreprocessor
@@ -511,6 +511,7 @@ class AsyncOmni(OmniBase):
         req_start_ts: dict[int, float],
         wall_start_ts: float,
         final_stage_id_for_e2e: int,
+        all_stages_finished: Optional[dict[int, bool]] = None,
     ) -> tuple[Any, bool, OmniRequestOutput | None]:
         """
         Process a single result dictionary from a stage.
@@ -519,6 +520,7 @@ class AsyncOmni(OmniBase):
             finished: Whether the stage processing is finished for this request.
             output_to_yield: An OmniRequestOutput to yield, or None.
         """
+        all_stages_finished_copy = all_stages_finished.copy() if all_stages_finished is not None else None
         req_id = result.get("request_id")
         if "error" in result:
             logger.error(
@@ -531,6 +533,8 @@ class AsyncOmni(OmniBase):
             engine_outputs = engine_outputs[0]
 
         finished = engine_outputs.finished
+        if all_stages_finished_copy is not None:
+            all_stages_finished_copy[stage_id] = finished
 
         # Mark last output time
         metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
@@ -555,7 +559,19 @@ class AsyncOmni(OmniBase):
             # Finalize request metrics if this is the E2E final stage and it's finished
             try:
                 rid_key = str(req_id)
-                if stage_id == final_stage_id_for_e2e and rid_key not in metrics.e2e_done and finished:
+                # Only finalize if not already done
+                if rid_key in metrics.e2e_done:
+                    return engine_outputs, finished, output_to_yield
+
+                # asynchronous case: check all prior stages finished
+                if all_stages_finished_copy is not None:
+                    if all(all_stages_finished_copy.values()):
+                        metrics.on_finalize_request(
+                            stage_id,
+                            req_id,
+                            req_start_ts.get(req_id, wall_start_ts),
+                        )
+                elif stage_id == final_stage_id_for_e2e and finished:
                     metrics.on_finalize_request(
                         stage_id,
                         req_id,
