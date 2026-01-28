@@ -429,7 +429,8 @@ class AsyncOmni(OmniBase):
                 result = await req_state.stage_queues[stage_id].get()
                 logger.info(f"[{self._name}] Received result from stage-{stage_id}: {result}")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
-                    result, stage, stage_id, metrics, req_start_ts, wall_start_ts, final_stage_id_for_e2e
+                    result, stage, stage_id, metrics, req_start_ts, wall_start_ts, 
+                    final_stage_id_for_e2e, all_stages_finished
                 )
 
                 all_stages_finished[stage_id] = finished
