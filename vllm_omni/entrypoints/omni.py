@@ -207,12 +207,14 @@ class OmniBase:
 
         ### base engine args
         from dataclasses import fields
+
         from vllm.config.model import ModelConfig
 
         def filter_engine_args(kwargs: dict[str, Any]) -> dict[str, Any]:
             model_config_fields = {f.name for f in fields(ModelConfig)}
             model_config_fields.discard("model")
             return {k: v for k, v in kwargs.items() if k in model_config_fields}
+
         base_engine_args = filter_engine_args(kwargs)
         if not base_engine_args:
             base_engine_args = None
