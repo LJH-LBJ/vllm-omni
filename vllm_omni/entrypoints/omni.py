@@ -748,7 +748,11 @@ class Omni(OmniBase):
 
                         # Handle diffusion stage metrics
                         if stage.stage_type == "diffusion":
-                            engine_output = engine_outputs[0] if isinstance(engine_outputs, list) and engine_outputs else engine_outputs
+                            engine_output = (
+                                engine_outputs[0]
+                                if isinstance(engine_outputs, list) and engine_outputs
+                                else engine_outputs
+                            )
                             diffusion_time = getattr(engine_output, "metrics", None)
                             if isinstance(diffusion_time, list):
                                 diffusion_time = diffusion_time[0] if diffusion_time else None
@@ -760,8 +764,14 @@ class Omni(OmniBase):
 
                         # Handle audio output metrics
                         if stage.final_output_type == "audio":
-                            engine_output = engine_outputs[0] if isinstance(engine_outputs, list) and engine_outputs else engine_outputs
-                            multimodal_output = getattr(engine_output, "multimodal_output", {}).get("audio") if engine_output else None
+                            engine_output = (
+                                engine_outputs[0]
+                                if isinstance(engine_outputs, list) and engine_outputs
+                                else engine_outputs
+                            )
+                            multimodal_output = (
+                                getattr(engine_output, "multimodal_output", {}).get("audio") if engine_output else None
+                            )
                             if multimodal_output is not None and hasattr(multimodal_output[-1], "shape"):
                                 nframes = int(multimodal_output[-1].shape[0])
                                 record_audio_generated_frames(metrics, stage_id, req_id, nframes)

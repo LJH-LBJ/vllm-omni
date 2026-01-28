@@ -186,8 +186,8 @@ def record_audio_generated_frames(
     request_id: Any,
     nframes: int,
 ) -> None:
-    stage_events_for_req  = metrics.stage_events.get(request_id, [])
-    if stage_events_for_req :
+    stage_events_for_req = metrics.stage_events.get(request_id, [])
+    if stage_events_for_req:
         for stage_event in stage_events_for_req:
             if stage_event.stage_id == stage_id:
                 stage_event.audio_generated_frames += nframes
@@ -560,9 +560,7 @@ class OrchestratorAggregator:
             # if any stage has diffusion_metrics, remove preprocess_time_ms field
             # because it is already included in diffusion_metrics
             local_exclude = STAGE_EXCLUDE.copy()
-            has_diffusion_metrics = any(
-                getattr(evt, "diffusion_metrics", None) for evt in stage_evts
-            )
+            has_diffusion_metrics = any(getattr(evt, "diffusion_metrics", None) for evt in stage_evts)
             if has_diffusion_metrics:
                 local_exclude.add("preprocess_time_ms")
             local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
