@@ -31,7 +31,7 @@ from vllm_omni.entrypoints.utils import (
 
 # Internal imports (our code)
 from vllm_omni.lora.request import LoRARequest
-from vllm_omni.metrics import OrchestratorAggregator
+from vllm_omni.metrics import OrchestratorAggregator, record_audio_generated_frames
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -436,10 +436,7 @@ class AsyncOmni(OmniBase):
                         and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
                     ):
                         nframes = int(multimodal_output[-1].shape[0])
-                        stage_list = metrics.stage_events[req_id]
-                        for stage in stage_list:
-                            if stage.stage_id == stage_id:
-                                stage.audio_generated_frames += nframes
+                        record_audio_generated_frames(metrics, stage_id, req_id, nframes)
                     yield output_to_yield
 
     async def _process_sequential_results(
@@ -469,7 +466,7 @@ class AsyncOmni(OmniBase):
                         and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
                     ):
                         nframes = int(multimodal_output[-1].shape[0])
-                        metrics.stage_events[req_id][stage_id].audio_generated_frames += nframes
+                        record_audio_generated_frames(metrics, stage_id, req_id, nframes)
                     yield output_to_yield
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]

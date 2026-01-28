@@ -27,7 +27,7 @@ Users can utilize these metrics in production environments to monitor the health
 | `e2e_total_ms`            | End-to-end latency in ms.                                             |
 | `e2e_total_tokens`        | Total tokens for the request (stage0 input + all stage outputs).      |
 | `transfers_total_time_ms` | Sum of transfer edge `total_time_ms` for this request.                |
-| `transfers_total_bytes`   | Sum of transfer bytes for this request.                               |
+| `transfers_total_kbytes`  | Sum of transfer kbytes for this request.                              |
 
 
 ---
@@ -41,7 +41,7 @@ Users can utilize these metrics in production environments to monitor the health
 | `num_tokens_in`     | Input tokens to the stage.                                                          |
 | `num_tokens_out`    | Output tokens from the stage.                                                       |
 | `preprocess_time_ms` | Preprocessing time in ms.                                                           |
-| `stage_gen_time_ms` | Stage compute time in ms (includes preprocessing time if recorded).                 |
+| `stage_gen_time_ms` | Stage compute time in ms, excluding preprocessing time (reported separately as `preprocess_time_ms`). |
 
 ---
 
@@ -49,7 +49,7 @@ Users can utilize these metrics in production environments to monitor the health
 
 | Field                | Meaning                                                                   |
 |----------------------|---------------------------------------------------------------------------|
-| `size_bytes`         | Total bytes transferred.                                                  |
+| `size_kbytes`        | Total kbytes transferred.                                                 |
 | `tx_time_ms`         | Sender transfer time in ms.                                               |
 | `rx_decode_time_ms`  | Receiver decode time in ms.                                               |
 | `in_flight_time_ms`  | In-flight time in ms.                                                     |

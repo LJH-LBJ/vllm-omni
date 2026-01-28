@@ -314,7 +314,7 @@ def _setup_log_mocks(monkeypatch):
             return "Fake summary"
 
     monkeypatch.setattr(
-        "vllm_omni.metrics.OrchestratorAggregator",
+        "vllm_omni.entrypoints.omni.OrchestratorAggregator",
         _FakeOrchestratorMetrics,
         raising=False,
     )

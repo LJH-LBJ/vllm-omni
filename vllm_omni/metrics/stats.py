@@ -180,6 +180,26 @@ def record_transfer_rx(
         return None
 
 
+def record_audio_generated_frames(
+    metrics: OrchestratorAggregator,
+    stage_id: int,
+    request_id: Any,
+    nframes: int,
+) -> None:
+    stage_events_for_req  = metrics.stage_events.get(request_id, [])
+    if stage_events_for_req :
+        for stage_event in stage_events_for_req:
+            if stage_event.stage_id == stage_id:
+                stage_event.audio_generated_frames += nframes
+                break
+    else:
+        logger.warning(
+            "Failed to record audio generated frames for request %s at stage %s: no stage event found",
+            request_id,
+            stage_id,
+        )
+
+
 def log_request_stats(
     stats: StageRequestStats | TransferEdgeStats | RequestE2EStats, stats_type: str, **kwargs
 ) -> None:
@@ -351,7 +371,7 @@ class OrchestratorAggregator:
                 batch_id=metrics.get("batch_id", -1),
                 batch_size=metrics.get("batch_size"),
                 stage_gen_time_ms=self.accumulated_gen_time_ms.pop(req_id, 0.0),
-                rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")) if stage_id > 0 else 0.0,
+                rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")) if stage_id > 0 else 0,
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,
                 stage_stats=stage_stats,
@@ -492,7 +512,7 @@ class OrchestratorAggregator:
         # Print overall summary
         # filter out all-zero fields for logging
         overall_fields = []
-        for k in (OVERALL_FIELDS or list(overall_summary.keys())):
+        for k in OVERALL_FIELDS or list(overall_summary.keys()):
             v = overall_summary.get(k, None)
             if v not in (0, 0.0, 0.000, None, ""):
                 overall_fields.append(k)
@@ -537,10 +557,13 @@ class OrchestratorAggregator:
                 self.stage_events.get(rid, []),
                 key=lambda e: e.stage_id if e.stage_id is not None else -1,
             )
-            # if the stage is diffusion, remove preprocess_time_ms field
+            # if any stage has diffusion_metrics, remove preprocess_time_ms field
             # because it is already included in diffusion_metrics
             local_exclude = STAGE_EXCLUDE.copy()
-            if self.diffusion_metrics.get(rid) is not None:
+            has_diffusion_metrics = any(
+                getattr(evt, "diffusion_metrics", None) for evt in stage_evts
+            )
+            if has_diffusion_metrics:
                 local_exclude.add("preprocess_time_ms")
             local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
 

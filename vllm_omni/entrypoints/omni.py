@@ -40,7 +40,7 @@ from vllm_omni.entrypoints.utils import (
     load_stage_configs_from_yaml,
     resolve_model_config_path,
 )
-from vllm_omni.metrics import OrchestratorAggregator
+from vllm_omni.metrics import OrchestratorAggregator, record_audio_generated_frames
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -743,22 +743,28 @@ class Omni(OmniBase):
                     if _m is not None:
                         if not isinstance(_m, dict):
                             _m = asdict(_m)
-                        # stage_gen_time_ms is the time of generating every chunk in this stage
+                        # Accumulate generation time
                         metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
+
+                        # Handle diffusion stage metrics
                         if stage.stage_type == "diffusion":
-                            # For diffusion stages, we also accumulate diffusion time
-                            diffusion_time: dict = getattr(engine_outputs, "metrics", None)
+                            engine_output = engine_outputs[0] if isinstance(engine_outputs, list) and engine_outputs else engine_outputs
+                            diffusion_time = getattr(engine_output, "metrics", None)
                             if isinstance(diffusion_time, list):
-                                diffusion_time = diffusion_time[0]
-                            for key, value in diffusion_time.items():
-                                metrics.diffusion_metrics[req_id][key] += value
+                                diffusion_time = diffusion_time[0] if diffusion_time else None
+                            if isinstance(diffusion_time, dict):
+                                for key, value in diffusion_time.items():
+                                    metrics.diffusion_metrics[req_id][key] += value
+
                         metrics.on_stage_metrics(stage_id, req_id, _m)
+
+                        # Handle audio output metrics
                         if stage.final_output_type == "audio":
-                            if isinstance(engine_outputs, list):
-                                engine_output = engine_outputs[0]
-                            if (multimodal_output := engine_output.multimodal_output["audio"]) is not None:
+                            engine_output = engine_outputs[0] if isinstance(engine_outputs, list) and engine_outputs else engine_outputs
+                            multimodal_output = getattr(engine_output, "multimodal_output", {}).get("audio") if engine_output else None
+                            if multimodal_output is not None and hasattr(multimodal_output[-1], "shape"):
                                 nframes = int(multimodal_output[-1].shape[0])
-                                metrics.stage_events[req_id][stage_id].audio_generated_frames += nframes
+                                record_audio_generated_frames(metrics, stage_id, req_id, nframes)
                         if pbar:
                             elapsed = pbar.format_dict["elapsed"] or 1e-6
                             # Aggregate total tokens/images across all stages

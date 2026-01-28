@@ -138,5 +138,6 @@ def count_tokens_from_outputs(engine_outputs: list[Any]) -> int:
                 if tokens is not None:
                     total += len(tokens)
         except Exception:
+            # Ignore any issues with individual outputs to keep token counting best-effort.
             pass
     return total

@@ -439,7 +439,7 @@ def parse_args():
         help="Query type.",
     )
     parser.add_argument(
-        "--enable-stats",
+        "--log-stats",
         action="store_true",
         default=False,
         help="Enable writing detailed statistics (default: disabled)",
