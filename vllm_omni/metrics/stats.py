@@ -336,9 +336,9 @@ class OrchestratorAggregator:
         self.last_finish_ts = float(wall_start_ts)
         self.stage_first_ts = [None for _ in range(self.num_stages)]
         self.stage_last_ts = [None for _ in range(self.num_stages)]
-        self.accumulated_gen_time_ms: defaultdict[str, float] = defaultdict(
-            float
-        )  # {request_id: accumulated_gen_time_ms}
+        self.accumulated_gen_time_ms: defaultdict[str, defaultdict[int, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )  # {request_id: {stage_id:accumulated_gen_time_ms}}
         self.diffusion_metrics: defaultdict[str, defaultdict[str, float]] = defaultdict(
             lambda: defaultdict(float)
         )  # {request_id: {diffusion_metrics_key: accumulated_metrics_data}}
@@ -370,7 +370,7 @@ class OrchestratorAggregator:
                 num_tokens_out=int(metrics.get("num_tokens_out", 0)),
                 batch_id=metrics.get("batch_id", -1),
                 batch_size=metrics.get("batch_size"),
-                stage_gen_time_ms=self.accumulated_gen_time_ms.pop(req_id, 0.0),
+                stage_gen_time_ms=self.accumulated_gen_time_ms.pop(req_id, defaultdict(float)).pop(stage_id, 0.0),
                 rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")) if stage_id > 0 else 0,
                 rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
                 rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,

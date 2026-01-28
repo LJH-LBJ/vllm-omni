@@ -420,24 +420,27 @@ class AsyncOmni(OmniBase):
             for stage_id, stage in enumerate(self.stage_list[: final_stage_id_for_e2e + 1]):
                 if all_stages_finished[stage_id]:
                     continue
-                result = await req_state.stage_queues[stage_id].get()
-                req_id = result.get("request_id")
-                logger.info(f"[{self._name}] Received result from stage-{stage_id}: {result}")
-                engine_outputs, finished, output_to_yield = self._process_single_result(
-                    result, stage, stage_id, metrics, req_start_ts, wall_start_ts, final_stage_id_for_e2e
-                )
+                try:
+                    result = await req_state.stage_queues[stage_id].get_nowait()
+                    req_id = result.get("request_id")
+                    logger.info(f"[{self._name}] Received result from stage-{stage_id}: {result}")
+                    engine_outputs, finished, output_to_yield = self._process_single_result(
+                        result, stage, stage_id, metrics, req_start_ts, wall_start_ts, final_stage_id_for_e2e
+                    )
 
-                all_stages_finished[stage_id] = finished
+                    all_stages_finished[stage_id] = finished
 
-                if output_to_yield:
-                    if (
-                        output_to_yield.final_output_type == "audio"
-                        and engine_outputs.finished
-                        and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
-                    ):
-                        nframes = int(multimodal_output[-1].shape[0])
-                        record_audio_generated_frames(metrics, stage_id, req_id, nframes)
-                    yield output_to_yield
+                    if output_to_yield:
+                        if (
+                            output_to_yield.final_output_type == "audio"
+                            and engine_outputs.finished
+                            and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
+                        ):
+                            nframes = int(multimodal_output[-1].shape[0])
+                            record_audio_generated_frames(metrics, stage_id, req_id, nframes)
+                        yield output_to_yield
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(0.001)  # Avoid busy waiting
 
     async def _process_sequential_results(
         self,
@@ -551,7 +554,7 @@ class AsyncOmni(OmniBase):
         try:
             _m = asdict(result.get("metrics"))
             # stage_gen_time_ms is the time of generating every chunk in this stage
-            metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
+            metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.get("stage_gen_time_ms", 0.0)
             if stage.stage_type == "diffusion":
                 # For diffusion stages, we also accumulate diffusion time
                 diffusion_metrics: dict = getattr(engine_outputs, "metrics", {})

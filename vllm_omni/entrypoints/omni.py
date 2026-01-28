@@ -744,7 +744,7 @@ class Omni(OmniBase):
                         if not isinstance(_m, dict):
                             _m = asdict(_m)
                         # Accumulate generation time
-                        metrics.accumulated_gen_time_ms[req_id] += _m.get("stage_gen_time_ms", 0.0)
+                        metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.get("stage_gen_time_ms", 0.0)
 
                         # Handle diffusion stage metrics
                         if stage.stage_type == "diffusion":
