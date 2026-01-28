@@ -421,7 +421,7 @@ class AsyncOmni(OmniBase):
                 if all_stages_finished[stage_id]:
                     continue
                 try:
-                    result = await req_state.stage_queues[stage_id].get_nowait()
+                    result = req_state.stage_queues[stage_id].get_nowait()
                     req_id = result.get("request_id")
                     logger.info(f"[{self._name}] Received result from stage-{stage_id}: {result}")
                     engine_outputs, finished, output_to_yield = self._process_single_result(
@@ -434,7 +434,8 @@ class AsyncOmni(OmniBase):
                         if (
                             output_to_yield.final_output_type == "audio"
                             and engine_outputs.finished
-                            and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
+                            and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"])
+                            is not None
                         ):
                             nframes = int(multimodal_output[-1].shape[0])
                             record_audio_generated_frames(metrics, stage_id, req_id, nframes)
