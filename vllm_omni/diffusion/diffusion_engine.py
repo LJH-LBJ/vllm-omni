@@ -104,8 +104,8 @@ class DiffusionEngine:
             request_id = request.request_ids[0] if request.request_ids else ""
 
             metrics = {}
-            metrics["image_num"] = int(request.num_outputs_per_prompt)
-            metrics["resolution"] = int(request.resolution)
+            metrics["image_num"] = int(request.sampling_params.num_outputs_per_prompt)
+            metrics["resolution"] = int(request.sampling_params.resolution)
             if output.trajectory_timesteps is not None:
                 metrics["trajectory_timesteps"] = output.trajectory_timesteps
 
