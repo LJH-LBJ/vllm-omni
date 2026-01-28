@@ -6,7 +6,7 @@ import weakref
 from collections.abc import AsyncGenerator, Iterable
 from dataclasses import asdict
 from pprint import pformat
-from typing import Any, Optional
+from typing import Any, cast
 
 from vllm.config import VllmConfig
 from vllm.inputs.preprocess import InputPreprocessor
@@ -429,8 +429,14 @@ class AsyncOmni(OmniBase):
                 result = await req_state.stage_queues[stage_id].get()
                 logger.info(f"[{self._name}] Received result from stage-{stage_id}: {result}")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
-                    result, stage, stage_id, metrics, req_start_ts, wall_start_ts, 
-                    final_stage_id_for_e2e, all_stages_finished
+                    result,
+                    stage,
+                    stage_id,
+                    metrics,
+                    req_start_ts,
+                    wall_start_ts,
+                    final_stage_id_for_e2e,
+                    all_stages_finished,
                 )
 
                 all_stages_finished[stage_id] = finished
@@ -512,7 +518,7 @@ class AsyncOmni(OmniBase):
         req_start_ts: dict[int, float],
         wall_start_ts: float,
         final_stage_id_for_e2e: int,
-        all_stages_finished: Optional[dict[int, bool]] = None,
+        all_stages_finished: dict[int, bool] | None = None,
     ) -> tuple[Any, bool, OmniRequestOutput | None]:
         """
         Process a single result dictionary from a stage.
@@ -554,7 +560,7 @@ class AsyncOmni(OmniBase):
         )
 
         output_to_yield = None
-        
+
         logger.debug(f"[{self._name}] Request {req_id} finalized at stage-{stage_id}")
 
         # Finalize request metrics if this is the E2E final stage and it's finished
