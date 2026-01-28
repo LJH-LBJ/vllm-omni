@@ -5,7 +5,6 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, Iterable, Sequence
 from dataclasses import asdict
-from pprint import pformat
 from typing import Any, cast
 
 from vllm.config import VllmConfig
