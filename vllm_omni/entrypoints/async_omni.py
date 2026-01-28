@@ -554,35 +554,36 @@ class AsyncOmni(OmniBase):
         )
 
         output_to_yield = None
-        if getattr(stage, "final_output", False):
-            logger.debug(f"[{self._name}] Request {req_id} finalized at stage-{stage_id}")
+        
+        logger.debug(f"[{self._name}] Request {req_id} finalized at stage-{stage_id}")
 
-            # Finalize request metrics if this is the E2E final stage and it's finished
-            try:
-                rid_key = str(req_id)
-                # Only finalize if not already done
-                if rid_key in metrics.e2e_done:
-                    return engine_outputs, finished, output_to_yield
+        # Finalize request metrics if this is the E2E final stage and it's finished
+        try:
+            rid_key = str(req_id)
+            # Only finalize if not already done
+            if rid_key in metrics.e2e_done:
+                return engine_outputs, finished, output_to_yield
 
-                # asynchronous case: check all prior stages finished
-                if all_stages_finished_copy is not None:
-                    if all(all_stages_finished_copy.values()):
-                        metrics.on_finalize_request(
-                            stage_id,
-                            req_id,
-                            req_start_ts.get(req_id, wall_start_ts),
-                        )
-                elif stage_id == final_stage_id_for_e2e and finished:
+            # asynchronous case: check all prior stages finished
+            if all_stages_finished_copy is not None:
+                if all(all_stages_finished_copy.values()):
                     metrics.on_finalize_request(
                         stage_id,
                         req_id,
                         req_start_ts.get(req_id, wall_start_ts),
                     )
-            except Exception as e:
-                logger.exception(
-                    f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
+            elif stage_id == final_stage_id_for_e2e and finished:
+                metrics.on_finalize_request(
+                    stage_id,
+                    req_id,
+                    req_start_ts.get(req_id, wall_start_ts),
                 )
+        except Exception as e:
+            logger.exception(
+                f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
+            )
 
+        if getattr(stage, "final_output", False):
             # Construct output to yield
             images = []
             if stage.final_output_type == "image":
