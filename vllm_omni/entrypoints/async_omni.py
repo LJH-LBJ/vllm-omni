@@ -413,8 +413,6 @@ class AsyncOmni(OmniBase):
                     all_stages_finished,
                 )
 
-                all_stages_finished[stage_id] = finished
-
                 if output_to_yield:
                     yield output_to_yield
 
@@ -501,7 +499,6 @@ class AsyncOmni(OmniBase):
             finished: Whether the stage processing is finished for this request.
             output_to_yield: An OmniRequestOutput to yield, or None.
         """
-        all_stages_finished_copy = all_stages_finished.copy() if all_stages_finished is not None else None
         req_id = result.get("request_id")
         if "error" in result:
             logger.error(
@@ -513,9 +510,7 @@ class AsyncOmni(OmniBase):
         if isinstance(engine_outputs, list):
             engine_outputs = engine_outputs[0]
 
-        finished = engine_outputs.finished
-        if all_stages_finished_copy is not None:
-            all_stages_finished_copy[stage_id] = finished
+        finished = engine_outputs.finished            
 
         # Mark last output time
         metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
@@ -545,8 +540,9 @@ class AsyncOmni(OmniBase):
                 return engine_outputs, finished, output_to_yield
 
             # asynchronous case: check all prior stages finished
-            if all_stages_finished_copy is not None:
-                if all(all_stages_finished_copy.values()):
+            if all_stages_finished is not None:
+                all_stages_finished[stage_id] = finished
+                if all(all_stages_finished.values()):
                     metrics.on_finalize_request(
                         stage_id,
                         req_id,
