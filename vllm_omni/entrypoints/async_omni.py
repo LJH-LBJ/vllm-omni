@@ -510,7 +510,7 @@ class AsyncOmni(OmniBase):
         if isinstance(engine_outputs, list):
             engine_outputs = engine_outputs[0]
 
-        finished = engine_outputs.finished            
+        finished = engine_outputs.finished
 
         # Mark last output time
         metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
