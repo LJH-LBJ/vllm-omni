@@ -24,6 +24,7 @@ steps:
       - pytest -v -s tests/diffusion/cache/
       - pytest -v -s tests/model_executor/models/qwen2_5_omni/test_audio_length.py
       - pytest -v -s tests/worker/
+      - pytest -v -s tests/metrics/test_stats.py
     agents:
       queue: "gpu_1_queue"
     plugins:
