@@ -12,7 +12,7 @@ def _get_request_entry(table: list[dict], request_id: str) -> dict:
 
 
 def test_orchestrator_aggregator_builds_summary() -> None:
-    agg = OrchestratorAggregator(num_stages=2, log_stats=False, wall_start_ts=0.0)
+    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0)
     agg.stage_first_ts[0] = 0.0
     agg.stage_last_ts[0] = 0.03
     agg.stage_first_ts[1] = 0.05
@@ -64,7 +64,7 @@ def test_orchestrator_aggregator_builds_summary() -> None:
 
 
 def test_build_and_log_summary_e2e_only() -> None:
-    agg = OrchestratorAggregator(num_stages=1, log_stats=False, wall_start_ts=0.0)
+    agg = OrchestratorAggregator(num_stages=1, log_stats=True, wall_start_ts=0.0)
     agg.e2e_events.append(
         RequestE2EStats(
             request_id="r",
@@ -83,7 +83,7 @@ def test_build_and_log_summary_e2e_only() -> None:
 
 
 def test_build_and_log_summary_multiple_requests() -> None:
-    agg = OrchestratorAggregator(num_stages=1, log_stats=False, wall_start_ts=0.0)
+    agg = OrchestratorAggregator(num_stages=1, log_stats=True, wall_start_ts=0.0)
 
     agg.on_stage_metrics(
         0,
