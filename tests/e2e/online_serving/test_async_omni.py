@@ -8,7 +8,7 @@ import pytest
 from vllm import SamplingParams
 from vllm.inputs import PromptType
 
-from vllm_omni.entrypoints.async_omni import AsyncOmni, ClientRequestState
+from vllm_omni.entrypoints.async_omni import AsyncOmni
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
