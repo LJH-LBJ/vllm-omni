@@ -484,6 +484,8 @@ class OrchestratorAggregator:
             log_request_stats(per_req_record, "request_level_metrics")
 
     def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int] | int) -> dict[str, Any]:
+        if not self.log_stats:
+            return {}
         wall_time_ms = max(0.0, (self.last_finish_ts - self.wall_start_ts) * 1000.0)
         e2e_avg_req = (wall_time_ms / self.e2e_count) if self.e2e_count > 0 else 0.0
         e2e_avg_tok = (self.e2e_total_tokens * 1000.0 / wall_time_ms) if wall_time_ms > 0 else 0.0

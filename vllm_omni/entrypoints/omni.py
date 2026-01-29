@@ -890,8 +890,7 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
-            if self.log_stats:
-                metrics.build_and_log_summary(final_stage_id_to_prompt)
+            metrics.build_and_log_summary(final_stage_id_to_prompt)
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
 

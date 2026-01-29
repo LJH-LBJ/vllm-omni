@@ -370,8 +370,7 @@ class AsyncOmni(OmniBase):
 
             # Summarize and print stats
             try:
-                if self.log_stats:
-                    metrics.build_and_log_summary(final_stage_id_for_e2e)
+                metrics.build_and_log_summary(final_stage_id_for_e2e)
             except Exception as e:
                 logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
             finally:
