@@ -6,7 +6,6 @@ import time
 import weakref
 from collections.abc import AsyncGenerator, Iterable, Sequence
 from dataclasses import asdict
-from pprint import pformat
 from typing import Any
 
 from vllm.config import VllmConfig
@@ -406,6 +405,7 @@ class AsyncOmni(OmniBase):
                             and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"])
                             is not None
                         ):
+                            req_id = result.get("request_id")
                             nframes = int(multimodal_output[-1].shape[0])
                             record_audio_generated_frames(metrics, stage_id, req_id, nframes)
                         yield output_to_yield
