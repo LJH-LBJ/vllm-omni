@@ -100,9 +100,10 @@ class DiffusionEngine:
         metrics = {
             "image_num": int(request.sampling_params.num_outputs_per_prompt),
             "resolution": int(request.sampling_params.resolution),
-            "preprocessing_time_ms": preprocess_time * 1000,
             "postprocessing_time_ms": postprocess_time * 1000,
         }
+        if self.pre_process_func is not None:
+            metrics["preprocessing_time_ms"] = preprocess_time * 1000
         if output.trajectory_timesteps is not None:
             metrics["trajectory_timesteps"] = output.trajectory_timesteps
         # Handle single request or multiple requests
