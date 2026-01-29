@@ -396,7 +396,6 @@ class AsyncOmni(OmniBase):
                         }
                         self.stage_list[i].submit(task)
                         metrics.stage_first_ts[i] = time.time()
-                all_stages_finished[stage_id] = finished
 
                     all_stages_finished[stage_id] = finished
 
@@ -410,8 +409,6 @@ class AsyncOmni(OmniBase):
                             nframes = int(multimodal_output[-1].shape[0])
                             record_audio_generated_frames(metrics, stage_id, req_id, nframes)
                         yield output_to_yield
-                except asyncio.QueueEmpty:
-                    await asyncio.sleep(0.001)  # Avoid busy waiting
 
     async def _process_sequential_results(
         self,
