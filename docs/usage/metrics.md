@@ -34,14 +34,18 @@ Users can utilize these metrics in production environments to monitor the health
 
 ## Stage Table (per stage event / request)
 
-| Field               | Meaning                                                                             |
-|---------------------|-------------------------------------------------------------------------------------|
-| `batch_id`          | Batch index.                                                                        |
-| `batch_size`        | Batch size.                                                                         |
-| `num_tokens_in`     | Input tokens to the stage.                                                          |
-| `num_tokens_out`    | Output tokens from the stage.                                                       |
-| `preprocess_time_ms` | Preprocessing time in ms.                                                           |
-| `stage_gen_time_ms` | Stage compute time in ms, excluding preprocessing time (reported separately as `preprocess_time_ms`). |
+| Field                     | Meaning                                                                                         |
+|---------------------------|-------------------------------------------------------------------------------------------------|
+| `batch_id`                | Batch index.                                                                                    |
+| `batch_size`              | Batch size.                                                                                     |
+| `num_tokens_in`           | Input tokens to the stage.                                                                      |
+| `num_tokens_out`          | Output tokens from the stage.                                                                   |
+| `preprocess_time_ms`      | Preprocessing time in ms.                                                                       |
+| `stage_gen_time_ms`       | Stage compute time in ms, excluding preprocessing time (reported separately as `preprocess_time_ms and postprocessing_time_ms`). |
+| `image_num`               | Number of images generated (for diffusion/image stages).                                        |
+| `resolution`              | Image resolution (for diffusion/image stages).                                                                  |
+| `postprocessing_time_ms` | Diffusion/image: post-processing time in ms.                                                    |
+| `trajectory_timesteps`    | Diffusion/image: trajectory timesteps, if available.                                            |
 
 ---
 
