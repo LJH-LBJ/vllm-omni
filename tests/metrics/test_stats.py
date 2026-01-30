@@ -83,8 +83,9 @@ def test_build_and_log_summary_e2e_only() -> None:
 
 
 def test_build_and_log_summary_multiple_requests() -> None:
-    agg = OrchestratorAggregator(num_stages=1, log_stats=True, wall_start_ts=0.0)
+    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0)
 
+    # Request r1 goes through both stages
     agg.on_stage_metrics(
         0,
         "r1",
@@ -99,8 +100,23 @@ def test_build_and_log_summary_multiple_requests() -> None:
             "rx_in_flight_time_ms": 0.0,
         },
     )
-    agg.on_finalize_request(0, "r1", req_start_ts=0.0)
+    agg.on_stage_metrics(
+        1,
+        "r1",
+        {
+            "num_tokens_in": 4,
+            "num_tokens_out": 5,
+            "batch_id": 1,
+            "batch_size": 1,
+            "stage_gen_time_ms": 8.0,
+            "rx_transfer_bytes": 0,
+            "rx_decode_time_ms": 0.0,
+            "rx_in_flight_time_ms": 0.0,
+        },
+    )
+    agg.on_finalize_request(1, "r1", req_start_ts=0.0)
 
+    # Request r2 only goes through stage 0
     agg.on_stage_metrics(
         0,
         "r2",
@@ -117,6 +133,11 @@ def test_build_and_log_summary_multiple_requests() -> None:
     )
     agg.on_finalize_request(0, "r2", req_start_ts=0.0)
 
-    summary = agg.build_and_log_summary(final_stage_id_to_prompt=0)
+    summary = agg.build_and_log_summary(final_stage_id_to_prompt={"r1": 1, "r2": 0})
     assert len(summary["stage_table"]) == 2
     assert {entry["request_id"] for entry in summary["e2e_table"]} == {"r1", "r2"}
+    # Check that r1 has two stages and r2 has one
+    r1_stage_entry = next(e for e in summary["stage_table"] if e["request_id"] == "r1")
+    r2_stage_entry = next(e for e in summary["stage_table"] if e["request_id"] == "r2")
+    assert len(r1_stage_entry["stages"]) == 2
+    assert len(r2_stage_entry["stages"]) == 1
