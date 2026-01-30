@@ -414,12 +414,18 @@ class AsyncOmni(OmniBase):
                     logger.exception(
                         f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
                     )
-        # Finalize E2E metrics if not already done
-        metrics.on_finalize_request(
-            final_stage_id_for_e2e,
-            req_id,
-            req_start_ts.get(req_id, wall_start_ts),
-        )
+        try:
+            # Finalize E2E metrics if not already done
+            if str(req_id) not in metrics.e2e_done:
+                metrics.on_finalize_request(
+                    final_stage_id_for_e2e,
+                    req_id,
+                    req_start_ts.get(req_id, wall_start_ts),
+                )
+        except Exception as e:
+            logger.exception(
+                f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
+            )
 
     async def _process_sequential_results(
         self,
@@ -503,6 +509,18 @@ class AsyncOmni(OmniBase):
             else:
                 logger.debug(f"[{self._name}] Request {req_id} fully completed")
 
+        try:
+            if str(req_id) not in metrics.e2e_done:
+                metrics.on_finalize_request(
+                    final_stage_id_for_e2e,
+                    req_id,
+                    req_start_ts.get(req_id, wall_start_ts),
+                )
+        except Exception as e:
+            logger.exception(
+                f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
+            )
+
     def _process_single_result(
         self,
         result: dict[str, Any],
@@ -540,18 +558,6 @@ class AsyncOmni(OmniBase):
         output_to_yield = None
 
         logger.debug(f"[{self._name}] Request {req_id} finalized at stage-{stage_id}")
-
-        # Finalize request metrics if this is the E2E final stage and it's finished
-        try:
-            rid_key = str(req_id)
-            # Only finalize if not already done
-            if rid_key in metrics.e2e_done:
-                return engine_outputs, finished, output_to_yield
-
-        except Exception as e:
-            logger.exception(
-                f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
-            )
 
         if getattr(stage, "final_output", False):
             # Construct output to yield
