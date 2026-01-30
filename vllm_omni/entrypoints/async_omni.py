@@ -343,6 +343,18 @@ class AsyncOmni(OmniBase):
                     prompt,
                 ):
                     yield output
+            try:
+                # Finalize E2E metrics if not already done
+                if str(request_id) not in metrics.e2e_done:
+                    metrics.on_finalize_request(
+                        final_stage_id_for_e2e,
+                        request_id,
+                        _req_start_ts.get(request_id, _wall_start_ts),
+                    )
+            except Exception as e:
+                logger.exception(
+                    f"[{self._name}] Finalize request handling error for req {request_id} at stage {final_stage_id_for_e2e}: {e}",
+                )
 
             logger.debug(f"[{self._name}] All requests completed")
 
@@ -413,18 +425,6 @@ class AsyncOmni(OmniBase):
                     logger.exception(
                         f"[{self._name}] Failed to process metrics for stage {stage_id}, req {request_id}: {e}",
                     )
-        try:
-            # Finalize E2E metrics if not already done
-            if str(request_id) not in metrics.e2e_done:
-                metrics.on_finalize_request(
-                    final_stage_id_for_e2e,
-                    request_id,
-                    req_start_ts.get(request_id, wall_start_ts),
-                )
-        except Exception as e:
-            logger.exception(
-                f"[{self._name}] Finalize request handling error for req {request_id} at stage {stage_id}: {e}",
-            )
 
     async def _process_sequential_results(
         self,
@@ -457,12 +457,6 @@ class AsyncOmni(OmniBase):
             except Exception as e:
                 logger.exception(
                     f"[{self._name}] Failed to process metrics for stage {stage_id}, req {request_id}: {e}",
-                )
-            if stage_id == final_stage_id_for_e2e:
-                metrics.on_finalize_request(
-                    final_stage_id_for_e2e,
-                    request_id,
-                    req_start_ts.get(request_id, wall_start_ts),
                 )
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]
@@ -506,18 +500,6 @@ class AsyncOmni(OmniBase):
                 logger.debug(f"[{self._name}] Forwarded request {request_id} to stage-{next_stage_id}")
             else:
                 logger.debug(f"[{self._name}] Request {request_id} fully completed")
-
-        try:
-            if str(request_id) not in metrics.e2e_done:
-                metrics.on_finalize_request(
-                    final_stage_id_for_e2e,
-                    request_id,
-                    req_start_ts.get(request_id, wall_start_ts),
-                )
-        except Exception as e:
-            logger.exception(
-                f"[{self._name}] Finalize request handling error for req {request_id} at stage {stage_id}: {e}",
-            )
 
     def _process_single_result(
         self,
