@@ -387,10 +387,6 @@ class AsyncOmni(OmniBase):
                     stage,
                     stage_id,
                     metrics,
-                    req_start_ts,
-                    wall_start_ts,
-                    final_stage_id_for_e2e,
-                    all_stages_finished,
                 )
                 if submit_flag and stage_id == 0:
                     submit_flag = False
@@ -443,7 +439,10 @@ class AsyncOmni(OmniBase):
                 assert stage_id == req_state.stage_id
                 req_id = result.get("request_id")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
-                    result, stage, stage_id, metrics,
+                    result,
+                    stage,
+                    stage_id,
+                    metrics,
                 )
                 if output_to_yield:
                     yield output_to_yield
