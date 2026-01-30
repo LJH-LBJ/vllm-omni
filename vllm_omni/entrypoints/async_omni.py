@@ -353,7 +353,8 @@ class AsyncOmni(OmniBase):
                     )
             except Exception as e:
                 logger.exception(
-                    f"[{self._name}] Finalize request handling error for req {request_id} at stage {final_stage_id_for_e2e}: {e}",
+                    f"[{self._name}] Finalize request handling error for"
+                    f"req {request_id} at stage {final_stage_id_for_e2e}: {e}",
                 )
 
             logger.debug(f"[{self._name}] All requests completed")
