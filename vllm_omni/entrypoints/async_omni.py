@@ -413,14 +413,6 @@ class AsyncOmni(OmniBase):
 
                 if output_to_yield:
                     yield output_to_yield
-                try:
-                    _m = asdict(result.get("metrics"))
-                    if _m is not None and finished:
-                        metrics.on_stage_metrics(stage_id, request_id, _m)
-                except Exception as e:
-                    logger.exception(
-                        f"[{self._name}] Failed to process metrics for stage {stage_id}, req {request_id}: {e}",
-                    )
 
     async def _process_sequential_results(
         self,
@@ -446,14 +438,6 @@ class AsyncOmni(OmniBase):
                 )
                 if output_to_yield:
                     yield output_to_yield
-            try:
-                _m = asdict(result.get("metrics"))
-                if _m is not None:
-                    metrics.on_stage_metrics(stage_id, request_id, _m)
-            except Exception as e:
-                logger.exception(
-                    f"[{self._name}] Failed to process metrics for stage {stage_id}, req {request_id}: {e}",
-                )
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]
             stage.set_engine_outputs(engine_outputs)
@@ -526,6 +510,15 @@ class AsyncOmni(OmniBase):
 
         # Mark last output time
         metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
+
+        try:
+            _m = asdict(result.get("metrics"))
+            if _m is not None and finished:
+                metrics.on_stage_metrics(stage_id, req_id, _m)
+        except Exception as e:
+            logger.exception(
+                f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
+            )
 
         logger.debug(
             f"[{self._name}] Stage-{stage_id} completed request {req_id}; forwarding or finalizing",
