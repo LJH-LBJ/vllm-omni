@@ -381,7 +381,6 @@ class AsyncOmni(OmniBase):
                 except asyncio.QueueEmpty:
                     await asyncio.sleep(0.001)
                     continue
-                req_id = result.get("request_id")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
                     result,
                     stage,
@@ -409,22 +408,22 @@ class AsyncOmni(OmniBase):
                 try:
                     _m = asdict(result.get("metrics"))
                     if _m is not None and finished:
-                        metrics.on_stage_metrics(stage_id, req_id, _m)
+                        metrics.on_stage_metrics(stage_id, request_id, _m)
                 except Exception as e:
                     logger.exception(
-                        f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
+                        f"[{self._name}] Failed to process metrics for stage {stage_id}, req {request_id}: {e}",
                     )
         try:
             # Finalize E2E metrics if not already done
-            if str(req_id) not in metrics.e2e_done:
+            if str(request_id) not in metrics.e2e_done:
                 metrics.on_finalize_request(
                     final_stage_id_for_e2e,
-                    req_id,
-                    req_start_ts.get(req_id, wall_start_ts),
+                    request_id,
+                    req_start_ts.get(request_id, wall_start_ts),
                 )
         except Exception as e:
             logger.exception(
-                f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
+                f"[{self._name}] Finalize request handling error for req {request_id} at stage {stage_id}: {e}",
             )
 
     async def _process_sequential_results(
@@ -443,7 +442,6 @@ class AsyncOmni(OmniBase):
             while not finished:
                 result = await req_state.queue.get()
                 assert stage_id == req_state.stage_id
-                req_id = result.get("request_id")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
                     result,
                     stage,
@@ -455,16 +453,16 @@ class AsyncOmni(OmniBase):
             try:
                 _m = asdict(result.get("metrics"))
                 if _m is not None:
-                    metrics.on_stage_metrics(stage_id, req_id, _m)
+                    metrics.on_stage_metrics(stage_id, request_id, _m)
             except Exception as e:
                 logger.exception(
-                    f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
+                    f"[{self._name}] Failed to process metrics for stage {stage_id}, req {request_id}: {e}",
                 )
             if stage_id == final_stage_id_for_e2e:
                 metrics.on_finalize_request(
                     final_stage_id_for_e2e,
-                    req_id,
-                    req_start_ts.get(req_id, wall_start_ts),
+                    request_id,
+                    req_start_ts.get(request_id, wall_start_ts),
                 )
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]
@@ -486,7 +484,7 @@ class AsyncOmni(OmniBase):
                         connector=connector,
                         stage_id=stage_id,
                         next_stage_id=next_stage_id,
-                        req_id=req_id,
+                        request_id=request_id,
                         next_inputs=next_inputs,
                         sampling_params=sp_next,
                         original_prompt=prompt,
@@ -500,25 +498,25 @@ class AsyncOmni(OmniBase):
                     # because continuing would cause the request to be silently dropped
                     # and the orchestrator to hang waiting for completion.
                     error_msg = (
-                        f"[{self._name}] Failed to send request {req_id} to stage-{next_stage_id} via connector. "
+                        f"[{self._name}] Failed to send request {request_id} to stage-{next_stage_id} via connector. "
                         "Configure a connector for this edge or inspect connector logs for details."
                     )
                     logger.error(error_msg)
                     raise RuntimeError(error_msg)
-                logger.debug(f"[{self._name}] Forwarded request {req_id} to stage-{next_stage_id}")
+                logger.debug(f"[{self._name}] Forwarded request {request_id} to stage-{next_stage_id}")
             else:
-                logger.debug(f"[{self._name}] Request {req_id} fully completed")
+                logger.debug(f"[{self._name}] Request {request_id} fully completed")
 
         try:
-            if str(req_id) not in metrics.e2e_done:
+            if str(request_id) not in metrics.e2e_done:
                 metrics.on_finalize_request(
                     final_stage_id_for_e2e,
-                    req_id,
-                    req_start_ts.get(req_id, wall_start_ts),
+                    request_id,
+                    req_start_ts.get(request_id, wall_start_ts),
                 )
         except Exception as e:
             logger.exception(
-                f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
+                f"[{self._name}] Finalize request handling error for req {request_id} at stage {stage_id}: {e}",
             )
 
     def _process_single_result(
