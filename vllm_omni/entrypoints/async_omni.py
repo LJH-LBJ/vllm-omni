@@ -343,6 +343,8 @@ class AsyncOmni(OmniBase):
                     prompt,
                 ):
                     yield output
+            
+            logger.debug(f"[{self._name}] Request {request_id} finalized at stage-{final_stage_id_for_e2e}")
             try:
                 # Finalize E2E metrics if not already done
                 if str(request_id) not in metrics.e2e_done:
@@ -537,8 +539,6 @@ class AsyncOmni(OmniBase):
         )
 
         output_to_yield = None
-
-        logger.debug(f"[{self._name}] Request {req_id} finalized at stage-{stage_id}")
 
         if getattr(stage, "final_output", False):
             # Construct output to yield
