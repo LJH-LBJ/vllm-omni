@@ -458,7 +458,7 @@ class AsyncOmni(OmniBase):
                         connector=connector,
                         stage_id=stage_id,
                         next_stage_id=next_stage_id,
-                        request_id=request_id,
+                        req_id=request_id,
                         next_inputs=next_inputs,
                         sampling_params=sp_next,
                         original_prompt=prompt,
