@@ -395,20 +395,19 @@ class AsyncOmni(OmniBase):
                         }
                         self.stage_list[i].submit(task)
                         metrics.stage_first_ts[i] = time.time()
+                all_stages_finished[stage_id] = finished
 
-                    all_stages_finished[stage_id] = finished
-
-                    if output_to_yield:
-                        if (
-                            output_to_yield.final_output_type == "audio"
-                            and engine_outputs.finished
-                            and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"])
-                            is not None
-                        ):
-                            req_id = result.get("request_id")
-                            nframes = int(multimodal_output[-1].shape[0])
-                            record_audio_generated_frames(metrics, stage_id, req_id, nframes)
-                        yield output_to_yield
+                if output_to_yield:
+                    if (
+                        output_to_yield.final_output_type == "audio"
+                        and engine_outputs.finished
+                        and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"])
+                        is not None
+                    ):
+                        req_id = result.get("request_id")
+                        nframes = int(multimodal_output[-1].shape[0])
+                        record_audio_generated_frames(metrics, stage_id, req_id, nframes)
+                    yield output_to_yield
 
     async def _process_sequential_results(
         self,
