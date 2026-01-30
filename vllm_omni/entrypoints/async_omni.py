@@ -381,7 +381,7 @@ class AsyncOmni(OmniBase):
                 except asyncio.QueueEmpty:
                     await asyncio.sleep(0.001)
                     continue
-
+                req_id = result.get("request_id")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
                     result,
                     stage,
@@ -410,6 +410,20 @@ class AsyncOmni(OmniBase):
 
                 if output_to_yield:
                     yield output_to_yield
+                try:
+                    _m = asdict(result.get("metrics"))
+                    if _m is not None and finished:
+                        metrics.on_stage_metrics(stage_id, req_id, _m)
+                except Exception as e:
+                    logger.exception(
+                        f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
+                    )
+        # Finalize E2E metrics if not already done
+        metrics.on_finalize_request(
+            final_stage_id_for_e2e,
+            req_id,
+            req_start_ts.get(req_id, wall_start_ts),
+        )
 
     async def _process_sequential_results(
         self,
@@ -429,16 +443,30 @@ class AsyncOmni(OmniBase):
                 assert stage_id == req_state.stage_id
                 req_id = result.get("request_id")
                 engine_outputs, finished, output_to_yield = self._process_single_result(
-                    result, stage, stage_id, metrics, req_start_ts, wall_start_ts, final_stage_id_for_e2e
+                    result, stage, stage_id, metrics,
                 )
                 if output_to_yield:
                     yield output_to_yield
+            try:
+                _m = asdict(result.get("metrics"))
+                if _m is not None:
+                    metrics.on_stage_metrics(stage_id, req_id, _m)
+            except Exception as e:
+                logger.exception(
+                    f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
+                )
+            if stage_id == final_stage_id_for_e2e:
+                metrics.on_finalize_request(
+                    final_stage_id_for_e2e,
+                    req_id,
+                    req_start_ts.get(req_id, wall_start_ts),
+                )
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]
             stage.set_engine_outputs(engine_outputs)
             # Forward to next stage if there is one
             next_stage_id = stage_id + 1
-            if next_stage_id <= final_stage_id_for_e2e and finished:
+            if next_stage_id <= final_stage_id_for_e2e:
                 next_stage: OmniStage = self.stage_list[next_stage_id]
                 next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
                 sp_next: SamplingParams = sampling_params_list[next_stage_id]
@@ -482,10 +510,6 @@ class AsyncOmni(OmniBase):
         stage: OmniStage,
         stage_id: int,
         metrics: OrchestratorMetrics,
-        req_start_ts: dict[int, float],
-        wall_start_ts: float,
-        final_stage_id_for_e2e: int,
-        all_stages_finished: dict[int, bool] | None = None,
     ) -> tuple[Any, bool, OmniRequestOutput | None]:
         """
         Process a single result dictionary from a stage.
@@ -510,15 +534,6 @@ class AsyncOmni(OmniBase):
         # Mark last output time
         metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
 
-        try:
-            _m = asdict(result.get("metrics"))
-            if _m is not None and finished:
-                metrics.on_stage_metrics(stage_id, req_id, _m)
-        except Exception as e:
-            logger.exception(
-                f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
-            )
-
         logger.debug(
             f"[{self._name}] Stage-{stage_id} completed request {req_id}; forwarding or finalizing",
         )
@@ -534,21 +549,6 @@ class AsyncOmni(OmniBase):
             if rid_key in metrics.e2e_done:
                 return engine_outputs, finished, output_to_yield
 
-            # asynchronous case: check all prior stages finished
-            if all_stages_finished is not None:
-                all_stages_finished[stage_id] = finished
-                if all(all_stages_finished.values()):
-                    metrics.on_finalize_request(
-                        stage_id,
-                        req_id,
-                        req_start_ts.get(req_id, wall_start_ts),
-                    )
-            elif stage_id == final_stage_id_for_e2e and finished:
-                metrics.on_finalize_request(
-                    stage_id,
-                    req_id,
-                    req_start_ts.get(req_id, wall_start_ts),
-                )
         except Exception as e:
             logger.exception(
                 f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
