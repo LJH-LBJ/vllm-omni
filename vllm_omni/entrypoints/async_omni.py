@@ -353,20 +353,13 @@ class AsyncOmni(OmniBase):
                         request_id,
                         _req_start_ts.get(request_id, _wall_start_ts),
                     )
-            except Exception as e:
-                logger.exception(
-                    f"[{self._name}] Finalize request handling error for"
-                    f"req {request_id} at stage {final_stage_id_for_e2e}: {e}",
-                )
 
-            logger.debug(f"[{self._name}] All requests completed")
-
-            # Summarize and print stats
-            try:
+                logger.debug(f"[{self._name}] All requests completed")
+                # Summarize and print stats
                 summary = metrics.build_and_log_summary(final_stage_id_for_e2e)
                 logger.info("[Summary] %s", pformat(summary, sort_dicts=False))
             except Exception as e:
-                logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
+                logger.exception(f"[{self._name}] Request {request_id} Failed to finalized/build/log summary: {e}")
             finally:
                 self.request_states.pop(request_id, None)
         except (asyncio.CancelledError, GeneratorExit):
