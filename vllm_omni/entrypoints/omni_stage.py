@@ -35,7 +35,7 @@ from vllm_omni.distributed.omni_connectors import build_stage_connectors
 from vllm_omni.distributed.omni_connectors.adapter import try_recv_via_connector
 from vllm_omni.distributed.omni_connectors.connectors.base import OmniConnectorBase
 from vllm_omni.distributed.ray_utils.utils import kill_ray_actor, start_ray_actor
-from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs
+from vllm_omni.engine.arg_utils import AsyncOmniEngineArgs, OmniEngineArgs
 from vllm_omni.entrypoints.async_omni_diffusion import AsyncOmniDiffusion
 from vllm_omni.entrypoints.async_omni_llm import AsyncOmniLLM
 from vllm_omni.entrypoints.log_utils import count_tokens_from_outputs
@@ -700,7 +700,7 @@ def _stage_worker(
             )
         else:
             # Default to LLM engine
-            engine_args = filter_dataclass_kwargs(AsyncOmniEngineArgs, engine_args)
+            engine_args = filter_dataclass_kwargs(OmniEngineArgs, engine_args)
             engine_args.pop("model", None)
             stage_engine = OmniLLM(model=model, **engine_args)
     finally:
