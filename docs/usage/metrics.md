@@ -1,13 +1,80 @@
-# Production Metrics
 
-## Usage
+# Production Metrics:
 
-Users can utilize these metrics in production environments to monitor the health and performance of the vLLM-omni system. Key scenarios include:
-- **Performance Monitoring**: Track throughput (e.g., `e2e_avg_tokens_per_s`), latency (e.g., `e2e_total_ms`), and resource utilization to verify that the system meets expected performance standards.
-- **Debugging and Troubleshooting**: Use detailed per-request metrics to diagnose issues with specific requests, such as high transfer times or unexpected token counts.
--  **Enable Logging**: Start vLLM-omni with the `--log-stats` flag. This exposes metrics through structured logs.
+You can use these metrics in production to monitor the health and performance of the vLLM-omni system. Typical scenarios include:
+- **Performance Monitoring**: Track throughput (e.g., `e2e_avg_tokens_per_s`), latency (e.g., `e2e_total_ms`), and resource utilization to verify that the system meets expected standards.
+- **Debugging and Troubleshooting**: Use detailed per-request metrics to diagnose issues, such as high transfer times or unexpected token counts.
 
-## Overall Summary
+## How to Enable and View Metrics
+
+### 1. Start the Service with Metrics Logging
+
+```bash
+vllm serve /workspace/models/Qwen3-Omni-30B-A3B-Instruct --omni --port 8014 --log-stats
+```
+
+### 2. Send a Request
+
+```bash
+python openai_chat_completion_client_for_multimodal_generation.py --query-type use_image
+```
+
+### 3. What You Will See
+
+With `--log-stats` enabled, the server will output detailed metrics logs after each request. Example output:
+
+
+#### Overall Summary
+
+| Field                       | Value        |
+|-----------------------------|--------------|
+| e2e_requests                | 1            |
+| e2e_wall_time_ms            | 41,299.190   |
+| e2e_total_tokens            | 5,202        |
+| e2e_avg_time_per_request_ms | 41,299.190   |
+| e2e_avg_tokens_per_s        | 125.959      |
+| stage_wall_time_ms          | 10,192.289, 30,541.409, 207.496 |
+
+#### RequestE2EStats
+
+| Field                   | Value      |
+|-------------------------|------------|
+| e2e_total_ms            | 41,299.133 |
+| e2e_total_tokens        | 5,202      |
+| transfers_total_time_ms | 245.895    |
+| transfers_total_kbytes  | 138,089.939|
+
+#### StageRequestStats
+
+| Field                  | 0      | 1      | 2      |
+|------------------------|--------|--------|--------|
+| audio_generated_frames | 0      | 0      | 525,525|
+| batch_id               | 38     | 274    | 0      |
+| batch_size             | 1      | 1      | 1      |
+| num_tokens_in          | 4,860  | 4,826  | 4,384  |
+| num_tokens_out         | 67     | 275    | 0      |
+| preprocess_time_ms     | 256.158| 0.491  | 0.000  |
+| stage_gen_time_ms      | 9,910.007|30,379.198|160.745|
+
+#### TransferEdgeStats
+
+| Field               | 0->1        | 1->2       |
+|---------------------|-------------|------------|
+| size_kbytes         | 109,277.349 | 28,812.591 |
+| tx_time_ms          | 78.701      | 18.790     |
+| rx_decode_time_ms   | 111.865     | 31.706     |
+| in_flight_time_ms   | 2.015       | 2.819      |
+
+
+These logs include:
+- **Overall summary**: total requests, wall time, average tokens/sec, etc.
+- **E2E table**: per-request latency and token counts.
+- **Stage table**: per-stage batch and timing details.
+- **Transfer table**: data transfer and timing for each edge.
+
+You can use these logs to monitor system health, debug performance, and analyze request-level metrics as described above.
+
+## Parameter Details
 
 | Field                     | Meaning                                                                                       |
 |---------------------------|----------------------------------------------------------------------------------------------|
