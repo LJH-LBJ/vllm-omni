@@ -75,6 +75,7 @@ def _convert_dataclasses_to_dict(obj: Any) -> Any:
     - Dataclass objects with Literal type annotations (e.g., StructuredOutputsConfig)
     - Counter objects (from collections or vllm.utils)
     - Set objects
+    - Callable objects (functions, methods, etc.)
     - Other non-primitive types
     """
     # IMPORTANT: Check Counter BEFORE dict, since Counter is a subclass of dict
@@ -99,17 +100,45 @@ def _convert_dataclasses_to_dict(obj: Any) -> Any:
         result = asdict(obj)
         # Recursively process the result to convert any Counter objects
         return _convert_dataclasses_to_dict(result)
-    # Handle dictionaries (recurse into values)
+    # Handle dictionaries (recurse into values) and filter out callables(cause error in OmegaConf.create)
     # Note: This must come AFTER Counter check since Counter is a dict subclass
     if isinstance(obj, dict):
-        return {k: _convert_dataclasses_to_dict(v) for k, v in obj.items()}
+        result = {}
+        filtered_keys = []
+        for k, v in obj.items():
+            if callable(v):
+                filtered_keys.append(str(k))
+            else:
+                result[k] = _convert_dataclasses_to_dict(v)
+        if filtered_keys:
+            logger.warning(
+                f"Filtered out {len(filtered_keys)} callable object(s) from base_engine_args "
+                f"that are not compatible with OmegaConf: {filtered_keys}. "
+            )
+        return result
+    # Handle callable objects (functions, methods, etc.) - skip them
+    # Note: This comes after dict/list checks to avoid misclassifying dict-like objects
+    if callable(obj):
+        return None
     # Handle lists and tuples (recurse into items)
     if isinstance(obj, (list, tuple)):
-        return type(obj)(_convert_dataclasses_to_dict(item) for item in obj)
+        return type(obj)(_convert_dataclasses_to_dict(item) for item in obj if not callable(item))
     # Try to convert any dict-like object (has keys/values methods) to dict
     if hasattr(obj, "keys") and hasattr(obj, "values") and not isinstance(obj, (str, bytes)):
         try:
-            return {k: _convert_dataclasses_to_dict(v) for k, v in obj.items()}
+            result = {}
+            filtered_keys = []
+            for k, v in obj.items():
+                if callable(v):
+                    filtered_keys.append(str(k))
+                else:
+                    result[k] = _convert_dataclasses_to_dict(v)
+            if filtered_keys:
+                logger.warning(
+                    f"Filtered out {len(filtered_keys)} callable object(s) from base_engine_args "
+                    f"that are not compatible with OmegaConf: {filtered_keys}. "
+                )
+            return result
         except (TypeError, ValueError, AttributeError):
             # If conversion fails, return as-is
             return obj
