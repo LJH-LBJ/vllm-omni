@@ -49,6 +49,7 @@ from vllm_omni.entrypoints.stage_utils import (
     maybe_dump_to_shm,
     set_stage_devices,
 )
+from vllm_omni.entrypoints.utils import filter_dataclass_kwargs
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniSamplingParams, OmniTokensPrompt
 from vllm_omni.outputs import OmniRequestOutput
 
@@ -688,6 +689,7 @@ def _stage_worker(
         engine_args["stage_id"] = stage_id
     try:
         if stage_type == "diffusion":
+            engine_args = filter_dataclass_kwargs(OmniDiffusionConfig, engine_args)
             engine_args.pop("model_stage", None)
             engine_args.pop("model", None)
             stage_engine = OmniDiffusion(
@@ -698,6 +700,8 @@ def _stage_worker(
             )
         else:
             # Default to LLM engine
+            engine_args = filter_dataclass_kwargs(AsyncOmniEngineArgs, engine_args)
+            engine_args.pop("model", None)
             stage_engine = OmniLLM(model=model, **engine_args)
     finally:
         # Release all locks by closing file descriptors
@@ -1228,6 +1232,7 @@ async def _stage_worker_async(
     try:
         if stage_type == "diffusion":
             # For diffusion, we need to extract diffusion-specific config
+            engine_args = filter_dataclass_kwargs(OmniDiffusionConfig, engine_args)
             od_config = _build_od_config(engine_args, model)
 
             # Inject omni config for worker to access stage info
@@ -1244,6 +1249,8 @@ async def _stage_worker_async(
             )
             vllm_config = None  # Diffusion doesn't use vllm_config
         else:
+            engine_args = filter_dataclass_kwargs(AsyncOmniEngineArgs, engine_args)
+            engine_args.pop("model", None)
             omni_engine_args = AsyncOmniEngineArgs(model=model, **engine_args)
             usage_context = UsageContext.OPENAI_API_SERVER
             vllm_config = omni_engine_args.create_engine_config(usage_context=usage_context)

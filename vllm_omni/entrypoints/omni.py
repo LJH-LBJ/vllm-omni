@@ -198,30 +198,16 @@ class OmniBase:
         stage_configs_path = kwargs.get("stage_configs_path", None)
         log_stats = kwargs.get("log_stats", False)
 
-        ### base engine args
-        from dataclasses import fields
-
-        from vllm.config.model import ModelConfig
-
-        def filter_engine_args(kwargs: dict[str, Any]) -> dict[str, Any]:
-            model_config_fields = {f.name for f in fields(ModelConfig)}
-            model_config_fields.discard("model")
-            return {k: v for k, v in kwargs.items() if k in model_config_fields}
-
-        base_engine_args = filter_engine_args(kwargs)
-        if not base_engine_args:
-            base_engine_args = None
-
         # Load stage configurations from YAML
         if stage_configs_path is None:
             self.config_path = resolve_model_config_path(model)
-            self.stage_configs = load_stage_configs_from_model(model, base_engine_args=base_engine_args)
+            self.stage_configs = load_stage_configs_from_model(model, base_engine_args=kwargs)
             if not self.stage_configs:
                 default_stage_cfg = self._create_default_diffusion_stage_cfg(kwargs)
                 self.stage_configs = OmegaConf.create(default_stage_cfg)
         else:
             self.config_path = stage_configs_path
-            self.stage_configs = load_stage_configs_from_yaml(stage_configs_path, base_engine_args=base_engine_args)
+            self.stage_configs = load_stage_configs_from_yaml(stage_configs_path, base_engine_args=kwargs)
 
         # Inject diffusion LoRA-related knobs from kwargs if not present in the stage config.
         for cfg in self.stage_configs:

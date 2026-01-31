@@ -1,6 +1,6 @@
 import os
 from collections import Counter
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, is_dataclass, fields
 from pathlib import Path
 from typing import Any
 
@@ -280,3 +280,23 @@ def get_final_stage_id_for_e2e(
         final_stage_id_for_e2e = last_stage_id
 
     return final_stage_id_for_e2e
+
+def filter_dataclass_kwargs(cls: Any, kwargs: dict) -> dict:
+    """Filter kwargs to only include fields defined in the dataclass.
+
+    Args:
+        cls: Dataclass type
+        kwargs: Keyword arguments to filter
+
+    Returns:
+        Filtered keyword arguments containing only valid dataclass fields
+    """
+    if not is_dataclass(cls):
+        raise ValueError(f"{cls} is not a dataclass")
+    if not isinstance(kwargs, dict):
+        raise ValueError("kwargs must be a dictionary")
+
+    valid_fields = {f.name for f in fields(cls)}
+    filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
+
+    return filtered_kwargs
