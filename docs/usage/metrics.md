@@ -125,6 +125,32 @@ You can use these logs to monitor system health, debug performance, and analyze 
 | `rx_decode_time_ms`  | Receiver decode time in ms.                                               |
 | `in_flight_time_ms`  | In-flight time in ms.                                                     |
 
-## Expectation of the numbers:
-e2e_total_tokens = Stage0 's num_tokens_in + other stage's num_tokens_out
-transfers_total_time_ms = sum(tx_time_ms + rx_decode_time_ms + in_flight_time_ms) in every edge
+
+## Expectation of the Numbers (Verification)
+
+**Formulas:**
+- `e2e_total_tokens = Stage0's num_tokens_in + sum(all stages' num_tokens_out)`
+- `transfers_total_time_ms = sum(tx_time_ms + rx_decode_time_ms + in_flight_time_ms)` for every edge
+
+**Using the example above:**
+
+### e2e_total_tokens
+- Stage0's `num_tokens_in`: **4,860**
+- Stage0's `num_tokens_out`: **67**
+- Stage1's `num_tokens_out`: **275**
+- Stage2's `num_tokens_out`: **0**
+
+So,
+```
+e2e_total_tokens = 4,860 + 67 + 275 + 0 = 5,202
+```
+This matches the table value: `e2e_total_tokens = 5,202`.
+
+### transfers_total_time_ms
+For each edge:
+- 0->1: tx_time_ms (**78.701**) + rx_decode_time_ms (**111.865**) + in_flight_time_ms (**2.015**) = **192.581**
+- 1->2: tx_time_ms (**18.790**) + rx_decode_time_ms (**31.706**) + in_flight_time_ms (**2.819**) = **53.315**
+
+Sum: 192.581 + 53.315 = **245.896**
+
+The table shows `transfers_total_time_ms = 245.895`, which matches the calculation (difference is due to rounding).
