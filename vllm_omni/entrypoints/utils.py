@@ -1,6 +1,6 @@
 import os
 from collections import Counter
-from dataclasses import asdict, is_dataclass, fields
+from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -309,6 +309,7 @@ def get_final_stage_id_for_e2e(
         final_stage_id_for_e2e = last_stage_id
 
     return final_stage_id_for_e2e
+
 
 def filter_dataclass_kwargs(cls: Any, kwargs: dict) -> dict:
     """Filter kwargs to only include fields defined in the dataclass.
