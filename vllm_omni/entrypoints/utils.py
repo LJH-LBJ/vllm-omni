@@ -2,7 +2,8 @@ import os
 from collections import Counter
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args, get_origin
+import types
 
 from omegaconf import OmegaConf
 from vllm.logger import init_logger
@@ -326,7 +327,49 @@ def filter_dataclass_kwargs(cls: Any, kwargs: dict) -> dict:
     if not isinstance(kwargs, dict):
         raise ValueError("kwargs must be a dictionary")
 
-    valid_fields = {f.name for f in fields(cls)}
-    filtered_kwargs = {k: v for k, v in kwargs.items() if k in valid_fields}
+    def _filter_value(value: Any, annotation: Any) -> Any:
+        """Recursively filter nested dict/list values based on dataclass annotations."""
+        if annotation is None:
+            return value
+
+        origin = get_origin(annotation)
+        if origin is None:
+            if isinstance(annotation, type) and is_dataclass(annotation) and isinstance(value, dict):
+                return filter_dataclass_kwargs(annotation, value)
+            return value
+
+        if origin in (list, tuple, set):
+            args = get_args(annotation)
+            inner = args[0] if args else None
+            if isinstance(value, (list, tuple, set)):
+                return type(value)(_filter_value(v, inner) for v in value)
+            return value
+
+        if origin is dict:
+            args = get_args(annotation)
+            val_type = args[1] if len(args) > 1 else None
+            if isinstance(value, dict):
+                return {k: _filter_value(v, val_type) for k, v in value.items()}
+            return value
+
+        if origin is types.UnionType or origin is types.UnionType or origin is getattr(types, "UnionType", None):
+            for arg in get_args(annotation):
+                if isinstance(arg, type) and is_dataclass(arg) and isinstance(value, dict):
+                    return filter_dataclass_kwargs(arg, value)
+                # Try container-style filtering for union members
+                filtered = _filter_value(value, arg)
+                if filtered is not value:
+                    return filtered
+            return value
+
+        return value
+
+    valid_fields = {f.name: f for f in fields(cls)}
+    filtered_kwargs = {}
+    for k, v in kwargs.items():
+        if k not in valid_fields:
+            continue
+        field = valid_fields[k]
+        filtered_kwargs[k] = _filter_value(v, field.type)
 
     return filtered_kwargs
