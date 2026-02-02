@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
-from argparse import SUPPRESS, Action, HelpFormatter
-from collections.abc import Iterable
 import importlib
-from importlib.machinery import ModuleSpec
 import logging
 import sys
+from argparse import SUPPRESS, Action, HelpFormatter
+from collections.abc import Iterable
+from importlib.machinery import ModuleSpec
 from pathlib import Path
 from typing import Literal
 from unittest.mock import MagicMock
@@ -22,6 +22,7 @@ ARGPARSE_DOC_DIR = ROOT_DIR / "docs/generated/argparse_omni"
 
 # Ensure the repo root is in sys.path for dynamic imports
 sys.path.insert(0, str(ROOT_DIR))
+
 
 class PydanticMagicMock(MagicMock):
     """`MagicMock` that's able to generate pydantic-core schemas."""
@@ -55,12 +56,12 @@ def auto_mock(module_name: str, attr: str, max_mocks: int = 100):
         except Exception:
             logger.exception("Failed to import %s.%s: %s", module_name, attr)
 
-    raise ImportError(
-        f"Failed to import {module_name}.{attr} after mocking {max_mocks} imports"
-    )
+    raise ImportError(f"Failed to import {module_name}.{attr} after mocking {max_mocks} imports")
+
 
 # Dynamically import or mock the OmniServeCommand subcommand
 OmniServeCommand = auto_mock("vllm_omni.entrypoints.cli.serve", "OmniServeCommand")
+
 
 class MarkdownFormatter(HelpFormatter):
     """Custom formatter that generates markdown for argument groups."""
@@ -115,6 +116,7 @@ class MarkdownFormatter(HelpFormatter):
     def format_help(self):
         """Return the formatted help as markdown."""
         return "".join(self._markdown_output)
+
 
 # Function to create parser using subparser_init style CLI class
 def create_parser_subparser_init(subcmd_class):

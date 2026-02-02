@@ -61,7 +61,7 @@ def _resolve_worker_cls(engine_args: dict[str, Any]) -> None:
     if not worker_type:
         return
     worker_cls = engine_args.get("worker_cls")
-    if worker_cls is not None and worker_cls != 'auto':
+    if worker_cls is not None and worker_cls != "auto":
         return
     from vllm_omni.platforms import current_omni_platform
 

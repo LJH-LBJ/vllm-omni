@@ -1,9 +1,9 @@
 import os
+import types
 from collections import Counter
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any, get_args, get_origin
-import types
 
 from omegaconf import OmegaConf
 from vllm.logger import init_logger
