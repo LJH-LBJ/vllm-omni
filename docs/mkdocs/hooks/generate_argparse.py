@@ -12,6 +12,7 @@ from typing import Literal
 from unittest.mock import MagicMock
 
 from pydantic_core import core_schema
+from vllm.utils.argparse_utils import FlexibleArgumentParser
 
 logger = logging.getLogger("mkdocs")
 
@@ -123,9 +124,7 @@ def create_parser_subparser_init(subcmd_class):
 
     class DummySubparsers:
         def add_parser(self, name, **kwargs):
-            import argparse
-
-            return argparse.ArgumentParser(prog=name)
+            return FlexibleArgumentParser(prog=name)
 
     dummy_subparsers = DummySubparsers()
     parser = subcmd_class().subparser_init(dummy_subparsers)
