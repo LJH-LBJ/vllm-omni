@@ -1,4 +1,4 @@
-# vllm serve
+# vllm-omni serve
 
 ## JSON CLI Arguments
 
@@ -6,4 +6,4 @@
 
 ## Arguments
 
---8<-- "docs/argparse/serve.inc.md"
+--8<-- "docs/generated/argparse_omni/omni_serve.inc.md"
