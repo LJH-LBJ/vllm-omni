@@ -364,7 +364,7 @@ def filter_dataclass_kwargs(cls: Any, kwargs: dict) -> dict:
 
         return value
 
-    valid_fields = {f.name: f for f in fields(cls)}
+    valid_fields = {f.name: f for f in fields(cls) if f.init}
     filtered_kwargs = {}
     for k, v in kwargs.items():
         if k not in valid_fields:
