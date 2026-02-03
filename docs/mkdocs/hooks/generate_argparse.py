@@ -110,8 +110,53 @@ def auto_mock(module_name: str, attr: str, max_mocks: int = 100):
     raise ImportError(f"Failed to import {module_name}.{attr} after mocking {max_mocks} imports")
 
 
-# Dynamically import or mock the OmniServeCommand subcommand
-OmniServeCommand = auto_mock("vllm_omni.entrypoints.cli.serve", "OmniServeCommand")
+
+# --- Static extraction for CLI argument docs ---
+import ast
+
+def extract_omni_serve_subparser_init():
+    """
+    Statically parse vllm_omni/entrypoints/cli/serve.py to extract the subparser_init method
+    and return a callable that adds arguments to a parser. This avoids import and mock issues.
+    """
+    serve_path = ROOT_DIR / "vllm_omni" / "entrypoints" / "cli" / "serve.py"
+    with open(serve_path, "r", encoding="utf-8") as f:
+        source = f.read()
+    tree = ast.parse(source, filename=str(serve_path))
+    # Find class OmniServeCommand
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "OmniServeCommand":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "subparser_init":
+                    # We'll exec this function body in a dummy context
+                    func_code = ast.Module(body=[item], type_ignores=[])
+                    code = compile(func_code, filename=str(serve_path), mode="exec")
+                    # Prepare dummy context
+                    local_vars = {}
+                    # Provide a dummy subparsers with add_parser returning our parser
+                    class DummySubparsers:
+                        def add_parser(self, name, **kwargs):
+                            return _FlexibleArgumentParser(prog=name)
+                    dummy_subparsers = DummySubparsers()
+                    # Provide globals for exec
+                    exec_globals = {
+                        "_FlexibleArgumentParser": _FlexibleArgumentParser,
+                        "make_arg_parser": lambda parser: parser,  # no-op for doc
+                        "VLLM_SUBCMD_PARSER_EPILOG": "",
+                        "logger": logger,
+                        "DummySubparsers": DummySubparsers,
+                        "argparse": __import__("argparse"),
+                    }
+                    exec(code, exec_globals, local_vars)
+                    # Get the function
+                    subparser_init = local_vars["subparser_init"]
+                    # Return a callable that mimics OmniServeCommand().subparser_init
+                    def parser_factory():
+                        return subparser_init(None, dummy_subparsers)
+                    return parser_factory
+    raise RuntimeError("Could not statically extract OmniServeCommand.subparser_init")
+
+OmniServeCommand = type("OmniServeCommand", (), {"subparser_init": staticmethod(extract_omni_serve_subparser_init())})
 
 
 class MarkdownFormatter(HelpFormatter):
