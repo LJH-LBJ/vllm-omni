@@ -4,7 +4,7 @@
 import importlib
 import logging
 import sys
-from argparse import SUPPRESS, Action, HelpFormatter
+from argparse import SUPPRESS, Action, HelpFormatter, ArgumentParser, _ArgumentGroup
 from collections.abc import Iterable
 from importlib.machinery import ModuleSpec
 from pathlib import Path
@@ -12,7 +12,52 @@ from typing import Literal
 from unittest.mock import MagicMock
 
 from pydantic_core import core_schema
-from vllm.utils.argparse_utils import FlexibleArgumentParser
+try:
+    from vllm.utils.argparse_utils import FlexibleArgumentParser
+except ModuleNotFoundError:
+    class _FlexibleArgumentParser(ArgumentParser):
+        """Fallback parser for docs when vllm is unavailable.
+
+        Accepts the 'deprecated' kwarg used by vllm CLI and emits warnings
+        if a deprecated argument is actually provided.
+        """
+
+        _deprecated: set[Action] = set()
+        _deprecated_warned: set[str] = set()
+
+        if sys.version_info < (3, 13):
+            def parse_known_args(self, args=None, namespace=None):
+                namespace, args = super().parse_known_args(args, namespace)
+                for action in _FlexibleArgumentParser._deprecated:
+                    if (
+                        hasattr(namespace, dest := action.dest)
+                        and getattr(namespace, dest) != action.default
+                        and dest not in _FlexibleArgumentParser._deprecated_warned
+                    ):
+                        _FlexibleArgumentParser._deprecated_warned.add(dest)
+                        logger.warning("argument '%s' is deprecated", dest)
+                return namespace, args
+
+        def add_argument(self, *args, **kwargs):
+            deprecated = kwargs.pop("deprecated", False)
+            action = super().add_argument(*args, **kwargs)
+            if deprecated:
+                _FlexibleArgumentParser._deprecated.add(action)
+            return action
+
+        class _FlexibleArgumentGroup(_ArgumentGroup):
+            def add_argument(self, *args, **kwargs):
+                deprecated = kwargs.pop("deprecated", False)
+                action = super().add_argument(*args, **kwargs)
+                if deprecated:
+                    _FlexibleArgumentParser._deprecated.add(action)
+                return action
+
+        def add_argument_group(self, *args, **kwargs):
+            group = self._FlexibleArgumentGroup(self, *args, **kwargs)
+            self._action_groups.append(group)
+            return group
+
 
 logger = logging.getLogger("mkdocs")
 
@@ -126,7 +171,7 @@ def create_parser_subparser_init(subcmd_class):
 
     class DummySubparsers:
         def add_parser(self, name, **kwargs):
-            return FlexibleArgumentParser(prog=name)
+            return _FlexibleArgumentParser(prog=name)
 
     dummy_subparsers = DummySubparsers()
     parser = subcmd_class().subparser_init(dummy_subparsers)
