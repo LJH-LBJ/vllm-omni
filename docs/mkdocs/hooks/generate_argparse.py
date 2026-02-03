@@ -4,8 +4,8 @@
 import ast
 import importlib
 import logging
-import sys
 import re
+import sys
 from argparse import SUPPRESS, Action, ArgumentParser, HelpFormatter, _ArgumentGroup
 from collections.abc import Iterable
 from importlib.machinery import ModuleSpec
