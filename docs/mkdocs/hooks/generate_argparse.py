@@ -3,9 +3,9 @@
 
 import ast
 import importlib
-import importlib.util
 import logging
 import sys
+import re
 from argparse import SUPPRESS, Action, ArgumentParser, HelpFormatter, _ArgumentGroup
 from collections.abc import Iterable
 from importlib.machinery import ModuleSpec
@@ -137,6 +137,9 @@ def extract_omni_serve_subparser_init():
 
                     dummy_subparsers = DummySubparsers()
                     # Provide globals for exec
+                    # Extract DESCRIPTION from the source file (assume it's a triple-quoted string at the top)
+                    m = re.search(r'DESCRIPTION\s*=\s*([ru]?""".*?""")', source, re.DOTALL)
+                    DESCRIPTION = m.group(1)[3:-3] if m else ""
                     exec_globals = {
                         "_FlexibleArgumentParser": _FlexibleArgumentParser,
                         "FlexibleArgumentParser": _FlexibleArgumentParser,
@@ -145,6 +148,7 @@ def extract_omni_serve_subparser_init():
                         "logger": logger,
                         "DummySubparsers": DummySubparsers,
                         "argparse": __import__("argparse"),
+                        "DESCRIPTION": DESCRIPTION,
                     }
                     exec(code, exec_globals, local_vars)
                     # Get the function
@@ -154,6 +158,7 @@ def extract_omni_serve_subparser_init():
                     def parser_factory():
                         class DummySelf:
                             name = "serve"
+
                         return subparser_init(DummySelf(), dummy_subparsers)
 
                     return parser_factory
@@ -220,11 +225,13 @@ class MarkdownFormatter(HelpFormatter):
 
 # Function to create parser using subparser_init style CLI class
 
+
 def create_parser_subparser_init(subcmd_class):
     """
     Create an argparse parser using subparser_init style CLI class, with MarkdownFormatter.
     Compatible with both AST-extracted static parser_factory and real class instance method.
     """
+
     class DummySubparsers:
         def add_parser(self, name, **kwargs):
             return _FlexibleArgumentParser(prog=name)
@@ -234,6 +241,7 @@ def create_parser_subparser_init(subcmd_class):
     subparser_init = getattr(subcmd_class, "subparser_init", None)
     if subparser_init is not None:
         import inspect
+
         sig = inspect.signature(subparser_init)
         if len(sig.parameters) == 0:
             parser = subparser_init()
