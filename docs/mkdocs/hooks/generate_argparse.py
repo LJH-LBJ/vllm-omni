@@ -16,37 +16,38 @@ from unittest.mock import MagicMock
 from pydantic_core import core_schema
 
 
-try:
-    if importlib.util.find_spec("vllm.utils.argparse_utils") is not None:
-        from vllm.utils.argparse_utils import FlexibleArgumentParser as _FlexibleArgumentParser
-    else:
-        raise ModuleNotFoundError
-except ModuleNotFoundError:
+class _FlexibleArgumentParser(ArgumentParser):
+    """Fallback parser for docs when vllm is unavailable.
 
-    class _FlexibleArgumentParser(ArgumentParser):
-        """Fallback parser for docs when vllm is unavailable.
+    Accepts the 'deprecated' kwarg used by vllm CLI and emits warnings
+    if a deprecated argument is actually provided.
+    """
 
-        Accepts the 'deprecated' kwarg used by vllm CLI and emits warnings
-        if a deprecated argument is actually provided.
-        """
+    _deprecated: set[Action] = set()
+    _deprecated_warned: set[str] = set()
 
-        _deprecated: set[Action] = set()
-        _deprecated_warned: set[str] = set()
+    if sys.version_info < (3, 13):
 
-        if sys.version_info < (3, 13):
+        def parse_known_args(self, args=None, namespace=None):
+            namespace, args = super().parse_known_args(args, namespace)
+            for action in _FlexibleArgumentParser._deprecated:
+                if (
+                    hasattr(namespace, dest := action.dest)
+                    and getattr(namespace, dest) != action.default
+                    and dest not in _FlexibleArgumentParser._deprecated_warned
+                ):
+                    _FlexibleArgumentParser._deprecated_warned.add(dest)
+                    logger.warning("argument '%s' is deprecated", dest)
+            return namespace, args
 
-            def parse_known_args(self, args=None, namespace=None):
-                namespace, args = super().parse_known_args(args, namespace)
-                for action in _FlexibleArgumentParser._deprecated:
-                    if (
-                        hasattr(namespace, dest := action.dest)
-                        and getattr(namespace, dest) != action.default
-                        and dest not in _FlexibleArgumentParser._deprecated_warned
-                    ):
-                        _FlexibleArgumentParser._deprecated_warned.add(dest)
-                        logger.warning("argument '%s' is deprecated", dest)
-                return namespace, args
+    def add_argument(self, *args, **kwargs):
+        deprecated = kwargs.pop("deprecated", False)
+        action = super().add_argument(*args, **kwargs)
+        if deprecated:
+            _FlexibleArgumentParser._deprecated.add(action)
+        return action
 
+    class _FlexibleArgumentGroup(_ArgumentGroup):
         def add_argument(self, *args, **kwargs):
             deprecated = kwargs.pop("deprecated", False)
             action = super().add_argument(*args, **kwargs)
@@ -54,18 +55,10 @@ except ModuleNotFoundError:
                 _FlexibleArgumentParser._deprecated.add(action)
             return action
 
-        class _FlexibleArgumentGroup(_ArgumentGroup):
-            def add_argument(self, *args, **kwargs):
-                deprecated = kwargs.pop("deprecated", False)
-                action = super().add_argument(*args, **kwargs)
-                if deprecated:
-                    _FlexibleArgumentParser._deprecated.add(action)
-                return action
-
-        def add_argument_group(self, *args, **kwargs):
-            group = self._FlexibleArgumentGroup(self, *args, **kwargs)
-            self._action_groups.append(group)
-            return group
+    def add_argument_group(self, *args, **kwargs):
+        group = self._FlexibleArgumentGroup(self, *args, **kwargs)
+        self._action_groups.append(group)
+        return group
 
 
 logger = logging.getLogger("mkdocs")
