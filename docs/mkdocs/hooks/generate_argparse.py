@@ -13,9 +13,11 @@ from unittest.mock import MagicMock
 
 from pydantic_core import core_schema
 
-try:
-    from vllm.utils.argparse_utils import FlexibleArgumentParser
-except ModuleNotFoundError:
+
+import importlib.util
+if importlib.util.find_spec("vllm.utils.argparse_utils") is not None:
+    from vllm.utils.argparse_utils import FlexibleArgumentParser as _FlexibleArgumentParser
+else:
 
     class _FlexibleArgumentParser(ArgumentParser):
         """Fallback parser for docs when vllm is unavailable.
