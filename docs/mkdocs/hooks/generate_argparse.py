@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
+import ast
 import importlib
 import importlib.util
 import logging
 import sys
-import ast
 from argparse import SUPPRESS, Action, ArgumentParser, HelpFormatter, _ArgumentGroup
 from collections.abc import Iterable
 from importlib.machinery import ModuleSpec
@@ -217,17 +217,28 @@ class MarkdownFormatter(HelpFormatter):
 
 
 # Function to create parser using subparser_init style CLI class
+
 def create_parser_subparser_init(subcmd_class):
     """
     Create an argparse parser using subparser_init style CLI class, with MarkdownFormatter.
+    Compatible with both AST-extracted static parser_factory and real class instance method.
     """
-
     class DummySubparsers:
         def add_parser(self, name, **kwargs):
             return _FlexibleArgumentParser(prog=name)
 
     dummy_subparsers = DummySubparsers()
-    parser = subcmd_class().subparser_init(dummy_subparsers)
+    # If subparser_init is a zero-arg static function (AST-extracted), call it directly
+    subparser_init = getattr(subcmd_class, "subparser_init", None)
+    if subparser_init is not None:
+        import inspect
+        sig = inspect.signature(subparser_init)
+        if len(sig.parameters) == 0:
+            parser = subparser_init()
+        else:
+            parser = subcmd_class().subparser_init(dummy_subparsers)
+    else:
+        parser = subcmd_class().subparser_init(dummy_subparsers)
     parser.formatter_class = MarkdownFormatter
     return parser
 
