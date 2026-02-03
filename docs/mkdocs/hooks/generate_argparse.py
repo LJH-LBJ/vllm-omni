@@ -139,6 +139,7 @@ def extract_omni_serve_subparser_init():
                     # Provide globals for exec
                     exec_globals = {
                         "_FlexibleArgumentParser": _FlexibleArgumentParser,
+                        "FlexibleArgumentParser": _FlexibleArgumentParser,
                         "make_arg_parser": lambda parser: parser,  # no-op for doc
                         "VLLM_SUBCMD_PARSER_EPILOG": "",
                         "logger": logger,
