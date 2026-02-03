@@ -2,8 +2,10 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import importlib
+import importlib.util
 import logging
 import sys
+import ast
 from argparse import SUPPRESS, Action, ArgumentParser, HelpFormatter, _ArgumentGroup
 from collections.abc import Iterable
 from importlib.machinery import ModuleSpec
@@ -14,10 +16,12 @@ from unittest.mock import MagicMock
 from pydantic_core import core_schema
 
 
-import importlib.util
-if importlib.util.find_spec("vllm.utils.argparse_utils") is not None:
-    from vllm.utils.argparse_utils import FlexibleArgumentParser as _FlexibleArgumentParser
-else:
+try:
+    if importlib.util.find_spec("vllm.utils.argparse_utils") is not None:
+        from vllm.utils.argparse_utils import FlexibleArgumentParser as _FlexibleArgumentParser
+    else:
+        raise ModuleNotFoundError
+except ModuleNotFoundError:
 
     class _FlexibleArgumentParser(ArgumentParser):
         """Fallback parser for docs when vllm is unavailable.
@@ -110,9 +114,8 @@ def auto_mock(module_name: str, attr: str, max_mocks: int = 100):
     raise ImportError(f"Failed to import {module_name}.{attr} after mocking {max_mocks} imports")
 
 
-
 # --- Static extraction for CLI argument docs ---
-import ast
+
 
 def extract_omni_serve_subparser_init():
     """
@@ -120,7 +123,7 @@ def extract_omni_serve_subparser_init():
     and return a callable that adds arguments to a parser. This avoids import and mock issues.
     """
     serve_path = ROOT_DIR / "vllm_omni" / "entrypoints" / "cli" / "serve.py"
-    with open(serve_path, "r", encoding="utf-8") as f:
+    with open(serve_path, encoding="utf-8") as f:
         source = f.read()
     tree = ast.parse(source, filename=str(serve_path))
     # Find class OmniServeCommand
@@ -133,10 +136,12 @@ def extract_omni_serve_subparser_init():
                     code = compile(func_code, filename=str(serve_path), mode="exec")
                     # Prepare dummy context
                     local_vars = {}
+
                     # Provide a dummy subparsers with add_parser returning our parser
                     class DummySubparsers:
                         def add_parser(self, name, **kwargs):
                             return _FlexibleArgumentParser(prog=name)
+
                     dummy_subparsers = DummySubparsers()
                     # Provide globals for exec
                     exec_globals = {
@@ -150,11 +155,14 @@ def extract_omni_serve_subparser_init():
                     exec(code, exec_globals, local_vars)
                     # Get the function
                     subparser_init = local_vars["subparser_init"]
+
                     # Return a callable that mimics OmniServeCommand().subparser_init
                     def parser_factory():
                         return subparser_init(None, dummy_subparsers)
+
                     return parser_factory
     raise RuntimeError("Could not statically extract OmniServeCommand.subparser_init")
+
 
 OmniServeCommand = type("OmniServeCommand", (), {"subparser_init": staticmethod(extract_omni_serve_subparser_init())})
 
