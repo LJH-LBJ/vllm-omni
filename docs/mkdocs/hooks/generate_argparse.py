@@ -152,7 +152,9 @@ def extract_omni_serve_subparser_init():
 
                     # Return a callable that mimics OmniServeCommand().subparser_init
                     def parser_factory():
-                        return subparser_init(None, dummy_subparsers)
+                        class DummySelf:
+                            name = "serve"
+                        return subparser_init(DummySelf(), dummy_subparsers)
 
                     return parser_factory
     raise RuntimeError("Could not statically extract OmniServeCommand.subparser_init")
