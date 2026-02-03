@@ -4,7 +4,7 @@
 import importlib
 import logging
 import sys
-from argparse import SUPPRESS, Action, HelpFormatter, ArgumentParser, _ArgumentGroup
+from argparse import SUPPRESS, Action, ArgumentParser, HelpFormatter, _ArgumentGroup
 from collections.abc import Iterable
 from importlib.machinery import ModuleSpec
 from pathlib import Path
@@ -12,9 +12,11 @@ from typing import Literal
 from unittest.mock import MagicMock
 
 from pydantic_core import core_schema
+
 try:
     from vllm.utils.argparse_utils import FlexibleArgumentParser
 except ModuleNotFoundError:
+
     class _FlexibleArgumentParser(ArgumentParser):
         """Fallback parser for docs when vllm is unavailable.
 
@@ -26,6 +28,7 @@ except ModuleNotFoundError:
         _deprecated_warned: set[str] = set()
 
         if sys.version_info < (3, 13):
+
             def parse_known_args(self, args=None, namespace=None):
                 namespace, args = super().parse_known_args(args, namespace)
                 for action in _FlexibleArgumentParser._deprecated:
@@ -70,12 +73,13 @@ sys.path.insert(0, str(ROOT_DIR))
 
 
 class PydanticMagicMock(MagicMock):
-    """`MagicMock` that's able to generate pydantic-core schemas."""
+    """`MagicMock` that's able to generate pydantic-core schemas and avoids _mock_name=None errors."""
 
     def __init__(self, *args, **kwargs):
         name = kwargs.pop("name", None)
         super().__init__(*args, **kwargs)
         self.__spec__ = ModuleSpec(name, None)
+        self._mock_name = name or "mock"
 
     def __get_pydantic_core_schema__(self, source_type, handler):
         return core_schema.any_schema()
