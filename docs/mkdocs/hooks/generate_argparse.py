@@ -2,7 +2,6 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import ast
-import importlib
 import logging
 import re
 import sys
