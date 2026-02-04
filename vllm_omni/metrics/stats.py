@@ -429,7 +429,7 @@ class OrchestratorAggregator:
     @contextmanager
     def stage_preprocess_timer(self, stage_id: int, req_id: Any):
         """Context manager for measuring and recording stage preprocessing time.
-        
+
         Usage:
             with metrics.stage_preprocess_timer(stage_id, request_id):
                 next_inputs = next_stage.process_engine_inputs(...)
@@ -443,20 +443,16 @@ class OrchestratorAggregator:
 
     def accumulate_diffusion_metrics(self, stage_type: str, req_id: Any, engine_outputs: Any) -> None:
         """Accumulate diffusion metrics for a request.
-        
+
         Handles extraction and accumulation of diffusion stage metrics.
-        
+
         Args:
             req_id: Request ID
             engine_outputs: Engine output object containing metrics
         """
         if stage_type != "diffusion":
             return
-        engine_output = (
-            engine_outputs[0]
-            if isinstance(engine_outputs, list) and engine_outputs
-            else engine_outputs
-        )
+        engine_output = engine_outputs[0] if isinstance(engine_outputs, list) and engine_outputs else engine_outputs
         diffusion_metrics: dict = getattr(engine_output, "metrics", {})
         if isinstance(diffusion_metrics, list):
             diffusion_metrics = diffusion_metrics[0]
@@ -532,6 +528,16 @@ class OrchestratorAggregator:
         self.e2e_events.append(per_req_record)
         if self.log_stats:
             log_request_stats(per_req_record, "request_level_metrics")
+
+    def format_output(self) -> None:
+        """Format and output metrics summary - unified across sync/async modes.
+        
+        Calls build_and_log_summary() with error handling.
+        """
+        try:
+            self.build_and_log_summary()
+        except Exception as e:
+            logger.exception(f"Failed to build/log summary: {e}")
 
     def build_and_log_summary(self) -> dict[str, Any]:
         if not self.log_stats:

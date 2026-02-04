@@ -830,7 +830,9 @@ class Omni(OmniBase):
                     try:
                         # Derive inputs for the next stage, record preprocess time
                         with metrics.stage_preprocess_timer(stage_id, req_id):
-                            next_inputs = next_stage.process_engine_inputs(self.stage_list, [request_id_to_prompt[req_id]])
+                            next_inputs = next_stage.process_engine_inputs(
+                                self.stage_list, [request_id_to_prompt[req_id]]
+                            )
                     except Exception as e:
                         logger.exception(
                             f"[{self._name}] Process engine inputs error for req {req_id}"
@@ -884,7 +886,7 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
-            metrics.build_and_log_summary()
+            metrics.format_output()
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
 
