@@ -254,9 +254,7 @@ class OrchestratorAggregator:
             )
         )
 
-    def _as_stage_request_stats(
-        self, stage_id: int, req_id: str, metrics: StageRequestStats
-    ) -> StageRequestStats:
+    def _as_stage_request_stats(self, stage_id: int, req_id: str, metrics: StageRequestStats) -> StageRequestStats:
         "Convert dict to StageRequestStats if needed."
         stats = metrics
         stats.stage_id = stage_id

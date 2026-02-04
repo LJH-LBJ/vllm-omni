@@ -8,7 +8,6 @@ import uuid
 import weakref
 from collections.abc import Callable, Generator, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
 from typing import Any, Literal, overload
 
 from omegaconf import OmegaConf
@@ -803,7 +802,6 @@ class Omni(OmniBase):
 
                     # Record audio generated frames with unified signature
                     try:
-                        
                         finished = (
                             engine_outputs.finished
                             if hasattr(engine_outputs, "finished")
