@@ -805,6 +805,7 @@ class Omni(OmniBase):
 
                     # Record audio generated frames with unified signature
                     try:
+                        
                         finished = (
                             engine_outputs.finished
                             if hasattr(engine_outputs, "finished")
@@ -886,7 +887,7 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
-            metrics.format_output()
+            metrics.build_and_log_summary()
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
 

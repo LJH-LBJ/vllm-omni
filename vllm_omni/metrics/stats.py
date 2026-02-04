@@ -529,16 +529,6 @@ class OrchestratorAggregator:
         if self.log_stats:
             log_request_stats(per_req_record, "request_level_metrics")
 
-    def format_output(self) -> None:
-        """Format and output metrics summary - unified across sync/async modes.
-        
-        Calls build_and_log_summary() with error handling.
-        """
-        try:
-            self.build_and_log_summary()
-        except Exception as e:
-            logger.exception(f"Failed to build/log summary: {e}")
-
     def build_and_log_summary(self) -> dict[str, Any]:
         if not self.log_stats:
             return {}
