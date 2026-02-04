@@ -403,7 +403,9 @@ class AsyncOmni(OmniBase):
                 all_stages_finished[stage_id] = finished
 
                 if output_to_yield:
-                    record_audio_generated_frames(metrics, output_to_yield, engine_outputs.finished, stage_id, request_id)
+                    record_audio_generated_frames(
+                        metrics, output_to_yield, engine_outputs.finished, stage_id, request_id
+                    )
                     yield output_to_yield
 
     async def _process_sequential_results(
@@ -427,7 +429,9 @@ class AsyncOmni(OmniBase):
                     metrics,
                 )
                 if output_to_yield:
-                    record_audio_generated_frames(metrics, output_to_yield, engine_outputs.finished, stage_id, request_id)
+                    record_audio_generated_frames(
+                        metrics, output_to_yield, engine_outputs.finished, stage_id, request_id
+                    )
                     yield output_to_yield
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]

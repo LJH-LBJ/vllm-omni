@@ -814,18 +814,26 @@ class Omni(OmniBase):
                         final_output_type=stage.final_output_type,  # type: ignore[attr-defined]
                         request_output=engine_outputs,
                     )
-                    
+
                     # Record audio generated frames with unified signature
                     try:
-                        finished = engine_outputs.finished if hasattr(engine_outputs, 'finished') else (
-                            engine_outputs[0].finished if isinstance(engine_outputs, list) and engine_outputs and hasattr(engine_outputs[0], 'finished') else False
+                        finished = (
+                            engine_outputs.finished
+                            if hasattr(engine_outputs, "finished")
+                            else (
+                                engine_outputs[0].finished
+                                if isinstance(engine_outputs, list)
+                                and engine_outputs
+                                and hasattr(engine_outputs[0], "finished")
+                                else False
+                            )
                         )
                         record_audio_generated_frames(metrics, output_to_yield, finished, stage_id, req_id)
                     except Exception as e:
                         logger.exception(
                             f"[{self._name}] Failed to record audio metrics for req {req_id} at stage {stage_id}: {e}",
                         )
-                    
+
                     yield output_to_yield
 
                 next_stage_id = stage_id + 1
