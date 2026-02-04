@@ -341,12 +341,11 @@ class AsyncOmni(OmniBase):
             logger.debug(f"[{self._name}] Request {request_id} finalized at stage-{final_stage_id_for_e2e}")
             try:
                 # Finalize E2E metrics if not already done
-                if str(request_id) not in metrics.e2e_done:
-                    metrics.on_finalize_request(
-                        final_stage_id_for_e2e,
-                        request_id,
-                        _req_start_ts.get(request_id, _wall_start_ts),
-                    )
+                metrics.on_finalize_request(
+                    final_stage_id_for_e2e,
+                    request_id,
+                    _req_start_ts.get(request_id, _wall_start_ts),
+                )
 
                 logger.debug(f"[{self._name}] All requests completed")
                 # Summarize and print stats

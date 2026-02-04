@@ -456,6 +456,8 @@ class OrchestratorAggregator:
         req_start_ts: float,
     ) -> None:
         rid_key = str(req_id)
+        if rid_key in self.e2e_done:
+            return  # Already finalized
         _t0 = float(req_start_ts)
         _t1 = time.time()
         # Update last output time for this stage
