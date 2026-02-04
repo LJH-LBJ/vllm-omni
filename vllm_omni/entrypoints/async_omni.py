@@ -325,8 +325,6 @@ class AsyncOmni(OmniBase):
                     req_state,
                     metrics,
                     final_stage_id_for_e2e,
-                    _req_start_ts,
-                    _wall_start_ts,
                 ):
                     yield output
             else:
@@ -335,8 +333,6 @@ class AsyncOmni(OmniBase):
                     req_state,
                     metrics,
                     final_stage_id_for_e2e,
-                    _req_start_ts,
-                    _wall_start_ts,
                     sampling_params_list,
                     prompt,
                 ):
@@ -372,8 +368,6 @@ class AsyncOmni(OmniBase):
         req_state: ClientRequestState,
         metrics: OrchestratorAggregator,
         final_stage_id_for_e2e: int,
-        req_start_ts: dict[int, float],
-        wall_start_ts: float,
     ) -> AsyncGenerator[OmniRequestOutput, None]:
         all_stages_finished = {stage_id: False for stage_id in range(final_stage_id_for_e2e + 1)}
         submit_flag = True
@@ -425,8 +419,6 @@ class AsyncOmni(OmniBase):
         req_state: ClientRequestState,
         metrics: OrchestratorAggregator,
         final_stage_id_for_e2e: int,
-        req_start_ts: dict[int, float],
-        wall_start_ts: float,
         sampling_params_list: list[SamplingParams],
         prompt: Any,
     ) -> AsyncGenerator[OmniRequestOutput, None]:
@@ -448,7 +440,7 @@ class AsyncOmni(OmniBase):
                         and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
                     ):
                         nframes = int(multimodal_output[-1].shape[0])
-                        record_audio_generated_frames(metrics, stage_id, req_id, nframes)
+                        record_audio_generated_frames(metrics, stage_id, request_id, nframes)
                     yield output_to_yield
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]
@@ -461,7 +453,7 @@ class AsyncOmni(OmniBase):
                 _prep_t0 = time.perf_counter()
                 next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
                 _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0
-                metrics.record_stage_preprocess_time(stage_id, req_id, _prep_ms)
+                metrics.record_stage_preprocess_time(stage_id, request_id, _prep_ms)
                 sp_next: SamplingParams = sampling_params_list[next_stage_id]
 
                 # Check if we have a connector for this edge
