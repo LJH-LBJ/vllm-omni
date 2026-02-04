@@ -182,22 +182,29 @@ def record_transfer_rx(
 
 def record_audio_generated_frames(
     metrics: OrchestratorAggregator,
+    output_to_yield: Any,
+    finished: bool,
     stage_id: int,
-    request_id: Any,
-    nframes: int,
+    request_id: str,
 ) -> None:
-    stage_events_for_req = metrics.stage_events.get(request_id, [])
-    if stage_events_for_req:
-        for stage_event in stage_events_for_req:
-            if stage_event.stage_id == stage_id:
-                stage_event.audio_generated_frames += nframes
-                break
-    else:
-        logger.warning(
-            "Failed to record audio generated frames for request %s at stage %s: no stage event found",
-            request_id,
-            stage_id,
-        )
+    if (
+        output_to_yield.final_output_type == "audio"
+        and finished
+        and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
+    ):
+        nframes = int(multimodal_output[-1].shape[0])
+        stage_events_for_req = metrics.stage_events.get(request_id, [])
+        if stage_events_for_req:
+            for stage_event in stage_events_for_req:
+                if stage_event.stage_id == stage_id:
+                    stage_event.audio_generated_frames += nframes
+                    break
+        else:
+            logger.warning(
+                "Failed to record audio generated frames for request %s at stage %s: no stage event found",
+                request_id,
+                stage_id,
+            )
 
 
 def log_request_stats(
@@ -315,9 +322,11 @@ class OrchestratorAggregator:
         num_stages: int,
         log_stats: bool,
         wall_start_ts: float,
+        final_stage_id_for_e2e: dict[str, int] | int,
     ) -> None:
         self.num_stages = int(num_stages)
         self.log_stats = bool(log_stats)
+        self.final_stage_id_for_e2e = final_stage_id_for_e2e
         self.init_run_state(wall_start_ts)
         self.stage_events: dict[str, list[StageRequestStats]] = {}
         self.transfer_events: dict[
@@ -483,17 +492,17 @@ class OrchestratorAggregator:
         if self.log_stats:
             log_request_stats(per_req_record, "request_level_metrics")
 
-    def build_and_log_summary(self, final_stage_id_to_prompt: dict[str, int] | int) -> dict[str, Any]:
+    def build_and_log_summary(self) -> dict[str, Any]:
         if not self.log_stats:
             return {}
         wall_time_ms = max(0.0, (self.last_finish_ts - self.wall_start_ts) * 1000.0)
         e2e_avg_req = (wall_time_ms / self.e2e_count) if self.e2e_count > 0 else 0.0
         e2e_avg_tok = (self.e2e_total_tokens * 1000.0 / wall_time_ms) if wall_time_ms > 0 else 0.0
 
-        if isinstance(final_stage_id_to_prompt, int):
-            final_stage_id_map: dict[str, int] = {"*": int(final_stage_id_to_prompt)}
+        if isinstance(self.final_stage_id_for_e2e, int):
+            final_stage_id_map: dict[str, int] = {"*": int(self.final_stage_id_for_e2e)}
         else:
-            final_stage_id_map = final_stage_id_to_prompt
+            final_stage_id_map = self.final_stage_id_for_e2e
 
         stage_wall_time_ms = [
             ((self.stage_last_ts[i] - self.stage_first_ts[i]) * 1000.0)

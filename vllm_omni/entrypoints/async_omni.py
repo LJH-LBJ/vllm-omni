@@ -350,7 +350,7 @@ class AsyncOmni(OmniBase):
 
                 logger.debug(f"[{self._name}] All requests completed")
                 # Summarize and print stats
-                metrics.build_and_log_summary(final_stage_id_for_e2e)
+                metrics.build_and_log_summary()
             except Exception as e:
                 logger.exception(f"[{self._name}] Request {request_id} Failed to finalized/build/log summary: {e}")
             finally:
@@ -403,14 +403,7 @@ class AsyncOmni(OmniBase):
                 all_stages_finished[stage_id] = finished
 
                 if output_to_yield:
-                    if (
-                        output_to_yield.final_output_type == "audio"
-                        and engine_outputs.finished
-                        and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
-                    ):
-                        req_id = result.get("request_id")
-                        nframes = int(multimodal_output[-1].shape[0])
-                        record_audio_generated_frames(metrics, stage_id, req_id, nframes)
+                    record_audio_generated_frames(metrics, output_to_yield, engine_outputs.finished, stage_id, request_id)
                     yield output_to_yield
 
     async def _process_sequential_results(
@@ -434,13 +427,7 @@ class AsyncOmni(OmniBase):
                     metrics,
                 )
                 if output_to_yield:
-                    if (
-                        output_to_yield.final_output_type == "audio"
-                        and engine_outputs.finished
-                        and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
-                    ):
-                        nframes = int(multimodal_output[-1].shape[0])
-                        record_audio_generated_frames(metrics, stage_id, request_id, nframes)
+                    record_audio_generated_frames(metrics, output_to_yield, engine_outputs.finished, stage_id, request_id)
                     yield output_to_yield
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]

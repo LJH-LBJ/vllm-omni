@@ -673,6 +673,7 @@ class Omni(OmniBase):
             num_stages,
             self.log_stats,
             _wall_start_ts,
+            final_stage_id_to_prompt,
         )
 
         it = request_id_to_prompt.items()
@@ -761,20 +762,6 @@ class Omni(OmniBase):
                                     metrics.diffusion_metrics[req_id][key] += value
 
                         metrics.on_stage_metrics(stage_id, req_id, _m)
-
-                        # Handle audio output metrics
-                        if stage.final_output_type == "audio":
-                            engine_output = (
-                                engine_outputs[0]
-                                if isinstance(engine_outputs, list) and engine_outputs
-                                else engine_outputs
-                            )
-                            multimodal_output = (
-                                getattr(engine_output, "multimodal_output", {}).get("audio") if engine_output else None
-                            )
-                            if multimodal_output is not None and hasattr(multimodal_output[-1], "shape"):
-                                nframes = int(multimodal_output[-1].shape[0])
-                                record_audio_generated_frames(metrics, stage_id, req_id, nframes)
                         if pbar:
                             elapsed = pbar.format_dict["elapsed"] or 1e-6
                             # Aggregate total tokens/images across all stages
@@ -822,11 +809,24 @@ class Omni(OmniBase):
                         logger.exception(
                             f"[{self._name}] Finalize request handling error for req {req_id} at stage {stage_id}: {e}",
                         )
-                    yield OmniRequestOutput(
+                    output_to_yield = OmniRequestOutput(
                         stage_id=stage_id,
                         final_output_type=stage.final_output_type,  # type: ignore[attr-defined]
                         request_output=engine_outputs,
                     )
+                    
+                    # Record audio generated frames with unified signature
+                    try:
+                        finished = engine_outputs.finished if hasattr(engine_outputs, 'finished') else (
+                            engine_outputs[0].finished if isinstance(engine_outputs, list) and engine_outputs and hasattr(engine_outputs[0], 'finished') else False
+                        )
+                        record_audio_generated_frames(metrics, output_to_yield, finished, stage_id, req_id)
+                    except Exception as e:
+                        logger.exception(
+                            f"[{self._name}] Failed to record audio metrics for req {req_id} at stage {stage_id}: {e}",
+                        )
+                    
+                    yield output_to_yield
 
                 next_stage_id = stage_id + 1
                 if next_stage_id <= final_stage_id_to_prompt[req_id]:
@@ -890,7 +890,7 @@ class Omni(OmniBase):
 
         # Summarize and print stats
         try:
-            metrics.build_and_log_summary(final_stage_id_to_prompt)
+            metrics.build_and_log_summary()
         except Exception as e:
             logger.exception(f"[{self._name}] Failed to build/log summary: {e}")
 
