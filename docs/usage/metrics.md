@@ -53,7 +53,7 @@ With `--log-stats` enabled, the server will output detailed metrics logs after e
 | batch_size             | 1      | 1      | 1      |
 | num_tokens_in          | 4,860  | 4,826  | 4,384  |
 | num_tokens_out         | 67     | 275    | 0      |
-| preprocess_time_ms     | 256.158| 0.491  | 0.000  |
+| postprocess_time_ms    | 256.158| 0.491  | 0.000  |
 | stage_gen_time_ms      | 9,910.007|30,379.198|160.745|
 
 #### TransferEdgeStats
@@ -107,11 +107,11 @@ You can use these logs to monitor system health, debug performance, and analyze 
 | `batch_size`              | Batch size.                                                                                     |
 | `num_tokens_in`           | Input tokens to the stage.                                                                      |
 | `num_tokens_out`          | Output tokens from the stage.                                                                   |
-| `preprocess_time_ms`      | Preprocessing time in ms.                                                                       |
-| `stage_gen_time_ms`       | Stage compute time in ms, excluding preprocessing time (reported separately as `preprocess_time_ms` and `postprocessing_time_ms`). |
+| `postprocess_time_ms`      | Postprocessing time in ms.                                                                       |
+| `stage_gen_time_ms`       | Stage compute time in ms, excluding postprocessing time (reported separately as `postprocess_time_ms`). |
 | `image_num`               | Number of images generated (for diffusion/image stages).                                        |
 | `resolution`              | Image resolution (for diffusion/image stages).                                                                  |
-| `postprocessing_time_ms` | Diffusion/image: post-processing time in ms.                                                    |
+| `postprocess_time_ms` | Diffusion/image: post-processing time in ms.                                                    |
 | `trajectory_timesteps`    | Diffusion/image: trajectory timesteps, if available.                                            |
 
 ---

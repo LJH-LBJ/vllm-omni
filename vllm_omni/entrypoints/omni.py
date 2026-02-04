@@ -40,7 +40,7 @@ from vllm_omni.entrypoints.utils import (
     resolve_model_config_path,
 )
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniPromptType, OmniSamplingParams
-from vllm_omni.metrics import OrchestratorAggregator, record_audio_generated_frames
+from vllm_omni.metrics import OrchestratorAggregator, StageRequestStats
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -740,12 +740,10 @@ class Omni(OmniBase):
                 # Mark last output time for this stage whenever we receive outputs
                 metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
                 try:
-                    _m = result.get("metrics")
+                    _m: StageRequestStats = result.get("metrics")
                     if _m is not None:
-                        if not isinstance(_m, dict):
-                            _m = asdict(_m)
                         # Accumulate generation time
-                        metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.get("stage_gen_time_ms", 0.0)
+                        metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.stage_gen_time_ms
 
                         # For diffusion stages, we also accumulate diffusion time
                         metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
@@ -817,7 +815,7 @@ class Omni(OmniBase):
                                 else False
                             )
                         )
-                        record_audio_generated_frames(metrics, output_to_yield, finished, stage_id, req_id)
+                        metrics.record_audio_generated_frames(output_to_yield, finished, stage_id, req_id)
                     except Exception as e:
                         logger.exception(
                             f"[{self._name}] Failed to record audio metrics for req {req_id} at stage {stage_id}: {e}",

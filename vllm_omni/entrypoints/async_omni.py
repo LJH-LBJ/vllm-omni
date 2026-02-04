@@ -33,7 +33,7 @@ from vllm_omni.inputs.data import OmniPromptType, OmniSamplingParams
 
 # Internal imports (our code)
 from vllm_omni.lora.request import LoRARequest
-from vllm_omni.metrics import OrchestratorAggregator, record_audio_generated_frames
+from vllm_omni.metrics import OrchestratorAggregator, StageRequestStats
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
@@ -402,8 +402,8 @@ class AsyncOmni(OmniBase):
                 all_stages_finished[stage_id] = finished
 
                 if output_to_yield:
-                    record_audio_generated_frames(
-                        metrics, output_to_yield, engine_outputs.finished, stage_id, request_id
+                    metrics.record_audio_generated_frames(
+                        output_to_yield, engine_outputs.finished, stage_id, request_id
                     )
                     yield output_to_yield
 
@@ -428,8 +428,8 @@ class AsyncOmni(OmniBase):
                     metrics,
                 )
                 if output_to_yield:
-                    record_audio_generated_frames(
-                        metrics, output_to_yield, engine_outputs.finished, stage_id, request_id
+                    metrics.record_audio_generated_frames(
+                        output_to_yield, engine_outputs.finished, stage_id, request_id
                     )
                     yield output_to_yield
             if not isinstance(engine_outputs, list):
@@ -439,8 +439,8 @@ class AsyncOmni(OmniBase):
             next_stage_id = stage_id + 1
             if next_stage_id <= final_stage_id_for_e2e:
                 next_stage: OmniStage = self.stage_list[next_stage_id]
-                # Derive inputs for the next stage, record preprocess time
-                with metrics.stage_preprocess_timer(stage_id, request_id):
+                # Derive inputs for the next stage, record postprocess time
+                with metrics.stage_postprocess_timer(stage_id, request_id):
                     next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
                 sp_next: SamplingParams = sampling_params_list[next_stage_id]
 
@@ -508,13 +508,16 @@ class AsyncOmni(OmniBase):
         metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
 
         try:
-            _m = asdict(result.get("metrics"))
-            # stage_gen_time_ms is the time of generating every chunk in this stage
-            metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.get("stage_gen_time_ms", 0.0)
-            # For diffusion stages, we also accumulate diffusion time
-            metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
-            if _m is not None and finished:
-                metrics.on_stage_metrics(stage_id, req_id, _m)
+            _m: StageRequestStats = result.get("metrics")
+            if _m is not None:
+                # Accumulate generation time
+                metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.stage_gen_time_ms
+
+                # For diffusion stages, we also accumulate diffusion time
+                metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
+
+                if finished:
+                    metrics.on_stage_metrics(stage_id, req_id, _m)
         except Exception as e:
             logger.exception(
                 f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
