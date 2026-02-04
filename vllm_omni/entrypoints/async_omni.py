@@ -298,7 +298,7 @@ class AsyncOmni(OmniBase):
             metrics = OrchestratorAggregator(
                 num_stages=num_stages,
                 log_stats=self.log_stats,
-                wall_start_ts=_wall_start_ts,  # will be reset at generate() time, just a placeholder here
+                wall_start_ts=_wall_start_ts,
             )
             req_state = ClientRequestState(request_id)
             req_state.metrics = metrics
