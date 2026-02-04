@@ -747,19 +747,8 @@ class Omni(OmniBase):
                         # Accumulate generation time
                         metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.get("stage_gen_time_ms", 0.0)
 
-                        # Handle diffusion stage metrics
-                        if stage.stage_type == "diffusion":
-                            engine_output = (
-                                engine_outputs[0]
-                                if isinstance(engine_outputs, list) and engine_outputs
-                                else engine_outputs
-                            )
-                            diffusion_time = getattr(engine_output, "metrics", None)
-                            if isinstance(diffusion_time, list):
-                                diffusion_time = diffusion_time[0] if diffusion_time else None
-                            if isinstance(diffusion_time, dict):
-                                for key, value in diffusion_time.items():
-                                    metrics.diffusion_metrics[req_id][key] += value
+                        # For diffusion stages, we also accumulate diffusion time
+                        metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
 
                         metrics.on_stage_metrics(stage_id, req_id, _m)
                         if pbar:
@@ -840,10 +829,8 @@ class Omni(OmniBase):
                     next_stage: OmniStage = self.stage_list[next_stage_id]
                     try:
                         # Derive inputs for the next stage, record preprocess time
-                        _prep_t0 = time.perf_counter()
-                        next_inputs = next_stage.process_engine_inputs(self.stage_list, [request_id_to_prompt[req_id]])
-                        _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0
-                        metrics.record_stage_preprocess_time(stage_id, req_id, _prep_ms)
+                        with metrics.stage_preprocess_timer(stage_id, req_id):
+                            next_inputs = next_stage.process_engine_inputs(self.stage_list, [request_id_to_prompt[req_id]])
                     except Exception as e:
                         logger.exception(
                             f"[{self._name}] Process engine inputs error for req {req_id}"

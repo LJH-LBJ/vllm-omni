@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pprint import pformat
 from typing import Any
@@ -424,6 +425,44 @@ class OrchestratorAggregator:
                 req_id,
                 stage_id,
             )
+
+    @contextmanager
+    def stage_preprocess_timer(self, stage_id: int, req_id: Any):
+        """Context manager for measuring and recording stage preprocessing time.
+        
+        Usage:
+            with metrics.stage_preprocess_timer(stage_id, request_id):
+                next_inputs = next_stage.process_engine_inputs(...)
+        """
+        _t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            _prep_ms = (time.perf_counter() - _t0) * 1000.0
+            self.record_stage_preprocess_time(stage_id, req_id, _prep_ms)
+
+    def accumulate_diffusion_metrics(self, stage_type: str, req_id: Any, engine_outputs: Any) -> None:
+        """Accumulate diffusion metrics for a request.
+        
+        Handles extraction and accumulation of diffusion stage metrics.
+        
+        Args:
+            req_id: Request ID
+            engine_outputs: Engine output object containing metrics
+        """
+        if stage_type != "diffusion":
+            return
+        engine_output = (
+            engine_outputs[0]
+            if isinstance(engine_outputs, list) and engine_outputs
+            else engine_outputs
+        )
+        diffusion_metrics: dict = getattr(engine_output, "metrics", {})
+        if isinstance(diffusion_metrics, list):
+            diffusion_metrics = diffusion_metrics[0]
+        if diffusion_metrics:
+            for key, value in diffusion_metrics.items():
+                self.diffusion_metrics[req_id][key] += value
 
     def on_forward(
         self,

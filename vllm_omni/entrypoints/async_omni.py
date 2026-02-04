@@ -440,10 +440,8 @@ class AsyncOmni(OmniBase):
             if next_stage_id <= final_stage_id_for_e2e:
                 next_stage: OmniStage = self.stage_list[next_stage_id]
                 # Derive inputs for the next stage, record preprocess time
-                _prep_t0 = time.perf_counter()
-                next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
-                _prep_ms = (time.perf_counter() - _prep_t0) * 1000.0
-                metrics.record_stage_preprocess_time(stage_id, request_id, _prep_ms)
+                with metrics.stage_preprocess_timer(stage_id, request_id):
+                    next_inputs = next_stage.process_engine_inputs(self.stage_list, prompt)
                 sp_next: SamplingParams = sampling_params_list[next_stage_id]
 
                 # Check if we have a connector for this edge
@@ -513,13 +511,8 @@ class AsyncOmni(OmniBase):
             _m = asdict(result.get("metrics"))
             # stage_gen_time_ms is the time of generating every chunk in this stage
             metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.get("stage_gen_time_ms", 0.0)
-            if stage.stage_type == "diffusion":
-                # For diffusion stages, we also accumulate diffusion time
-                diffusion_metrics: dict = getattr(engine_outputs, "metrics", {})
-                if isinstance(diffusion_metrics, list):
-                    diffusion_metrics = diffusion_metrics[0]
-                for key, value in diffusion_metrics.items():
-                    metrics.diffusion_metrics[req_id][key] += value
+            # For diffusion stages, we also accumulate diffusion time
+            metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
             if _m is not None and finished:
                 metrics.on_stage_metrics(stage_id, req_id, _m)
         except Exception as e:
