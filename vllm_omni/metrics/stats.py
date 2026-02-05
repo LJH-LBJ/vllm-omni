@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pprint import pformat
 from typing import Any
 
@@ -38,7 +38,7 @@ class StageRequestStats:
     stage_stats: StageStats
     stage_id: int | None = None
     request_id: str | None = None
-    preprocess_time_ms: float = 0.0
+    postprocess_time_ms: float = 0.0
     diffusion_metrics: dict[str, int] = None
     audio_generated_frames: int = 0
 
@@ -134,189 +134,6 @@ def _get_or_create_transfer_event(
     return evt
 
 
-def record_transfer_tx(
-    transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
-    from_stage: int,
-    to_stage: int,
-    request_id: Any,
-    size_bytes: int,
-    tx_time_ms: float,
-    used_shm: bool,
-) -> TransferEdgeStats | None:
-    try:
-        evt = _get_or_create_transfer_event(
-            transfer_events,
-            int(from_stage),
-            int(to_stage),
-            str(request_id),
-        )
-        # Accumulate tx metrics
-        evt.size_bytes += int(size_bytes)
-        evt.tx_time_ms += float(tx_time_ms)
-        evt.used_shm = evt.used_shm or bool(used_shm)
-        return evt
-    except Exception:
-        return None
-
-
-def record_transfer_rx(
-    transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
-    stats: StageRequestStats,
-) -> TransferEdgeStats | None:
-    try:
-        if stats.stage_id is None or stats.stage_id <= 0:
-            return None
-        from_stage = int(stats.stage_id) - 1
-        to_stage = int(stats.stage_id)
-        rid_key = str(stats.request_id)
-        evt = _get_or_create_transfer_event(transfer_events, from_stage, to_stage, rid_key)
-        # Accumulate rx metrics
-        if evt.size_bytes == 0:
-            # size_bytes has been recorded in tx phase
-            evt.size_bytes = int(stats.rx_transfer_bytes)
-        evt.rx_decode_time_ms += float(stats.rx_decode_time_ms)
-        evt.in_flight_time_ms += float(stats.rx_in_flight_time_ms)
-        return evt
-    except Exception:
-        return None
-
-
-def record_audio_generated_frames(
-    metrics: OrchestratorAggregator,
-    output_to_yield: Any,
-    finished: bool,
-    stage_id: int,
-    request_id: str,
-) -> None:
-    if (
-        output_to_yield.final_output_type == "audio"
-        and finished
-        and (multimodal_output := output_to_yield.multimodal_output.get("audio")) is not None
-    ):
-        nframes = int(multimodal_output[-1].shape[0])
-        stage_events_for_req = metrics.stage_events.get(request_id, [])
-        if stage_events_for_req:
-            for stage_event in stage_events_for_req:
-                if stage_event.stage_id == stage_id:
-                    stage_event.audio_generated_frames += nframes
-                    break
-        else:
-            logger.warning(
-                "Failed to record audio generated frames for request %s at stage %s: no stage event found",
-                request_id,
-                stage_id,
-            )
-
-
-def log_request_stats(
-    stats: StageRequestStats | TransferEdgeStats | RequestE2EStats, stats_type: str, **kwargs
-) -> None:
-    if stats_type == "stage_stats":
-        logger.info(
-            pformat(
-                {
-                    "type": stats_type,
-                    "stage_id": stats.stage_id,
-                    "request_id": stats.request_id,
-                    "batch_size": int(stats.batch_size),
-                    "num_tokens_out": int(stats.num_tokens_out),
-                    "stage_gen_time_ms": float(stats.stage_gen_time_ms),
-                    "tokens_per_s": float(stats.tokens_per_s),
-                    "rx_transfer_bytes": int(stats.rx_transfer_bytes),
-                    "rx_decode_time_ms": float(stats.rx_decode_time_ms),
-                    "rx_mbps": float(stats.rx_mbps),
-                },
-                sort_dicts=False,
-            )
-        )
-    if stats_type == "transfer_tx_stats":
-        logger.info(
-            pformat(
-                {
-                    "type": stats_type,
-                    "from_stage": stats.from_stage,
-                    "to_stage": stats.to_stage,
-                    "request_id": stats.request_id,
-                    "size_bytes": int(stats.size_bytes),
-                    "tx_time_ms": float(stats.tx_time_ms),
-                    "tx_mbps": (float(stats.size_bytes) * 8.0) / (max(stats.tx_time_ms, 1e-6) * 1000.0),
-                    "used_shm": bool(stats.used_shm),
-                },
-                sort_dicts=False,
-            )
-        )
-    if stats_type == "transfer_rx_stats":
-        logger.info(
-            pformat(
-                {
-                    "type": stats_type,
-                    "from_stage": stats.stage_id - 1,
-                    "to_stage": stats.stage_id,
-                    "request_id": stats.request_id,
-                    "rx_bytes": int(stats.rx_transfer_bytes),
-                    "rx_decode_time_ms": float(stats.rx_decode_time_ms),
-                    "in_flight_time_ms": float(stats.rx_in_flight_time_ms),
-                    "rx_time_per_kb_ms": (
-                        (float(stats.rx_decode_time_ms) / max(float(stats.rx_transfer_bytes) / 1024.0, 1e-6))
-                        if stats.rx_transfer_bytes > 0
-                        else 0.0
-                    ),
-                },
-                sort_dicts=False,
-            )
-        )
-    if stats_type == "transfer_total_stats":
-        logger.info(
-            pformat(
-                {
-                    "type": stats_type,
-                    "from_stage": stats.stage_id - 1,
-                    "to_stage": stats.stage_id,
-                    "request_id": stats.request_id,
-                    "size_bytes": int(kwargs.get("size_bytes", 0)),
-                    "tx_time_ms": float(kwargs.get("tx_time_ms", 0.0)),
-                    "in_flight_time_ms": stats.rx_in_flight_time_ms,
-                    "rx_decode_time_ms": stats.rx_decode_time_ms,
-                    "total_time_ms": float(kwargs.get("total_time_ms", 0.0)),
-                    "total_time_per_kb_ms": (
-                        float(kwargs.get("total_time_ms", 0.0)) / max(float(kwargs.get("size_bytes", 0)) / 1024.0, 1e-6)
-                        if kwargs.get("size_bytes", 0) > 0
-                        else 0.0
-                    ),
-                },
-                sort_dicts=False,
-            )
-        )
-    if stats_type == "request_level_metrics":
-        logger.info(
-            pformat(
-                {
-                    "type": stats_type,
-                    "request_id": stats.request_id,
-                    "e2e_time_ms": stats.e2e_total_ms,
-                    "e2e_tpt": (stats.e2e_total_ms / stats.e2e_total_tokens) if stats.e2e_total_tokens > 0 else 0.0,
-                    "e2e_total_tokens": stats.e2e_total_tokens,
-                    "transfers_total_time_ms": float(stats.transfers_total_time_ms),
-                    "transfers_total_bytes": int(stats.transfers_total_bytes),
-                },
-                sort_dicts=False,
-            )
-        )
-    if stats_type == "stage_running_avg":
-        logger.info(
-            pformat(
-                {
-                    "type": stats_type,
-                    "stage_id": stats.stage_id,
-                    "total_tokens": stats.stage_stats.total_token,
-                    "total_gen_time_ms": stats.stage_stats.total_gen_time_ms,
-                    "avg_tokens_per_s": stats.stage_stats.avg_tokens_per_s,
-                },
-                sort_dicts=False,
-            )
-        )
-
-
 class OrchestratorAggregator:
     def __init__(
         self,
@@ -353,93 +170,146 @@ class OrchestratorAggregator:
             lambda: defaultdict(float)
         )  # {request_id: {diffusion_metrics_key: accumulated_metrics_data}}
 
-    def _as_stage_request_stats(
-        self, stage_id: int, req_id: str, metrics: StageRequestStats | dict[str, Any]
-    ) -> StageRequestStats:
-        "Convert dict to StageRequestStats if needed."
-        if isinstance(metrics, StageRequestStats):
-            stats = metrics
-            stats.stage_id = stage_id
-            stats.request_id = req_id
-            return stats
-        else:
-            stage_stats = None
-            if "stage_stats" in metrics:
-                ss = metrics["stage_stats"]
-                if ss is not None:
-                    stage_stats = StageStats(
-                        total_token=int(ss.get("total_token", 0)),
-                        total_gen_time_ms=float(ss.get("total_gen_time_ms", 0.0)),
-                    )
-                else:
-                    stage_stats = None
-            return StageRequestStats(
-                stage_id=stage_id,
-                request_id=req_id,
-                num_tokens_in=int(metrics.get("num_tokens_in", 0)),
-                num_tokens_out=int(metrics.get("num_tokens_out", 0)),
-                batch_id=metrics.get("batch_id", -1),
-                batch_size=metrics.get("batch_size"),
-                stage_gen_time_ms=self.accumulated_gen_time_ms.pop(req_id, defaultdict(float)).pop(stage_id, 0.0),
-                rx_transfer_bytes=int(metrics.get("rx_transfer_bytes")) if stage_id > 0 else 0,
-                rx_decode_time_ms=metrics.get("rx_decode_time_ms") if stage_id > 0 else 0.0,
-                rx_in_flight_time_ms=metrics.get("rx_in_flight_time_ms", 0.0) if stage_id > 0 else 0.0,
-                stage_stats=stage_stats,
-                diffusion_metrics={k: int(v) for k, v in self.diffusion_metrics.pop(req_id, {}).items()}
-                if req_id in self.diffusion_metrics
-                else None,
+    def record_transfer_tx(
+        self,
+        from_stage: int,
+        to_stage: int,
+        request_id: Any,
+        size_bytes: int,
+        tx_time_ms: float,
+        used_shm: bool,
+    ) -> TransferEdgeStats | None:
+        try:
+            evt = _get_or_create_transfer_event(
+                self.transfer_events,
+                int(from_stage),
+                int(to_stage),
+                str(request_id),
             )
+            # Accumulate tx metrics
+            evt.size_bytes += int(size_bytes)
+            evt.tx_time_ms += float(tx_time_ms)
+            evt.used_shm = evt.used_shm or bool(used_shm)
+            return evt
+        except Exception:
+            return None
 
-    def on_stage_metrics(self, stage_id: int, req_id: Any, metrics: StageRequestStats | dict[str, Any]) -> None:
+    def record_transfer_rx(
+        self,
+        stats: StageRequestStats,
+    ) -> TransferEdgeStats | None:
+        try:
+            if stats.stage_id is None or stats.stage_id <= 0:
+                return None
+            from_stage = int(stats.stage_id) - 1
+            to_stage = int(stats.stage_id)
+            rid_key = str(stats.request_id)
+            evt = _get_or_create_transfer_event(self.transfer_events, from_stage, to_stage, rid_key)
+            # Accumulate rx metrics
+            if evt.size_bytes == 0:
+                # size_bytes has been recorded in tx phase
+                evt.size_bytes = int(stats.rx_transfer_bytes)
+            evt.rx_decode_time_ms += float(stats.rx_decode_time_ms)
+            evt.in_flight_time_ms += float(stats.rx_in_flight_time_ms)
+            return evt
+        except Exception:
+            return None
+
+    def record_audio_generated_frames(
+        self,
+        output_to_yield: Any,
+        finished: bool,
+        stage_id: int,
+        request_id: str,
+    ) -> None:
+        if (
+            output_to_yield.final_output_type == "audio"
+            and finished
+            and (multimodal_output := output_to_yield.request_output.multimodal_output["audio"]) is not None
+        ):
+            nframes = int(multimodal_output[-1].shape[0])
+            stage_events_for_req = self.stage_events.get(request_id, [])
+            if stage_events_for_req:
+                for stage_event in stage_events_for_req:
+                    if stage_event.stage_id == stage_id:
+                        stage_event.audio_generated_frames += nframes
+                        break
+            else:
+                logger.warning(
+                    "Failed to record audio generated frames for request %s at stage %s: no stage event found",
+                    request_id,
+                    stage_id,
+                )
+
+    @staticmethod
+    def log_request_stats(
+        stats: StageRequestStats | TransferEdgeStats | RequestE2EStats,
+        stats_type: str,
+    ) -> None:
+        """Log stats dataclass as dict."""
+        logger.info(
+            pformat(
+                {"type": stats_type, **asdict(stats)},
+                sort_dicts=False,
+            )
+        )
+
+    def _as_stage_request_stats(self, stage_id: int, req_id: str, metrics: StageRequestStats) -> StageRequestStats:
+        "Convert dict to StageRequestStats if needed."
+        stats = metrics
+        stats.stage_id = stage_id
+        stats.request_id = req_id
+        stats.diffusion_metrics = (
+            {k: int(v) for k, v in self.diffusion_metrics.pop(req_id, {}).items()}
+            if req_id in self.diffusion_metrics
+            else None
+        )
+        return stats
+
+    def on_stage_metrics(self, stage_id: int, req_id: Any, metrics: StageRequestStats) -> None:
         stats = self._as_stage_request_stats(stage_id, req_id, metrics)
         self.stage_total_tokens[stats.stage_id] += int(stats.num_tokens_out)
         if stats.stage_id == 0:
             self.stage_total_tokens[stats.stage_id] += int(stats.num_tokens_in)
         self.stage_events.setdefault(str(stats.request_id), []).append(stats)
         if self.log_stats:
-            log_request_stats(stats, "stage_stats")
+            self.log_request_stats(stats, "stage_stats")
             if stats.stage_stats is not None:
-                log_request_stats(stats, "stage_running_avg")
+                self.log_request_stats(stats, "stage_running_avg")
 
-        evt = record_transfer_rx(self.transfer_events, stats)
+        evt = self.record_transfer_rx(stats)
         if self.log_stats and stats.stage_id is not None and stats.stage_id > 0:
-            log_request_stats(stats, "transfer_rx_stats")
+            self.log_request_stats(stats, "transfer_rx_stats")
             if evt is not None and (evt.tx_time_ms > 0.0 or evt.size_bytes > 0):
-                log_request_stats(
-                    stats,
-                    "transfer_total_stats",
-                    size_bytes=int(evt.size_bytes),
-                    tx_time_ms=float(evt.tx_time_ms),
-                    total_time_ms=float(evt.total_time_ms),
-                )
+                self.log_request_stats(evt, "transfer_total_stats")
 
-    def record_stage_preprocess_time(self, stage_id: int, req_id: Any, prep_time_ms: float) -> None:
+    def record_stage_postprocess_time(self, stage_id: int, req_id: Any, postproc_time_ms: float) -> None:
         if req_id in self.stage_events:
             for stats in self.stage_events[req_id]:
                 if stats.stage_id == stage_id:
-                    stats.preprocess_time_ms = float(prep_time_ms)
+                    stats.postprocess_time_ms = float(postproc_time_ms)
                     break
         else:
             logger.warning(
-                "Failed to record preprocess time for request %s at stage %s: no stage event found",
+                "Failed to record postprocess time for request %s at stage %s: no stage event found",
                 req_id,
                 stage_id,
             )
 
     @contextmanager
-    def stage_preprocess_timer(self, stage_id: int, req_id: Any):
-        """Context manager for measuring and recording stage preprocessing time.
+    def stage_postprocess_timer(self, stage_id: int, req_id: Any):
+        """Context manager for measuring and recording stage postprocessing time.
 
         Usage:
-            with metrics.stage_preprocess_timer(stage_id, request_id):
+            with metrics.stage_postprocess_timer(stage_id, request_id):
                 next_inputs = next_stage.process_engine_inputs(...)
         """
         _t0 = time.perf_counter()
         try:
             yield
         finally:
-            _prep_ms = (time.perf_counter() - _t0) * 1000.0
-            self.record_stage_preprocess_time(stage_id, req_id, _prep_ms)
+            _postproc_ms = (time.perf_counter() - _t0) * 1000.0
+            self.record_stage_postprocess_time(stage_id, req_id, _postproc_ms)
 
     def accumulate_diffusion_metrics(self, stage_type: str, req_id: Any, engine_outputs: Any) -> None:
         """Accumulate diffusion metrics for a request.
@@ -472,8 +342,7 @@ class OrchestratorAggregator:
         # Mark first input time for the destination stage if not set
         if self.stage_first_ts[to_stage] is None:
             self.stage_first_ts[to_stage] = time.time()
-        evt = record_transfer_tx(
-            self.transfer_events,
+        evt = self.record_transfer_tx(
             from_stage=from_stage,
             to_stage=to_stage,
             request_id=req_id,
@@ -482,7 +351,7 @@ class OrchestratorAggregator:
             used_shm=used_shm,
         )
         if self.log_stats and evt is not None:
-            log_request_stats(evt, "transfer_tx_stats")
+            self.log_request_stats(evt, "transfer_tx_stats")
 
     def on_finalize_request(
         self,
@@ -527,7 +396,7 @@ class OrchestratorAggregator:
         )
         self.e2e_events.append(per_req_record)
         if self.log_stats:
-            log_request_stats(per_req_record, "request_level_metrics")
+            self.log_request_stats(per_req_record, "request_level_metrics")
 
     def build_and_log_summary(self) -> dict[str, Any]:
         if not self.log_stats:
@@ -605,12 +474,12 @@ class OrchestratorAggregator:
                 self.stage_events.get(rid, []),
                 key=lambda e: e.stage_id if e.stage_id is not None else -1,
             )
-            # if any stage has diffusion_metrics, remove preprocess_time_ms field
+            # if any stage has diffusion_metrics, remove postprocess_time_ms field
             # because it is already included in diffusion_metrics
             local_exclude = STAGE_EXCLUDE.copy()
             has_diffusion_metrics = any(getattr(evt, "diffusion_metrics", None) for evt in stage_evts)
             if has_diffusion_metrics:
-                local_exclude.add("preprocess_time_ms")
+                local_exclude.add("postprocess_time_ms")
             local_stage_fields = _build_field_defs(StageRequestStats, local_exclude, FIELD_TRANSFORMS)
 
             # if diffusion_metrics is present, expand it into multiple columns
