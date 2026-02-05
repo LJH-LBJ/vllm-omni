@@ -299,6 +299,7 @@ class AsyncOmni(OmniBase):
                 num_stages=num_stages,
                 log_stats=self.log_stats,
                 wall_start_ts=_wall_start_ts,
+                final_stage_id_for_e2e=final_stage_id_for_e2e,
             )
             req_state = ClientRequestState(request_id)
             req_state.metrics = metrics
