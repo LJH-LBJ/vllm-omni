@@ -826,7 +826,7 @@ class Omni(OmniBase):
                     next_stage: OmniStage = self.stage_list[next_stage_id]
                     try:
                         # Derive inputs for the next stage, record preprocess time
-                        with metrics.stage_preprocess_timer(stage_id, req_id):
+                        with metrics.stage_postprocess_timer(stage_id, req_id):
                             next_inputs = next_stage.process_engine_inputs(
                                 self.stage_list, [request_id_to_prompt[req_id]]
                             )
