@@ -1679,12 +1679,9 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         # OMNI: Access multimodal_output from CompletionOutput (outputs[0]), not from RequestOutput
         # Reference: examples/offline_inference/qwen3_omni/end2end.py line 421
         audio_data = final_res.outputs[0].multimodal_output.get("audio")
-        if stream:
-            audio_tensor = audio_data[-1].float().detach().cpu().numpy()
-        else:
-            if isinstance(audio_data, list):
-                audio_data = torch.cat(audio_data, dim=-1)
-            audio_tensor = audio_data.float().detach().cpu().numpy()
+        if isinstance(audio_data, list):
+            audio_data = torch.cat(audio_data, dim=-1)
+        audio_tensor = audio_data.float().detach().cpu().numpy()
 
         # Ensure audio is 1D (flatten if needed)
         if audio_tensor.ndim > 1:
