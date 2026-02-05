@@ -129,11 +129,7 @@ class OmniRequestOutput:
         """
         if self.request_output is not None:
             outputs = getattr(self.request_output, "outputs", None)
-            if (
-                isinstance(outputs, list)
-                and len(outputs) > 0
-                and hasattr(outputs[0], "multimodal_output")
-            ):
+            if isinstance(outputs, list) and len(outputs) > 0 and hasattr(outputs[0], "multimodal_output"):
                 return getattr(outputs[0], "multimodal_output", {})
         return self._multimodal_output
 
