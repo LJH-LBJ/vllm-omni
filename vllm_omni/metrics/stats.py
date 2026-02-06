@@ -37,6 +37,7 @@ class StageRequestStats:
     rx_in_flight_time_ms: float
     stage_stats: StageStats
     stage_id: int | None = None
+    final_output_type: str | None = None
     request_id: str | None = None
     postprocess_time_ms: float = 0.0
     diffusion_metrics: dict[str, int] = None
@@ -100,6 +101,7 @@ STAGE_EXCLUDE = {
     "rx_transfer_bytes",
     "rx_decode_time_ms",
     "rx_in_flight_time_ms",
+    "final_output_type",
 }
 TRANSFER_EXCLUDE = {"from_stage", "to_stage", "request_id", "used_shm"}
 E2E_EXCLUDE = {"request_id"}
@@ -254,11 +256,18 @@ class OrchestratorAggregator:
             )
         )
 
-    def _as_stage_request_stats(self, stage_id: int, req_id: str, metrics: StageRequestStats) -> StageRequestStats:
+    def _as_stage_request_stats(
+        self,
+        stage_id: int,
+        req_id: str,
+        metrics: StageRequestStats,
+        final_output_type: str | None = None,
+    ) -> StageRequestStats:
         "Convert dict to StageRequestStats if needed."
         stats = metrics
         stats.stage_id = stage_id
         stats.request_id = req_id
+        stats.final_output_type = final_output_type
         stats.diffusion_metrics = (
             {k: int(v) for k, v in self.diffusion_metrics.pop(req_id, {}).items()}
             if req_id in self.diffusion_metrics
@@ -266,8 +275,14 @@ class OrchestratorAggregator:
         )
         return stats
 
-    def on_stage_metrics(self, stage_id: int, req_id: Any, metrics: StageRequestStats) -> None:
-        stats = self._as_stage_request_stats(stage_id, req_id, metrics)
+    def on_stage_metrics(
+        self,
+        stage_id: int,
+        req_id: Any,
+        metrics: StageRequestStats,
+        final_output_type: str | None = None,
+    ) -> None:
+        stats = self._as_stage_request_stats(stage_id, req_id, metrics, final_output_type)
         self.stage_total_tokens[stats.stage_id] += int(stats.num_tokens_out)
         if stats.stage_id == 0:
             self.stage_total_tokens[stats.stage_id] += int(stats.num_tokens_in)

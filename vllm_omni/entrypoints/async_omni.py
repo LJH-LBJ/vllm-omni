@@ -517,7 +517,7 @@ class AsyncOmni(OmniBase):
                 metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
 
                 if finished:
-                    metrics.on_stage_metrics(stage_id, req_id, _m)
+                    metrics.on_stage_metrics(stage_id, req_id, _m, stage.final_output_type)
         except Exception as e:
             logger.exception(
                 f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",

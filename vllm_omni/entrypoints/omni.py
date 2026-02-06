@@ -747,7 +747,7 @@ class Omni(OmniBase):
                         # For diffusion stages, we also accumulate diffusion time
                         metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
 
-                        metrics.on_stage_metrics(stage_id, req_id, _m)
+                        metrics.on_stage_metrics(stage_id, req_id, _m, stage.final_output_type)
                         if pbar:
                             elapsed = pbar.format_dict["elapsed"] or 1e-6
                             # Aggregate total tokens/images across all stages
