@@ -52,7 +52,7 @@ def test_orchestrator_aggregator_builds_summary() -> None:
     )
     agg.on_finalize_request(1, "r1", req_start_ts=0.0)
 
-    summary = agg.build_and_log_summary(final_stage_id_to_prompt={"r1": 1})
+    summary = agg.build_and_log_summary()
     overall = summary["overall_summary"]
     assert overall["e2e_requests"] == 1
 
@@ -80,7 +80,7 @@ def test_build_and_log_summary_e2e_only() -> None:
         )
     )
 
-    summary = agg.build_and_log_summary(final_stage_id_to_prompt=0)
+    summary = agg.build_and_log_summary()
     e2e_entry = _get_request_entry(summary["e2e_table"], "r")
     assert e2e_entry["e2e_total_tokens"] == 5
     stage_entry = _get_request_entry(summary["stage_table"], "r")
@@ -141,7 +141,7 @@ def test_build_and_log_summary_multiple_requests() -> None:
     )
     agg.on_finalize_request(0, "r2", req_start_ts=0.0)
 
-    summary = agg.build_and_log_summary(final_stage_id_to_prompt={"r1": 1, "r2": 0})
+    summary = agg.build_and_log_summary()
     assert len(summary["stage_table"]) == 2
     assert {entry["request_id"] for entry in summary["e2e_table"]} == {"r1", "r2"}
     # Check that r1 has two stages and r2 has one
