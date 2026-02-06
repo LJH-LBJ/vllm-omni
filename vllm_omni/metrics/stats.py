@@ -440,8 +440,8 @@ class OrchestratorAggregator:
             "e2e_avg_tokens_per_s": float(e2e_avg_tok),
         }
         # Add stage_wall_time_ms as separate fields for each stage
-        for idx, time in enumerate(stage_wall_time_ms):
-            overall_summary[f"e2e_stage_{idx}_wall_time_ms"] = time
+        for idx, wall_time in enumerate(stage_wall_time_ms):
+            overall_summary[f"e2e_stage_{idx}_wall_time_ms"] = wall_time
 
         # Print overall summary
         # filter out all-zero fields for logging
