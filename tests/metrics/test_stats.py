@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from vllm_omni.metrics import OrchestratorAggregator
-from vllm_omni.metrics.stats import RequestE2EStats
+from vllm_omni.metrics.stats import RequestE2EStats, StageRequestStats, StageStats
 
 
 def _get_request_entry(table: list[dict], request_id: str) -> dict:
@@ -12,38 +12,43 @@ def _get_request_entry(table: list[dict], request_id: str) -> dict:
 
 
 def test_orchestrator_aggregator_builds_summary() -> None:
-    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0)
+    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0, final_stage_id_for_e2e=1)
     agg.stage_first_ts[0] = 0.0
     agg.stage_last_ts[0] = 0.03
     agg.stage_first_ts[1] = 0.05
     agg.stage_last_ts[1] = 0.07
 
     agg.on_forward(0, 1, "r1", size_bytes=1024, tx_ms=5.0, used_shm=False)
+    
     agg.on_stage_metrics(
         0,
         "r1",
-        {
-            "num_tokens_in": 3,
-            "num_tokens_out": 3,
-            "stage_gen_time_ms": 30.0,
-            "batch_id": 1,
-            "batch_size": 1,
-            "rx_transfer_bytes": 0,
-            "rx_decode_time_ms": 0.0,
-        },
+        StageRequestStats(
+            batch_id=1,
+            batch_size=1,
+            num_tokens_in=3,
+            num_tokens_out=3,
+            stage_gen_time_ms=30.0,
+            rx_transfer_bytes=0,
+            rx_decode_time_ms=0.0,
+            rx_in_flight_time_ms=0.0,
+            stage_stats=StageStats(),
+        ),
     )
     agg.on_stage_metrics(
         1,
         "r1",
-        {
-            "num_tokens_out": 4,
-            "stage_gen_time_ms": 20.0,
-            "batch_id": 1,
-            "batch_size": 1,
-            "rx_transfer_bytes": 1024,
-            "rx_decode_time_ms": 5.0,
-            "rx_in_flight_time_ms": 2.0,
-        },
+        StageRequestStats(
+            batch_id=1,
+            batch_size=1,
+            num_tokens_in=0,
+            num_tokens_out=4,
+            stage_gen_time_ms=20.0,
+            rx_transfer_bytes=1024,
+            rx_decode_time_ms=5.0,
+            rx_in_flight_time_ms=2.0,
+            stage_stats=StageStats(),
+        ),
     )
     agg.on_finalize_request(1, "r1", req_start_ts=0.0)
 
@@ -64,7 +69,7 @@ def test_orchestrator_aggregator_builds_summary() -> None:
 
 
 def test_build_and_log_summary_e2e_only() -> None:
-    agg = OrchestratorAggregator(num_stages=1, log_stats=True, wall_start_ts=0.0)
+    agg = OrchestratorAggregator(num_stages=1, log_stats=True, wall_start_ts=0.0, final_stage_id_for_e2e=0)
     agg.e2e_events.append(
         RequestE2EStats(
             request_id="r",
@@ -83,36 +88,38 @@ def test_build_and_log_summary_e2e_only() -> None:
 
 
 def test_build_and_log_summary_multiple_requests() -> None:
-    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0)
+    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0, final_stage_id_for_e2e={"r1": 1, "r2": 0})
 
     # Request r1 goes through both stages
     agg.on_stage_metrics(
         0,
         "r1",
-        {
-            "num_tokens_in": 2,
-            "num_tokens_out": 4,
-            "batch_id": 1,
-            "batch_size": 1,
-            "stage_gen_time_ms": 10.0,
-            "rx_transfer_bytes": 0,
-            "rx_decode_time_ms": 0.0,
-            "rx_in_flight_time_ms": 0.0,
-        },
+        StageRequestStats(
+            batch_id=1,
+            batch_size=1,
+            num_tokens_in=2,
+            num_tokens_out=4,
+            stage_gen_time_ms=10.0,
+            rx_transfer_bytes=0,
+            rx_decode_time_ms=0.0,
+            rx_in_flight_time_ms=0.0,
+            stage_stats=StageStats(),
+        ),
     )
     agg.on_stage_metrics(
         1,
         "r1",
-        {
-            "num_tokens_in": 4,
-            "num_tokens_out": 5,
-            "batch_id": 1,
-            "batch_size": 1,
-            "stage_gen_time_ms": 8.0,
-            "rx_transfer_bytes": 0,
-            "rx_decode_time_ms": 0.0,
-            "rx_in_flight_time_ms": 0.0,
-        },
+        StageRequestStats(
+            batch_id=1,
+            batch_size=1,
+            num_tokens_in=4,
+            num_tokens_out=5,
+            stage_gen_time_ms=8.0,
+            rx_transfer_bytes=0,
+            rx_decode_time_ms=0.0,
+            rx_in_flight_time_ms=0.0,
+            stage_stats=StageStats(),
+        ),
     )
     agg.on_finalize_request(1, "r1", req_start_ts=0.0)
 
@@ -120,16 +127,17 @@ def test_build_and_log_summary_multiple_requests() -> None:
     agg.on_stage_metrics(
         0,
         "r2",
-        {
-            "num_tokens_in": 1,
-            "num_tokens_out": 2,
-            "batch_id": 2,
-            "batch_size": 1,
-            "stage_gen_time_ms": 12.0,
-            "rx_transfer_bytes": 0,
-            "rx_decode_time_ms": 0.0,
-            "rx_in_flight_time_ms": 0.0,
-        },
+        StageRequestStats(
+            batch_id=2,
+            batch_size=1,
+            num_tokens_in=1,
+            num_tokens_out=2,
+            stage_gen_time_ms=12.0,
+            rx_transfer_bytes=0,
+            rx_decode_time_ms=0.0,
+            rx_in_flight_time_ms=0.0,
+            stage_stats=StageStats(),
+        ),
     )
     agg.on_finalize_request(0, "r2", req_start_ts=0.0)
 
