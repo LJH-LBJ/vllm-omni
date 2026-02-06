@@ -33,7 +33,9 @@ With `--log-stats` enabled, the server will output detailed metrics logs after e
 | e2e_total_tokens            | 5,202        |
 | e2e_avg_time_per_request_ms | 41,299.190   |
 | e2e_avg_tokens_per_s        | 125.959      |
-| stage_wall_time_ms          | 10,192.289, 30,541.409, 207.496 |
+| e2e_stage_0_wall_time_ms    | 10,192.289   |
+| e2e_stage_1_wall_time_ms    | 30,541.409   |
+| e2e_stage_2_wall_time_ms    |    207.496   |
 
 #### RequestE2EStats
 
@@ -74,6 +76,15 @@ These logs include:
 
 You can use these logs to monitor system health, debug performance, and analyze request-level metrics as described above.
 
+
+## Metrics Scope: Offline vs Online Inference
+
+For **offline inference** (batch mode), the summary includes both system-level metrics (aggregated across all requests) and per-request metrics. In this case, `e2e_requests` can be greater than 1, reflecting multiple completed requests in a batch.
+
+For **online inference** (serving mode), the summary is always per-request. `e2e_requests` is always 1, and only request-level metrics are reported for each completion.
+
+---
+
 ## Parameter Details
 
 | Field                     | Meaning                                                                                       |
@@ -83,7 +94,7 @@ You can use these logs to monitor system health, debug performance, and analyze 
 | `e2e_total_tokens`        | Total tokens counted across all completed requests (stage0 input + all stage outputs).       |
 | `e2e_avg_time_per_request_ms` | Average wall time per request: `e2e_wall_time_ms / e2e_requests`.                        |
 | `e2e_avg_tokens_per_s`    | Average token throughput over wall time: `e2e_total_tokens * 1000 / e2e_wall_time_ms`.      |
-| `stage_wall_time_ms`      | Wall-clock time span for each stage, in ms (list format).                                   |
+| `e2e_stage_{i}_wall_time_ms` | Wall-clock time span for stage i, in ms. Each stage's wall time is reported as a separate field, e.g., `e2e_stage_0_wall_time_ms`, `e2e_stage_1_wall_time_ms`, etc. |
 
 ---
 
@@ -107,7 +118,6 @@ You can use these logs to monitor system health, debug performance, and analyze 
 | `batch_size`              | Batch size.                                                                                     |
 | `num_tokens_in`           | Input tokens to the stage.                                                                      |
 | `num_tokens_out`          | Output tokens from the stage.                                                                   |
-| `postprocess_time_ms`      | Postprocessing time in ms.                                                                       |
 | `stage_gen_time_ms`       | Stage compute time in ms, excluding postprocessing time (reported separately as `postprocess_time_ms`). |
 | `image_num`               | Number of images generated (for diffusion/image stages).                                        |
 | `resolution`              | Image resolution (for diffusion/image stages).                                                                  |
