@@ -1,5 +1,5 @@
 
-# Production Metrics:
+# Metrics vLLM-Omni:
 
 You can use these metrics in production to monitor the health and performance of the vLLM-omni system. Typical scenarios include:
 - **Performance Monitoring**: Track throughput (e.g., `e2e_avg_tokens_per_s`), latency (e.g., `e2e_total_ms`), and resource utilization to verify that the system meets expected standards.

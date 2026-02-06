@@ -423,8 +423,10 @@ class OrchestratorAggregator:
             "e2e_total_tokens": int(self.e2e_total_tokens),
             "e2e_avg_time_per_request_ms": float(e2e_avg_req),
             "e2e_avg_tokens_per_s": float(e2e_avg_tok),
-            "stage_wall_time_ms": stage_wall_time_ms,
         }
+        # Add stage_wall_time_ms as separate fields for each stage
+        for idx, time in enumerate(stage_wall_time_ms):
+            overall_summary[f"e2e_stage_{idx}_wall_time_ms"] = time
 
         # Print overall summary
         # filter out all-zero fields for logging
