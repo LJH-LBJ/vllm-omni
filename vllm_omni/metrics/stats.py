@@ -113,29 +113,6 @@ TRANSFER_FIELDS = _build_field_defs(TransferEdgeStats, TRANSFER_EXCLUDE, FIELD_T
 E2E_FIELDS = _build_field_defs(RequestE2EStats, E2E_EXCLUDE, FIELD_TRANSFORMS)
 
 
-def _get_or_create_transfer_event(
-    transfer_events: dict[tuple[int, int, str], TransferEdgeStats],
-    from_stage: int,
-    to_stage: int,
-    request_id: str,
-) -> TransferEdgeStats:
-    key = (from_stage, to_stage, request_id)
-    evt = transfer_events.get(key)
-    if evt is None:
-        evt = TransferEdgeStats(
-            from_stage=from_stage,
-            to_stage=to_stage,
-            request_id=request_id,
-            size_bytes=0,
-            tx_time_ms=0.0,
-            used_shm=False,
-            rx_decode_time_ms=0.0,
-            in_flight_time_ms=0.0,
-        )
-        transfer_events[key] = evt
-    return evt
-
-
 class OrchestratorAggregator:
     def __init__(
         self,
@@ -172,6 +149,28 @@ class OrchestratorAggregator:
             lambda: defaultdict(float)
         )  # {request_id: {diffusion_metrics_key: accumulated_metrics_data}}
 
+    def _get_or_create_transfer_event(
+        self,
+        from_stage: int,
+        to_stage: int,
+        request_id: str,
+    ) -> TransferEdgeStats:
+        key = (from_stage, to_stage, request_id)
+        evt = self.transfer_events.get(key)
+        if evt is None:
+            evt = TransferEdgeStats(
+                from_stage=from_stage,
+                to_stage=to_stage,
+                request_id=request_id,
+                size_bytes=0,
+                tx_time_ms=0.0,
+                used_shm=False,
+                rx_decode_time_ms=0.0,
+                in_flight_time_ms=0.0,
+            )
+            self.transfer_events[key] = evt
+        return evt
+
     def record_transfer_tx(
         self,
         from_stage: int,
@@ -182,8 +181,7 @@ class OrchestratorAggregator:
         used_shm: bool,
     ) -> TransferEdgeStats | None:
         try:
-            evt = _get_or_create_transfer_event(
-                self.transfer_events,
+            evt = self._get_or_create_transfer_event(
                 int(from_stage),
                 int(to_stage),
                 str(request_id),
@@ -206,7 +204,7 @@ class OrchestratorAggregator:
             from_stage = int(stats.stage_id) - 1
             to_stage = int(stats.stage_id)
             rid_key = str(stats.request_id)
-            evt = _get_or_create_transfer_event(self.transfer_events, from_stage, to_stage, rid_key)
+            evt = self._get_or_create_transfer_event(from_stage, to_stage, rid_key)
             # Accumulate rx metrics
             if evt.size_bytes == 0:
                 # size_bytes has been recorded in tx phase
@@ -243,19 +241,6 @@ class OrchestratorAggregator:
                     stage_id,
                 )
 
-    @staticmethod
-    def log_request_stats(
-        stats: StageRequestStats | TransferEdgeStats | RequestE2EStats,
-        stats_type: str,
-    ) -> None:
-        """Log stats dataclass as dict."""
-        logger.info(
-            pformat(
-                {"type": stats_type, **asdict(stats)},
-                sort_dicts=False,
-            )
-        )
-
     def _as_stage_request_stats(
         self,
         stage_id: int,
@@ -287,16 +272,8 @@ class OrchestratorAggregator:
         if stats.stage_id == 0:
             self.stage_total_tokens[stats.stage_id] += int(stats.num_tokens_in)
         self.stage_events.setdefault(str(stats.request_id), []).append(stats)
-        if self.log_stats:
-            self.log_request_stats(stats, "stage_stats")
-            if stats.stage_stats is not None:
-                self.log_request_stats(stats, "stage_running_avg")
 
         evt = self.record_transfer_rx(stats)
-        if self.log_stats and stats.stage_id is not None and stats.stage_id > 0:
-            self.log_request_stats(stats, "transfer_rx_stats")
-            if evt is not None and (evt.tx_time_ms > 0.0 or evt.size_bytes > 0):
-                self.log_request_stats(evt, "transfer_total_stats")
 
     def record_stage_postprocess_time(self, stage_id: int, req_id: Any, postproc_time_ms: float) -> None:
         if req_id in self.stage_events:
@@ -365,8 +342,6 @@ class OrchestratorAggregator:
             tx_time_ms=tx_ms,
             used_shm=used_shm,
         )
-        if self.log_stats and evt is not None:
-            self.log_request_stats(evt, "transfer_tx_stats")
 
     def on_finalize_request(
         self,
@@ -410,8 +385,6 @@ class OrchestratorAggregator:
             ),
         )
         self.e2e_events.append(per_req_record)
-        if self.log_stats:
-            self.log_request_stats(per_req_record, "request_level_metrics")
 
     def build_and_log_summary(self) -> dict[str, Any]:
         if not self.log_stats:
