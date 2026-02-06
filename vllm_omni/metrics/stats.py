@@ -4,8 +4,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass
-from pprint import pformat
+from dataclasses import dataclass
 from typing import Any
 
 from vllm.logger import init_logger
@@ -273,7 +272,7 @@ class OrchestratorAggregator:
             self.stage_total_tokens[stats.stage_id] += int(stats.num_tokens_in)
         self.stage_events.setdefault(str(stats.request_id), []).append(stats)
 
-        evt = self.record_transfer_rx(stats)
+        self.record_transfer_rx(stats)
 
     def record_stage_postprocess_time(self, stage_id: int, req_id: Any, postproc_time_ms: float) -> None:
         if req_id in self.stage_events:
@@ -334,7 +333,7 @@ class OrchestratorAggregator:
         # Mark first input time for the destination stage if not set
         if self.stage_first_ts[to_stage] is None:
             self.stage_first_ts[to_stage] = time.time()
-        evt = self.record_transfer_tx(
+        self.record_transfer_tx(
             from_stage=from_stage,
             to_stage=to_stage,
             request_id=req_id,
