@@ -19,7 +19,7 @@ def test_orchestrator_aggregator_builds_summary() -> None:
     agg.stage_last_ts[1] = 0.07
 
     agg.on_forward(0, 1, "r1", size_bytes=1024, tx_ms=5.0, used_shm=False)
-    
+
     agg.on_stage_metrics(
         0,
         "r1",
@@ -88,7 +88,9 @@ def test_build_and_log_summary_e2e_only() -> None:
 
 
 def test_build_and_log_summary_multiple_requests() -> None:
-    agg = OrchestratorAggregator(num_stages=2, log_stats=True, wall_start_ts=0.0, final_stage_id_for_e2e={"r1": 1, "r2": 0})
+    agg = OrchestratorAggregator(
+        num_stages=2, log_stats=True, wall_start_ts=0.0, final_stage_id_for_e2e={"r1": 1, "r2": 0}
+    )
 
     # Request r1 goes through both stages
     agg.on_stage_metrics(
