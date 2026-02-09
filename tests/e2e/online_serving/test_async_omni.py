@@ -8,7 +8,8 @@ import pytest
 from vllm import SamplingParams
 from vllm.inputs import PromptType
 
-from vllm_omni.entrypoints.async_omni import AsyncOmni
+from tests.utils import hardware_test
+from vllm_omni.entrypoints.async_omni import AsyncOmni, ClientRequestState
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
@@ -57,6 +58,9 @@ async def generate(
     return count, request_id
 
 
+@pytest.mark.core_model
+@pytest.mark.omni
+@hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
 @pytest.mark.asyncio
 async def test_abort():
     with ExitStack() as after:
