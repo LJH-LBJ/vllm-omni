@@ -577,13 +577,13 @@ class AsyncOmni(OmniBase):
         stage_id: int,
         finished: bool,
     ) -> None:
-        if stage_metrics.final_output_type == "text" and finished:
+        if finished:
             stage_metrics = None
             for evt in reversed(metrics.stage_events.get(request_id, [])):
                 if evt.stage_id == stage_id:
                     stage_metrics = evt
                     break
-            if stage_metrics is not None:
+            if stage_metrics is not None and stage_metrics.final_output_type == "text":
                 output_to_yield.metrics = {
                     "num_tokens_in": stage_metrics.num_tokens_in,
                     "num_tokens_out": stage_metrics.num_tokens_out,

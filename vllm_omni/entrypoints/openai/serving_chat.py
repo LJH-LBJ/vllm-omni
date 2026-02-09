@@ -16,6 +16,7 @@ from pydantic import TypeAdapter
 from vllm.renderers import RendererLike
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni
+from vllm_omni.entrypoints.openai.protocol.chat_completion import OmniChatCompletionResponse
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams, OmniTextPrompt
 
 try:
@@ -1220,6 +1221,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                             choices=[choice_data],
                             model=model_name,
                             modality=final_output_type,
+                            metrics=omni_res.metrics,
                         )
 
                         # handle usage stats if requested & if continuous
@@ -1322,7 +1324,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
         conversation: list[ConversationMessage],
         tokenizer: TokenizerLike,
         request_metadata: RequestResponseMetadata,
-    ) -> ErrorResponse | ChatCompletionResponse:
+    ) -> ErrorResponse | OmniChatCompletionResponse:
         created_time = int(time.time())
         final_res: RequestOutput | None = None
 
@@ -1377,7 +1379,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                 continue
             choices.extend(choices_data)
 
-        response = ChatCompletionResponse(
+        response = OmniChatCompletionResponse(
             id=request_id,
             created=created_time,
             model=model_name,
@@ -1386,6 +1388,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
             prompt_logprobs=prompt_logprobs,
             prompt_token_ids=prompt_token_ids,
             kv_transfer_params=kv_transfer_params,
+            metrics=omni_outputs.metrics if final_outputs else None,
         )
 
         # Log complete response if output logging is enabled
