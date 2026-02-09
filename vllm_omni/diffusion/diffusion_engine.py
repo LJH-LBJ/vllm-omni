@@ -109,8 +109,7 @@ class DiffusionEngine:
         }
         if self.pre_process_func is not None:
             metrics["preprocessing_time_ms"] = preprocess_time * 1000
-        if output.trajectory_timesteps is not None:
-            metrics["trajectory_timesteps"] = output.trajectory_timesteps
+
         # Handle single request or multiple requests
         if len(request.prompts) == 1:
             # Single request: return single OmniRequestOutput

@@ -122,7 +122,6 @@ For **online inference** (serving mode), the summary is always per-request. `e2e
 | `image_num`               | Number of images generated (for diffusion/image stages).                                        |
 | `resolution`              | Image resolution (for diffusion/image stages).                                                                  |
 | `postprocess_time_ms` | Diffusion/image: post-processing time in ms.                                                    |
-| `trajectory_timesteps`    | Diffusion/image: trajectory timesteps, if available.                                            |
 
 ---
 

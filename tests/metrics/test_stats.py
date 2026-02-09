@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
 from vllm_omni.metrics import OrchestratorAggregator
 from vllm_omni.metrics.stats import RequestE2EStats, StageRequestStats, StageStats
+
+pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
 def _get_request_entry(table: list[dict], request_id: str) -> dict:
