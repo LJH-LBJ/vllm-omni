@@ -1,18 +1,19 @@
 """Unit tests for vllm_omni.entrypoints.utils module."""
 
-import pytest
 from collections import Counter
 from dataclasses import dataclass
 from unittest.mock import patch
 
+import pytest
+
 from vllm_omni.entrypoints.utils import (
-    _filter_dict_like_object,
     _convert_dataclasses_to_dict,
+    _filter_dict_like_object,
     filter_dataclass_kwargs,
 )
 
-
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
 
 class TestFilterDictLikeObject:
     """Test suite for _filter_dict_like_object function."""
