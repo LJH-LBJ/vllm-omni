@@ -93,7 +93,7 @@ For **online inference** (serving mode), the summary is always per-request. `e2e
 
 ## Parameter Details
 
-### Summary Metrics 
+### Summary Metrics
 
 | Field                     | Meaning                                                                                       |
 |---------------------------|----------------------------------------------------------------------------------------------|
