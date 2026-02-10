@@ -69,6 +69,38 @@ def _try_get_class_name_from_diffusers_config(model: str) -> str | None:
     return None
 
 
+def _filter_dict_like_object(obj: dict | Any) -> dict:
+    """Filter dict-like object by removing callables and recursively converting values.
+
+    Converts dict-like objects to regular dicts while filtering out callable values
+    that are incompatible with OmegaConf. Recursively processes values through
+    _convert_dataclasses_to_dict for nested object conversion.
+
+    Args:
+        obj: Dict or dict-like object to filter
+
+    Returns:
+        Regular dict with callables filtered out and values recursively converted
+
+    Raises:
+        TypeError: If obj doesn't support .items() method
+        ValueError: If dict conversion fails unexpectedly
+    """
+    result = {}
+    filtered_keys = []
+    for k, v in obj.items():
+        if callable(v):
+            filtered_keys.append(str(k))
+        else:
+            result[k] = _convert_dataclasses_to_dict(v)
+    if filtered_keys:
+        logger.warning(
+            f"Filtered out {len(filtered_keys)} callable object(s) from base_engine_args "
+            f"that are not compatible with OmegaConf: {filtered_keys}. "
+        )
+    return result
+
+
 def _convert_dataclasses_to_dict(obj: Any) -> Any:
     """Recursively convert non-serializable objects to OmegaConf-compatible types.
 
@@ -104,19 +136,7 @@ def _convert_dataclasses_to_dict(obj: Any) -> Any:
     # Handle dictionaries (recurse into values) and filter out callables(cause error in OmegaConf.create)
     # Note: This must come AFTER Counter check since Counter is a dict subclass
     if isinstance(obj, dict):
-        result = {}
-        filtered_keys = []
-        for k, v in obj.items():
-            if callable(v):
-                filtered_keys.append(str(k))
-            else:
-                result[k] = _convert_dataclasses_to_dict(v)
-        if filtered_keys:
-            logger.warning(
-                f"Filtered out {len(filtered_keys)} callable object(s) from base_engine_args "
-                f"that are not compatible with OmegaConf: {filtered_keys}. "
-            )
-        return result
+        return _filter_dict_like_object(obj)
     # Handle callable objects (functions, methods, etc.) - skip them
     # Note: This comes after dict/list checks to avoid misclassifying dict-like objects
     if callable(obj):
@@ -127,19 +147,7 @@ def _convert_dataclasses_to_dict(obj: Any) -> Any:
     # Try to convert any dict-like object (has keys/values methods) to dict
     if hasattr(obj, "keys") and hasattr(obj, "values") and not isinstance(obj, (str, bytes)):
         try:
-            result = {}
-            filtered_keys = []
-            for k, v in obj.items():
-                if callable(v):
-                    filtered_keys.append(str(k))
-                else:
-                    result[k] = _convert_dataclasses_to_dict(v)
-            if filtered_keys:
-                logger.warning(
-                    f"Filtered out {len(filtered_keys)} callable object(s) from base_engine_args "
-                    f"that are not compatible with OmegaConf: {filtered_keys}. "
-                )
-            return result
+            return _filter_dict_like_object(obj)
         except (TypeError, ValueError, AttributeError):
             # If conversion fails, return as-is
             return obj
