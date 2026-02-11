@@ -11,8 +11,9 @@ def test_omni_chat_completion_response_metrics():
     from vllm_omni.entrypoints.openai.protocol.chat_completion import (
         OmniChatCompletionResponse,
     )
+    from vllm.entrypoints.openai.protocol import UsageInfo
 
-    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    usage = UsageInfo(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
     # Default is None
     response = OmniChatCompletionResponse(
