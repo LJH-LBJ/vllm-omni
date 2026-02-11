@@ -8,17 +8,16 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 def test_omni_chat_completion_response_metrics():
     """Test OmniChatCompletionResponse metrics field works correctly."""
+    from vllm.entrypoints.openai.protocol import UsageInfo
+
     from vllm_omni.entrypoints.openai.protocol.chat_completion import (
         OmniChatCompletionResponse,
     )
-    from vllm.entrypoints.openai.protocol import UsageInfo
 
     usage = UsageInfo(prompt_tokens=0, completion_tokens=0, total_tokens=0)
 
     # Default is None
-    response = OmniChatCompletionResponse(
-        id="test-id", created=1234567890, model="test-model", choices=[], usage=usage
-    )
+    response = OmniChatCompletionResponse(id="test-id", created=1234567890, model="test-model", choices=[], usage=usage)
     assert response.metrics is None
 
     # Can set metrics and serialize
