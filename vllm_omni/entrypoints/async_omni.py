@@ -586,9 +586,7 @@ class AsyncOmni(OmniBase):
                 elif output_to_yield.metrics is None:
                     output_to_yield.metrics = {}
 
-                metrics.record_audio_generated_frames(
-                    output_to_yield, finished, stage_id, req_id
-                )
+                metrics.record_audio_generated_frames(output_to_yield, finished, stage_id, req_id)
         except Exception as e:
             logger.exception(
                 f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
