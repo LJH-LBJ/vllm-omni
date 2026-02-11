@@ -402,16 +402,6 @@ class AsyncOmni(OmniBase):
                 all_stages_finished[stage_id] = finished
 
                 if output_to_yield:
-                    self._assign_output_metrics(
-                        output_to_yield=output_to_yield,
-                        metrics=metrics,
-                        request_id=request_id,
-                        stage_id=stage_id,
-                        finished=finished,
-                    )
-                    metrics.record_audio_generated_frames(
-                        output_to_yield, engine_outputs.finished, stage_id, request_id
-                    )
                     yield output_to_yield
 
     async def _process_sequential_results(
@@ -435,16 +425,6 @@ class AsyncOmni(OmniBase):
                     metrics,
                 )
                 if output_to_yield:
-                    self._assign_output_metrics(
-                        output_to_yield=output_to_yield,
-                        metrics=metrics,
-                        request_id=request_id,
-                        stage_id=stage_id,
-                        finished=finished,
-                    )
-                    metrics.record_audio_generated_frames(
-                        output_to_yield, engine_outputs.finished, stage_id, request_id
-                    )
                     yield output_to_yield
             if not isinstance(engine_outputs, list):
                 engine_outputs = [engine_outputs]
@@ -518,29 +498,6 @@ class AsyncOmni(OmniBase):
 
         finished = engine_outputs.finished
 
-        # Mark last output time
-        metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
-
-        try:
-            _m: StageRequestStats = result.get("metrics")
-            if _m is not None:
-                # Accumulate generation time
-                metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.stage_gen_time_ms
-
-                # For diffusion stages, we also accumulate diffusion time
-                metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
-
-                if finished:
-                    metrics.on_stage_metrics(stage_id, req_id, _m, stage.final_output_type)
-        except Exception as e:
-            logger.exception(
-                f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
-            )
-
-        logger.debug(
-            f"[{self._name}] Stage-{stage_id} completed request {req_id}; forwarding or finalizing",
-        )
-
         output_to_yield = None
 
         if getattr(stage, "final_output", False):
@@ -565,33 +522,77 @@ class AsyncOmni(OmniBase):
                     final_output_type=stage.final_output_type,
                     request_output=engine_outputs,
                 )
+        # Mark last output time
+        metrics.stage_last_ts[stage_id] = max(metrics.stage_last_ts[stage_id] or 0.0, time.time())
+
+        self._process_stage_metrics(
+            result=result,
+            metrics=metrics,
+            stage=stage,
+            stage_id=stage_id,
+            req_id=req_id,
+            engine_outputs=engine_outputs,
+            finished=finished,
+            output_to_yield=output_to_yield,
+        )
+
+        logger.debug(
+            f"[{self._name}] Stage-{stage_id} completed request {req_id}; forwarding or finalizing",
+        )
 
         return engine_outputs, finished, output_to_yield
 
-    def _assign_output_metrics(
+    def _process_stage_metrics(
         self,
         *,
-        output_to_yield: OmniRequestOutput,
+        result: dict[str, Any],
         metrics: OrchestratorAggregator,
-        request_id: str,
+        stage: OmniStage,
         stage_id: int,
+        req_id: str,
+        engine_outputs: Any,
         finished: bool,
+        output_to_yield: OmniRequestOutput | None,
     ) -> None:
-        if finished:
-            stage_metrics = None
-            for evt in reversed(metrics.stage_events.get(request_id, [])):
-                if evt.stage_id == stage_id:
-                    stage_metrics = evt
-                    break
-            if stage_metrics is not None and stage_metrics.final_output_type == "text":
-                output_to_yield.metrics = {
-                    "num_tokens_in": stage_metrics.num_tokens_in,
-                    "num_tokens_out": stage_metrics.num_tokens_out,
-                    "stage_id": stage_metrics.stage_id,
-                    "final_output_type": stage_metrics.final_output_type,
-                }
-                return
-        output_to_yield.metrics = {}
+        try:
+            _m: StageRequestStats = result.get("metrics")
+            if _m is not None:
+                # Accumulate generation time
+                metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.stage_gen_time_ms
+
+                # For diffusion stages, we also accumulate diffusion time
+                metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
+
+                if finished:
+                    # Record per-stage metrics
+                    metrics.on_stage_metrics(stage_id, req_id, _m, stage.final_output_type)
+                    # Record text generation token metrics to output_to_yield
+                    stage_metrics = None
+                    for evt in reversed(metrics.stage_events.get(req_id, [])):
+                        if evt.stage_id == stage_id:
+                            stage_metrics = evt
+                            break
+                    if stage_metrics is not None and stage_metrics.final_output_type == "text":
+                        output_to_yield.metrics = {
+                            "num_tokens_in": stage_metrics.num_tokens_in,
+                            "num_tokens_out": stage_metrics.num_tokens_out,
+                            "stage_id": stage_metrics.stage_id,
+                            "final_output_type": stage_metrics.final_output_type,
+                        }
+
+            if output_to_yield is not None:
+                if not finished:
+                    output_to_yield.metrics = {}
+                elif output_to_yield.metrics is None:
+                    output_to_yield.metrics = {}
+
+                metrics.record_audio_generated_frames(
+                    output_to_yield, finished, stage_id, req_id
+                )
+        except Exception as e:
+            logger.exception(
+                f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
+            )
 
     def _run_output_handler(self) -> None:
         if self.output_handler is not None:
