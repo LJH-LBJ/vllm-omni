@@ -8,7 +8,7 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 def test_omni_chat_completion_response_metrics():
     """Test OmniChatCompletionResponse metrics field works correctly."""
-    from vllm.entrypoints.openai.protocol import UsageInfo
+    from vllm.entrypoints.openai.engine.protocol import  UsageInfo
 
     from vllm_omni.entrypoints.openai.protocol.chat_completion import (
         OmniChatCompletionResponse,
