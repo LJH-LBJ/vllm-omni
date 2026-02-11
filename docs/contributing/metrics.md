@@ -1,5 +1,5 @@
 
-# Metrics vLLM-Omni:
+# Metrics vLLM-Omni
 
 You can use these metrics in production to monitor the health and performance of the vLLM-omni system. Typical scenarios include:
 
@@ -153,7 +153,7 @@ For **online inference** (serving mode), the summary is always per-request. `e2e
 
 **Using the example above:**
 
-#### e2e_total_tokens
+**e2e_total_tokens**
 
 - Stage0's `num_tokens_in`: **4,860**
 - Stage0's `num_tokens_out`: **67**
@@ -166,7 +166,7 @@ e2e_total_tokens = 4,860 + 67 + 275 + 0 = 5,202
 ```
 This matches the table value: `e2e_total_tokens = 5,202`.
 
-#### transfers_total_time_ms
+**transfers_total_time_ms**
 
 For each edge:
 
