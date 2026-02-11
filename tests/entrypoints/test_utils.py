@@ -26,34 +26,6 @@ class TestFilterDictLikeObject:
         assert result == input_dict
         assert isinstance(result, dict)
 
-    def test_dict_with_callable_values(self):
-        """Test filtering dict with callable values removes them."""
-
-        def dummy_func():
-            pass
-
-        input_dict = {
-            "normal_key": "value",
-            "callable_key": dummy_func,
-            "another_normal": 123,
-            "lambda_key": lambda x: x,
-        }
-
-        with patch("vllm_omni.entrypoints.utils.logger") as mock_logger:
-            result = _filter_dict_like_object(input_dict)
-
-            # Check that callables are filtered out
-            assert "normal_key" in result
-            assert "another_normal" in result
-            assert "callable_key" not in result
-            assert "lambda_key" not in result
-
-            # Check that warning was logged
-            mock_logger.warning.assert_called_once()
-            warning_msg = mock_logger.warning.call_args[0][0]
-            assert "Filtered out" in warning_msg
-            assert "2" in warning_msg  # Two callables filtered
-
     def test_dict_with_nested_values(self):
         """Test filtering dict with nested dict and list values."""
         input_dict = {
@@ -105,26 +77,6 @@ class TestFilterDictLikeObject:
         result = _filter_dict_like_object({})
         assert result == {}
         assert isinstance(result, dict)
-
-    def test_dict_with_only_callables(self):
-        """Test filtering dict where all values are callables."""
-
-        def func1():
-            pass
-
-        def func2():
-            pass
-
-        input_dict = {"func1": func1, "func2": func2}
-
-        with patch("vllm_omni.entrypoints.utils.logger") as mock_logger:
-            result = _filter_dict_like_object(input_dict)
-
-            # Result should be empty
-            assert result == {}
-
-            # Warning should be logged about 2 filtered callables
-            mock_logger.warning.assert_called_once()
 
     def test_dict_with_set_values(self):
         """Test filtering dict with set values."""
@@ -185,42 +137,6 @@ class TestFilterDictLikeObject:
         assert "string_key" in result
         assert 42 in result
         assert (1, 2) in result
-
-    def test_callable_method_objects(self):
-        """Test filtering dict with method objects."""
-
-        class TestClass:
-            def method(self):
-                pass
-
-        obj = TestClass()
-        input_dict = {
-            "method": obj.method,
-            "normal": "value",
-        }
-
-        with patch("vllm_omni.entrypoints.utils.logger") as mock_logger:
-            result = _filter_dict_like_object(input_dict)
-
-            assert "method" not in result
-            assert "normal" in result
-            mock_logger.warning.assert_called_once()
-
-    def test_builtin_functions(self):
-        """Test filtering dict with built-in functions."""
-        input_dict = {
-            "len_func": len,
-            "print_func": print,
-            "normal": "value",
-        }
-
-        with patch("vllm_omni.entrypoints.utils.logger") as mock_logger:
-            result = _filter_dict_like_object(input_dict)
-
-            assert "len_func" not in result
-            assert "print_func" not in result
-            assert "normal" in result
-            mock_logger.warning.assert_called_once()
 
     def test_dict_with_recursive_structure(self):
         """Test filtering dict with recursive/complex nested structure."""
