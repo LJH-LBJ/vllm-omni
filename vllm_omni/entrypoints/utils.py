@@ -86,10 +86,23 @@ def _filter_dict_like_object(obj: dict | Any) -> dict:
         TypeError: If obj doesn't support .items() method
         ValueError: If dict conversion fails unexpectedly
     """
+    def _is_callable_value(value: Any) -> bool:
+        if callable(value):
+            return True
+        return isinstance(
+            value,
+            (
+                types.FunctionType,
+                types.MethodType,
+                types.BuiltinFunctionType,
+                types.BuiltinMethodType,
+            ),
+        )
+
     result = {}
     filtered_keys = []
     for k, v in obj.items():
-        if callable(v):
+        if _is_callable_value(v):
             filtered_keys.append(str(k))
         else:
             result[k] = _convert_dataclasses_to_dict(v)
