@@ -555,38 +555,45 @@ class AsyncOmni(OmniBase):
         output_to_yield: OmniRequestOutput | None,
     ) -> None:
         try:
-            _m: StageRequestStats = result.get("metrics")
+            _m: StageRequestStats | None = result.get("metrics")
+
+            # 1. Accumulate metrics from stage stats
             if _m is not None:
                 # Accumulate generation time
                 metrics.accumulated_gen_time_ms[req_id][stage_id] += _m.stage_gen_time_ms
 
                 # For diffusion stages, we also accumulate diffusion time
                 metrics.accumulate_diffusion_metrics(stage.stage_type, req_id, engine_outputs)
-
                 if finished:
-                    # Record per-stage metrics
                     metrics.on_stage_metrics(stage_id, req_id, _m, stage.final_output_type)
-                    # Record text generation token metrics to output_to_yield
-                    stage_metrics = None
-                    for evt in reversed(metrics.stage_events.get(req_id, [])):
-                        if evt.stage_id == stage_id:
-                            stage_metrics = evt
-                            break
-                    if stage_metrics is not None and stage_metrics.final_output_type == "text":
-                        output_to_yield.metrics = {
-                            "num_tokens_in": stage_metrics.num_tokens_in,
-                            "num_tokens_out": stage_metrics.num_tokens_out,
-                            "stage_id": stage_metrics.stage_id,
-                            "final_output_type": stage_metrics.final_output_type,
-                        }
 
-            if output_to_yield is not None:
-                if not finished:
-                    output_to_yield.metrics = {}
-                elif output_to_yield.metrics is None:
-                    output_to_yield.metrics = {}
+            # 2. No output to yield, nothing more to do
+            if output_to_yield is None:
+                return
 
-                metrics.record_audio_generated_frames(output_to_yield, finished, stage_id, req_id)
+            # 3. Assign output metrics based on finished state
+            if finished and _m is not None:
+                # Find matching stage event for text metrics
+                stage_metrics = next(
+                    (evt for evt in reversed(metrics.stage_events.get(req_id, []))
+                     if evt.stage_id == stage_id),
+                    None,
+                )
+                if stage_metrics is not None and stage_metrics.final_output_type == "text":
+                    output_to_yield.metrics = {
+                        "num_tokens_in": stage_metrics.num_tokens_in,
+                        "num_tokens_out": stage_metrics.num_tokens_out,
+                        "stage_id": stage_metrics.stage_id,
+                        "final_output_type": stage_metrics.final_output_type,
+                    }
+                else:
+                    output_to_yield.metrics = output_to_yield.metrics or {}
+            else:
+                output_to_yield.metrics = {}
+
+            # 4. Record audio frames
+            metrics.record_audio_generated_frames(output_to_yield, finished, stage_id, req_id)
+
         except Exception as e:
             logger.exception(
                 f"[{self._name}] Failed to process metrics for stage {stage_id}, req {req_id}: {e}",
