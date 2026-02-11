@@ -216,13 +216,7 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
             waveform: [batch, 1, waveform_len] - Complete waveform
         """
         wavs = []
-        end_index = codes.shape[-1]
-        # TODO: need to optimize algorithms, current only support
-        # chunk_size = left_context_size = 25
-        if end_index <= chunk_size:
-            context_size = 0
-        else:
-            context_size = left_context_size
+        context_size = codes[0]
         # Decode chunk
         wav_chunk = self(codes)
         # Remove context from output (context_size * total_upsample samples)

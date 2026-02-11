@@ -87,6 +87,7 @@ def thinker2talker_async_chunk(
     connector: Any,
     pooling_output: dict[str, Any],
     request: OmniEngineCoreRequest,
+    **kwargs,
 ) -> list[dict[str, Any]]:
     """
     Process thinker outputs to create talker inputs.
@@ -209,12 +210,17 @@ def talker2code2wav_async_chunk(
     connector: Any,
     pooling_output: dict[str, Any],
     request: OmniEngineCoreRequest,
+    **kwargs,
 ):
     """
     Pooling version.
     """
     if "code_predictor_codes" not in pooling_output:
         return None
+
+    async_chunk_config = kwargs.get("async_chunk_config", {})
+    chunk_size_config = async_chunk_config.get("chunk_size", 25)
+    left_context_size_config = async_chunk_config.get("left_context_size", 25)
 
     code_predictor_codes = pooling_output["code_predictor_codes"]
 
@@ -240,20 +246,20 @@ def talker2code2wav_async_chunk(
         return None
 
     request_id = request.external_req_id
-    chunk_size = left_context_size = 25
     connector.code_prompt_token_ids[request_id].append(codec_codes)
     length = len(connector.code_prompt_token_ids[request_id])
-    chunk_length = length % chunk_size
+    chunk_length = length % chunk_size_config
     if chunk_length != 0 and not request.is_finished():
         return None
 
-    context_length = chunk_length if chunk_length != 0 else chunk_size
+    context_length = chunk_length if chunk_length != 0 else chunk_size_config
+    # ensure left context does not exceed available length
+    left_context_size = min(length - context_length, left_context_size_config)
     end_index = min(length, left_context_size + context_length)
 
+    codes = torch.tensor(connector.code_prompt_token_ids[request_id][-end_index:]).transpose(0, 1).reshape(-1).tolist()
     info = {
-        "code_predictor_codes": (
-            torch.tensor(connector.code_prompt_token_ids[request_id][-end_index:]).transpose(0, 1).reshape(-1).tolist()
-        ),
+        "code_predictor_codes": [left_context_size] + codes,
         "finished": torch.tensor(request.is_finished(), dtype=torch.bool),
     }
     return info

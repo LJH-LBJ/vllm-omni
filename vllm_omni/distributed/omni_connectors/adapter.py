@@ -309,6 +309,7 @@ def put_chunk(
     connector: "OmniConnectorBase",
     pooling_output: dict[str, Any],
     request: Request,
+    async_chunk_config: dict[str, Any] | None = None,
     custom_process_input_func: Callable[[dict[str, Any], Request], dict[str, Any] | None] | None = None,
 ) -> None:
     """Store a chunk of pooling output.
@@ -336,6 +337,7 @@ def put_chunk(
                 connector=connector,
                 pooling_output=pooling_output,
                 request=request,
+                async_chunk_config=async_chunk_config,
             )
         except Exception as e:
             logger.error(f"Failed to use custom_process_input_func for payload extraction: {e}")

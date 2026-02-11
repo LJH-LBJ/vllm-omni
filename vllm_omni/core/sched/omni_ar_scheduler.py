@@ -66,6 +66,7 @@ class OmniARScheduler(VLLMScheduler):
         self.transfer_triggered_requests: set[str] = set()
         model_config = self.vllm_config.model_config
         self.omni_connector = None
+        self.async_chunk_config = model_config.get("async_chunk_config", None)
         if model_config.async_chunk:
             connector_config = model_config.stage_connector_config
             connector_specs = ConnectorSpec(
@@ -357,7 +358,13 @@ class OmniARScheduler(VLLMScheduler):
                 )
                 if self.omni_connector is not None:
                     custom_process_next_stage_input_func = self.custom_process_next_stage_input_func
-                    put_chunk(self.omni_connector, pooler_output, request, custom_process_next_stage_input_func)
+                    put_chunk(
+                        self.omni_connector,
+                        pooler_output,
+                        request,
+                        self.async_chunk_config,
+                        custom_process_next_stage_input_func,
+                    )
             else:
                 # Invariant: EngineCore returns no partial prefill outputs.
                 assert not prompt_logprobs_tensors

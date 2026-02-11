@@ -73,6 +73,12 @@ class OmniEngineArgs(EngineArgs):
     custom_process_next_stage_input_func: str | None = None
     stage_connector_spec: dict[str, Any] = field(default_factory=dict)
     async_chunk: bool = False
+    async_chunk_config: dict[str, Any] = field(
+        default_factory=lambda: {
+            "chunk_size": 25,
+            "left_context_size": 25,
+        }
+    )
     omni_kv_config: dict | None = None
 
     def draw_hf_text_config(self, config_dict: dict) -> Qwen3OmniMoeTextConfig:
@@ -126,7 +132,7 @@ class OmniEngineArgs(EngineArgs):
 
         # Add the new omni-specific fields
         config_dict["stage_id"] = self.stage_id
-        config_dict["async_chunk"] = self.async_chunk
+        config_dict["async_chunk_config"] = self.async_chunk_config
         config_dict["model_stage"] = self.model_stage
         config_dict["model_arch"] = self.model_arch
         config_dict["engine_output_type"] = self.engine_output_type
@@ -174,7 +180,13 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
     hf_config_name: str | None = None
     custom_process_next_stage_input_func: str | None = None
     stage_connector_spec: dict[str, Any] = field(default_factory=dict)
-    async_chunk: bool = False
+    async_chunk_config: dict[str, Any] = field(
+        default_factory=lambda: {
+            "async_chunk": False,
+            "chunk_size": 25,
+            "left_context_size": 25,
+        }
+    )
     omni_kv_config: dict | None = None
 
     def draw_hf_text_config(self, config_dict: dict) -> Qwen3OmniMoeTextConfig:
@@ -218,7 +230,7 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
 
         # Add the new omni-specific fields
         config_dict["stage_id"] = self.stage_id
-        config_dict["async_chunk"] = self.async_chunk
+        config_dict["async_chunk_config"] = self.async_chunk_config
         config_dict["model_stage"] = self.model_stage
         config_dict["model_arch"] = self.model_arch
         config_dict["engine_output_type"] = self.engine_output_type
