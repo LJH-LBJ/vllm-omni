@@ -217,14 +217,12 @@ class OrchestratorAggregator:
     def record_audio_generated_frames(
         self,
         output_to_yield: Any,
-        finished: bool,
         stage_id: int,
         request_id: str,
     ) -> None:
         try:
             if (
                 output_to_yield.final_output_type == "audio"
-                and finished
                 and (multimodal_output := output_to_yield.multimodal_output.get("audio")) is not None
                 and len(multimodal_output) > 0
             ):

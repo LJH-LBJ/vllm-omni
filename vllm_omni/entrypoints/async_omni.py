@@ -571,9 +571,13 @@ class AsyncOmni(OmniBase):
             if output_to_yield is None:
                 return
 
-            # 3. Assign output metrics based on finished state
-            if finished and _m is not None:
-                # Find matching stage event for text metrics
+            # 3. Not finished yet — empty metrics, skip audio recording
+            if not finished:
+                output_to_yield.metrics = {}
+                return
+
+            # 4. Finished: assign text token metrics if available
+            if _m is not None:
                 stage_metrics = next(
                     (evt for evt in reversed(metrics.stage_events.get(req_id, []))
                      if evt.stage_id == stage_id),
@@ -589,10 +593,10 @@ class AsyncOmni(OmniBase):
                 else:
                     output_to_yield.metrics = output_to_yield.metrics or {}
             else:
-                output_to_yield.metrics = {}
+                output_to_yield.metrics = output_to_yield.metrics or {}
 
-            # 4. Record audio frames
-            metrics.record_audio_generated_frames(output_to_yield, finished, stage_id, req_id)
+            # 5. Finished: record audio generated frames
+            metrics.record_audio_generated_frames(output_to_yield, stage_id, req_id)
 
         except Exception as e:
             logger.exception(
