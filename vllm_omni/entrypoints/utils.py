@@ -86,6 +86,7 @@ def _filter_dict_like_object(obj: dict | Any) -> dict:
         TypeError: If obj doesn't support .items() method
         ValueError: If dict conversion fails unexpectedly
     """
+
     def _is_callable_value(value: Any) -> bool:
         if callable(value):
             return True
