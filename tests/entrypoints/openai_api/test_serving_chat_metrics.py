@@ -12,14 +12,23 @@ def test_omni_chat_completion_response_metrics():
         OmniChatCompletionResponse,
     )
 
+    usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
     # Default is None
-    response = OmniChatCompletionResponse(id="test-id", created=1234567890, model="test-model", choices=[])
+    response = OmniChatCompletionResponse(
+        id="test-id", created=1234567890, model="test-model", choices=[], usage=usage
+    )
     assert response.metrics is None
 
     # Can set metrics and serialize
     test_metrics = {"thinker_ttft": 0.123, "talker_ttft": 0.456}
     response = OmniChatCompletionResponse(
-        id="test-id", created=1234567890, model="test-model", choices=[], metrics=test_metrics
+        id="test-id",
+        created=1234567890,
+        model="test-model",
+        choices=[],
+        usage=usage,
+        metrics=test_metrics,
     )
     assert response.metrics == test_metrics
     assert "thinker_ttft" in response.model_dump_json()
