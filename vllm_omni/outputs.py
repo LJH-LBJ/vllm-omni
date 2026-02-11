@@ -127,20 +127,16 @@ class OmniRequestOutput:
         For pipeline outputs, this checks completion outputs first, then request_output.
         For diffusion outputs, this returns the local _multimodal_output field.
         """
-        if isinstance(self.request_output, list):
-            request_output_list = self.request_output
-        else:
-            request_output_list = [self.request_output] if self.request_output else []
-        for request_output in request_output_list:
-            if request_output is None:
-                continue
+        if self.request_output is None:
+            return self._multimodal_output
+
+        request_outputs = self.request_output if isinstance(self.request_output, list) else [self.request_output]
+        for req_out in request_outputs:
             # Check completion outputs first (where multimodal_output is attached)
-            for output in getattr(request_output, "outputs", []) or []:
-                mm = getattr(output, "multimodal_output", None)
-                if mm:
+            for output in getattr(req_out, "outputs", []) or []:
+                if mm := getattr(output, "multimodal_output", None):
                     return mm
-            mm = getattr(request_output, "multimodal_output", None)
-            if mm:
+            if mm := getattr(req_out, "multimodal_output", None):
                 return mm
         return self._multimodal_output
 
