@@ -579,8 +579,7 @@ class AsyncOmni(OmniBase):
             # 4. Finished: assign text token metrics if available
             if _m is not None:
                 stage_metrics = next(
-                    (evt for evt in reversed(metrics.stage_events.get(req_id, []))
-                     if evt.stage_id == stage_id),
+                    (evt for evt in reversed(metrics.stage_events.get(req_id, [])) if evt.stage_id == stage_id),
                     None,
                 )
                 if stage_metrics is not None and stage_metrics.final_output_type == "text":
