@@ -32,7 +32,7 @@ from vllm_omni.inputs.data import OmniPromptType, OmniSamplingParams
 
 # Internal imports (our code)
 from vllm_omni.lora.request import LoRARequest
-from vllm_omni.metrics import OrchestratorAggregator, StageRequestStats
+from vllm_omni.metrics import OrchestratorAggregator
 from vllm_omni.outputs import OmniRequestOutput
 
 logger = init_logger(__name__)
