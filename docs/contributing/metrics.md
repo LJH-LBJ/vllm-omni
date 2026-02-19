@@ -1,5 +1,5 @@
 
-# Metrics vLLM-Omni
+# Metrics
 
 You can use these metrics in production to monitor the health and performance of the vLLM-omni system. Typical scenarios include:
 
