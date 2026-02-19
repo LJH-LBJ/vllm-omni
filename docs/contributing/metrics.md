@@ -174,6 +174,6 @@ For each edge:
 
 - 1->2: tx_time_ms (**18.790**) + rx_decode_time_ms (**31.706**) + in_flight_time_ms (**2.819**) = **53.315**
 
-Sum: 192.581 + 53.315 = **245.896**
+192.581 + 53.315 = **245.896** = transfers_total_time_ms,  which matches the calculation (difference is due to rounding)
 
 The table shows `transfers_total_time_ms = 245.895`, which matches the calculation (difference is due to rounding).
