@@ -99,7 +99,12 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         with self.lock:
             self._pending_load_reqs[request_id] = request
 
-    def save_async(self, pooling_output: torch.Tensor | None = None, request: Request | None = None):
+    def save_async(
+            self,
+            async_chunk_config: dict[str, Any],
+            pooling_output: torch.Tensor | None = None,
+            request: Request | None = None
+    ) -> None:
         """Build and enqueue one chunk for asynchronous sending.
 
         Payload extraction is executed in the caller thread via
@@ -122,6 +127,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     transfer_manager=self,
                     pooling_output=pooling_output,
                     request=request,
+                    async_chunk_config=async_chunk_config,
                 )
 
             except Exception as e:
