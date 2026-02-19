@@ -160,7 +160,7 @@ For **online inference** (serving mode), the summary is always per-request. `e2e
 - Stage1's `num_tokens_out`: **275**
 - Stage2's `num_tokens_out`: **0**
 
-So,
+so `e2e_total_tokens = 4,860 + 67 + 275 + 0 = 5,202`, which matches the table value `e2e_total_tokens`.
 ```
 e2e_total_tokens = 4,860 + 67 + 275 + 0 = 5,202
 ```
