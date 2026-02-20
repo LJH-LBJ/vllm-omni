@@ -386,7 +386,16 @@ class Qwen3OmniMoeForConditionalGeneration(
                 codes = input_ids_flatten.reshape(1, 16, -1)
 
             # Generate audio from codec codes
-            audio_tensors = self.generate_audio(codes, voice_type)
+            # Get left_context_size from runtime_additional_information (passed via kwargs)
+            # or additional_information parameter
+            left_context_size = None
+            runtime_info = kwargs.get("runtime_additional_information")
+            if runtime_info and len(runtime_info) > 0 and runtime_info[0]:
+                # Take from first request's info (generation mode processes one at a time typically)
+                left_context_size = runtime_info[0].get("left_context_size")
+            elif additional_information is not None:
+                left_context_size = additional_information.get("left_context_size")
+            audio_tensors = self.generate_audio(codes, voice_type, left_context_size=left_context_size)
 
             return audio_tensors
 
@@ -458,13 +467,19 @@ class Qwen3OmniMoeForConditionalGeneration(
 
     # ==================== Audio Generation ====================
 
-    def generate_audio(self, code: torch.Tensor, voice_type: str) -> list[torch.Tensor]:
+    def generate_audio(
+        self,
+        code: torch.Tensor,
+        voice_type: str,
+        left_context_size: int | None = None,
+    ) -> list[torch.Tensor]:
         """
         Generate audio waveform from codec codes.
 
         Args:
             code: [8, T] - 8-layer RVQ codec codes
             voice_type: Voice type (not used in Qwen3, kept for compatibility)
+            left_context_size: Context size for streaming decode (from async_chunk_config)
 
         Returns:
             audio_tensor: [1, waveform_len] - Audio waveform
@@ -487,10 +502,20 @@ class Qwen3OmniMoeForConditionalGeneration(
             talker_codes = talker_codes.expand(1, 16, -1)
 
         if self.vllm_config.model_config.async_chunk:
+            # Get config from model_config, use passed left_context_size or fallback to config
+            async_chunk_config = getattr(self.vllm_config.model_config, "async_chunk_config", {})
+            chunk_size = async_chunk_config.get("chunk_size", 25)
+            # Use passed left_context_size if available, otherwise use config default
+            if left_context_size is None:
+                left_context_size = async_chunk_config.get("left_context_size", 25)
+                logger.warning(
+                    "Left context size for async chunking is not provided, falling back to config default: %s",
+                    left_context_size,
+                )
             audio_tensors = self.code2wav.chunked_decode_streaming(
                 talker_codes,
-                chunk_size=25,
-                left_context_size=25,
+                chunk_size=chunk_size,
+                left_context_size=left_context_size,
             )
         else:
             # Use chunked decode for memory efficiency

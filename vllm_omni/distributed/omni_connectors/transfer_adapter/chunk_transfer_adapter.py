@@ -188,6 +188,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     req.status = RequestStatus.FINISHED_STOPPED
 
                 req.prompt_token_ids = payload_data.get("code_predictor_codes", [])
+                # Pass additional fields (like left_context_size) to the request
+                req.additional_information = {
+                    k: v for k, v in payload_data.items()
+                    if k not in ("code_predictor_codes", "finished")
+                }
                 req.num_computed_tokens = 0
 
             # Mark as finished for consumption

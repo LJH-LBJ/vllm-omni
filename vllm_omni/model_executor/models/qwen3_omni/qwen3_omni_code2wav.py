@@ -234,7 +234,6 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
         """
         # Decode chunk
         wavs = []
-        left_context_size = codes[0]
         batch_wav = self(codes)
         ubatch_slices = get_forward_context().ubatch_slices
         if ubatch_slices is not None:
