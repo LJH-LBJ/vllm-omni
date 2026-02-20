@@ -9,6 +9,7 @@ import torch
 from vllm.inputs import TextPrompt
 from vllm.platforms import current_platform
 
+from vllm_omni.distributed.omni_connectors.transfer_adapter.chunk_transfer_adapter import OmniChunkTransferAdapter
 from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.inputs.data import OmniTokensPrompt
 
@@ -207,7 +208,7 @@ def thinker2talker(
 
 
 def talker2code2wav_async_chunk(
-    transfer_manager: Any,
+    transfer_manager: OmniChunkTransferAdapter,
     pooling_output: dict[str, Any],
     request: OmniEngineCoreRequest,
     **kwargs,
@@ -257,7 +258,8 @@ def talker2code2wav_async_chunk(
     left_context_size = min(length - context_length, left_context_size_config)
     end_index = min(length, left_context_size + context_length)
 
-    codes = torch.tensor(connector.code_prompt_token_ids[request_id][-end_index:]).transpose(0, 1).reshape(-1).tolist()
+    codes = torch.tensor(transfer_manager.code_prompt_token_ids[request_id][-end_index:]).transpose(0, 1).reshape(-1).tolist()
+
     info = {
         "code_predictor_codes": [left_context_size] + codes,
         "finished": torch.tensor(request.is_finished(), dtype=torch.bool),

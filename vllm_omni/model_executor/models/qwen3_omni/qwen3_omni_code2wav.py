@@ -234,7 +234,7 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
         """
         # Decode chunk
         wavs = []
-        context_size = codes[0]
+        left_context_size = codes[0]
         batch_wav = self(codes)
         ubatch_slices = get_forward_context().ubatch_slices
         if ubatch_slices is not None:
@@ -244,8 +244,8 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
             # Create one entry per batch so that each element is processed.
             code_seq_lens = [codes.shape[-1]] * codes.shape[0]
         for idx, code_seq_len in enumerate(code_seq_lens):
-            # Remove context from output (context_size * total_upsample samples)
-            wav_chunk = batch_wav[idx, :, context_size * self.total_upsample : code_seq_len * self.total_upsample]
+            # Remove context from output (left_context_size * total_upsample samples)
+            wav_chunk = batch_wav[idx, :, left_context_size * self.total_upsample : code_seq_len * self.total_upsample]
             wavs.append(wav_chunk)
         return wavs
 
