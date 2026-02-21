@@ -73,12 +73,6 @@ class OmniEngineArgs(EngineArgs):
     custom_process_next_stage_input_func: str | None = None
     stage_connector_spec: dict[str, Any] = field(default_factory=dict)
     async_chunk: bool = False
-    async_chunk_config: dict[str, Any] = field(
-        default_factory=lambda: {
-            "chunk_size": 25,
-            "left_context_size": 25,
-        }
-    )
     omni_kv_config: dict | None = None
     worker_type: str | None = None
 
@@ -192,7 +186,6 @@ class OmniEngineArgs(EngineArgs):
             logits_processors=self.logits_processors,
             video_pruning_rate=video_pruning_rate,
             io_processor_plugin=self.io_processor_plugin,
-            async_chunk_config=self.async_chunk_config,
             # Omni-specific fields
             stage_id=self.stage_id,
             async_chunk=self.async_chunk,
