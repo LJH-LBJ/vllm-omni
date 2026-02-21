@@ -258,7 +258,12 @@ def talker2code2wav_async_chunk(
     left_context_size = min(length - context_length, left_context_size_config)
     end_index = min(length, left_context_size + context_length)
 
-    codes = torch.tensor(transfer_manager.code_prompt_token_ids[request_id][-end_index:]).transpose(0, 1).reshape(-1).tolist()
+    codes = (
+        torch.tensor(transfer_manager.code_prompt_token_ids[request_id][-end_index:])
+        .transpose(0, 1)
+        .reshape(-1)
+        .tolist()
+    )
 
     info = {
         "code_predictor_codes": codes,

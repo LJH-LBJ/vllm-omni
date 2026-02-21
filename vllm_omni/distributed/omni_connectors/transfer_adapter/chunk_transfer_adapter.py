@@ -100,10 +100,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             self._pending_load_reqs[request_id] = request
 
     def save_async(
-            self,
-            async_chunk_config: dict[str, Any],
-            pooling_output: torch.Tensor | None = None,
-            request: Request | None = None
+        self,
+        async_chunk_config: dict[str, Any],
+        pooling_output: torch.Tensor | None = None,
+        request: Request | None = None,
     ) -> None:
         """Build and enqueue one chunk for asynchronous sending.
 
@@ -192,8 +192,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 req.prompt_token_ids = new_ids
                 # Pass additional fields (like left_context_size) to the request
                 req.additional_information = {
-                    k: v for k, v in payload_data.items()
-                    if k not in ("code_predictor_codes", "finished")
+                    k: v for k, v in payload_data.items() if k not in ("code_predictor_codes", "finished")
                 }
                 req.num_computed_tokens = 0
 
