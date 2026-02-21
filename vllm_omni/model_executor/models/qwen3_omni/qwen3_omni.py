@@ -389,12 +389,10 @@ class Qwen3OmniMoeForConditionalGeneration(
             # Get left_context_size from runtime_additional_information (passed via kwargs)
             # or additional_information parameter
             left_context_size = None
-            runtime_info = kwargs.get("runtime_additional_information")
-            if runtime_info and len(runtime_info) > 0 and runtime_info[0]:
-                # Take from first request's info (generation mode processes one at a time typically)
-                left_context_size = runtime_info[0].get("left_context_size")
-            elif additional_information is not None:
+            if additional_information is not None:
                 left_context_size = additional_information.get("left_context_size")
+            else:
+                logger.warning("No additional_information provided to code2wav stage.")
             audio_tensors = self.generate_audio(codes, voice_type, left_context_size=left_context_size)
 
             return audio_tensors

@@ -67,7 +67,7 @@ class OmniARScheduler(VLLMScheduler):
         self.chunk_transfer_adapter = None
         if getattr(model_config, "async_chunk", False):
             self.chunk_transfer_adapter = OmniChunkTransferAdapter(self.vllm_config)
-        self.async_chunk_config = model_config.get("async_chunk_config", None)
+        self.async_chunk_config = getattr(model_config, "async_chunk_config", None)
 
     def _get_kv_transfer_criteria(self) -> dict | None:
         # Note: vllm_config is available in Scheduler after super().__init__
