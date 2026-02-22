@@ -500,19 +500,9 @@ class Qwen3OmniMoeForConditionalGeneration(
             talker_codes = talker_codes.expand(1, 16, -1)
 
         if self.vllm_config.model_config.async_chunk:
-            # Get config from model_config, use passed left_context_size or fallback to config
-            async_chunk_config = getattr(self.vllm_config.model_config, "async_chunk_config", {})
-            chunk_size = async_chunk_config.get("chunk_size", 25)
-            # Use passed left_context_size if available, otherwise use config default
-            if left_context_size is None:
-                left_context_size = async_chunk_config.get("left_context_size", 25)
-                logger.warning(
-                    "Left context size for async chunking is not provided, falling back to config default: %s",
-                    left_context_size,
-                )
+            # Only use left_context_size from additional information
             audio_tensors = self.code2wav.chunked_decode_streaming(
                 talker_codes,
-                chunk_size=chunk_size,
                 left_context_size=left_context_size,
             )
         else:

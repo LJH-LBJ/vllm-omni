@@ -214,17 +214,17 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
     def chunked_decode_streaming(
         self,
         codes: torch.Tensor,
-        chunk_size: int = 25,
-        left_context_size: int = 25,
+        left_context_size: int,
     ) -> list[torch.Tensor]:
         """
         Decode long sequences in chunks to avoid OOM.
 
         Uses overlapping chunks with left context to avoid boundary artifacts.
 
+        No longer need chunk size here, which is different from chunked_decode
+
         Args:
             codes: [batch, num_quantizers, seq_len] - num_quantizers-layer RVQ codes
-            chunk_size: Number of codec frames per chunk
             left_context_size: Number of overlapping frames for context
 
         Returns:
@@ -232,6 +232,8 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
                 codes. For ``batch_size == 1``, this is a list containing a
                 single tensor with shape ``[1, waveform_len]``.
         """
+        if left_context_size is None:
+            logger.warning("left_context_size is None in chunked_decode_streaming; this may cause incorrect output shape.")
         # Decode chunk
         wavs = []
         batch_wav = self(codes)

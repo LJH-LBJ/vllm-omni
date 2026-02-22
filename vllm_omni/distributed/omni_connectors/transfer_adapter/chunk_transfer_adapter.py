@@ -191,9 +191,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 new_ids = payload_data.get("code_predictor_codes", [])
                 req.prompt_token_ids = new_ids
                 # Pass additional fields (like left_context_size) to the request
-                req.additional_information = {
-                    k: v for k, v in payload_data.items() if k not in ("code_predictor_codes", "finished")
-                }
+                # Only pass chunk context metadata in additional_information
+                req.additional_information = {}
+                if "left_context_size" in payload_data:
+                    req.additional_information["left_context_size"] = payload_data["left_context_size"]
                 req.num_computed_tokens = 0
 
                 # Empty chunk with more data expected: keep polling.
