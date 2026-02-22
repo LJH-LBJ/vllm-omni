@@ -228,9 +228,9 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
     hf_config_name: str | None = None
     custom_process_next_stage_input_func: str | None = None
     stage_connector_spec: dict[str, Any] = field(default_factory=dict)
+    async_chunk: bool = False
     async_chunk_config: dict[str, Any] = field(
         default_factory=lambda: {
-            "async_chunk": False,
             "chunk_size": 25,
             "left_context_size": 25,
         }
