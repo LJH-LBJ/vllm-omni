@@ -233,7 +233,9 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
                 single tensor with shape ``[1, waveform_len]``.
         """
         if left_context_size is None:
-            logger.warning("left_context_size is None in chunked_decode_streaming; this may cause incorrect output shape.")
+            logger.warning(
+                "left_context_size is None in chunked_decode_streaming; this may cause incorrect output shape."
+            )
         # Decode chunk
         wavs = []
         batch_wav = self(codes)
