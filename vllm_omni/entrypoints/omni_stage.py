@@ -269,6 +269,12 @@ class OmniStage:
         self.is_comprehension = getattr(stage_config, "is_comprehension", False)
         # Support for different stage types: "llm" (default) or "diffusion"
         self.stage_type: Literal["llm", "diffusion"] = getattr(stage_config, "stage_type", "llm")
+        if (
+            "stage_id" in stage_config.engine_args
+            and stage_config.engine_args.stage_id != self.stage_id
+            and self.stage_id is not None
+        ):
+            stage_config.engine_args.stage_id = self.stage_id
         if hasattr(stage_config, "custom_process_input_func"):
             # Import the module specified in the config (already a full module path)
             module_path, func_name = stage_config.custom_process_input_func.rsplit(".", 1)
