@@ -16,7 +16,6 @@ from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
     Qwen3OmniMoeThinkerConfig,
 )
 from vllm.config import VllmConfig
-from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.rotary_embedding import MRotaryEmbedding
 from vllm.model_executor.models.interfaces import SupportsMRoPE, SupportsMultiModal, SupportsPP
@@ -356,13 +355,14 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         # ========== Stage 3: Code2Wav ==========
         elif self.model_stage == "code2wav":
+            seq_token_counts: list[int] | None = kwargs.get("seq_token_counts")
+
             # Extract codec codes from input
             if input_ids.shape[0] % 16 == 0:
-                ubatch_slices = get_forward_context().ubatch_slices
-                if ubatch_slices is not None:
-                    max_seq_len = max(ubatch_slices) // 16
-                    batch_size = len(ubatch_slices)
-                    split_codes = torch.split(input_ids, ubatch_slices, dim=0)
+                if seq_token_counts is not None:
+                    max_seq_len = max(seq_token_counts) // 16
+                    batch_size = len(seq_token_counts)
+                    split_codes = torch.split(input_ids, seq_token_counts, dim=0)
                     codes = torch.zeros((batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype)
                     for idx, code in enumerate(split_codes):
                         seq_len = code.shape[0] // 16
@@ -396,7 +396,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                         left_context_size.append(info["left_context_size"])
             else:
                 logger.debug("No additional_information provided to code2wav stage.")
-            audio_tensors = self.generate_audio(codes, voice_type, left_context_size=left_context_size)
+            audio_tensors = self.generate_audio(codes, voice_type, left_context_size, seq_token_counts)
 
             return audio_tensors
 
@@ -473,17 +473,19 @@ class Qwen3OmniMoeForConditionalGeneration(
         code: torch.Tensor,
         voice_type: str,
         left_context_size: list[int] | None = None,
+        seq_token_counts: list[int] | None = None,
     ) -> list[torch.Tensor]:
         """
         Generate audio waveform from codec codes.
 
         Args:
-            code: [8, T] - 8-layer RVQ codec codes
+            code: [batch, num_quantizers, T] - RVQ codec codes
             voice_type: Voice type (not used in Qwen3, kept for compatibility)
             left_context_size: Context size for streaming decode (from async_chunk_config)
+            seq_token_counts: Token count for each request in batch
 
         Returns:
-            audio_tensor: [1, waveform_len] - Audio waveform
+            list of audio waveforms
         """
         code2wav_dev = self._module_device(self.code2wav)
 
@@ -507,6 +509,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             audio_tensors = self.code2wav.chunked_decode_streaming(
                 talker_codes,
                 left_context_size=left_context_size,
+                seq_token_counts=seq_token_counts,
             )
         else:
             # Use chunked decode for memory efficiency
@@ -514,6 +517,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 talker_codes,
                 chunk_size=300,
                 left_context_size=25,
+                seq_token_counts=seq_token_counts,
             )
 
         return audio_tensors
