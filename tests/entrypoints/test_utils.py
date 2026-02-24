@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
+from vllm_omni.diffusion.data import OmniDiffusionConfig
+from vllm_omni.engine.arg_utils import OmniEngineArgs
 from vllm_omni.entrypoints.utils import (
     _convert_dataclasses_to_dict,
     _filter_dict_like_object,
@@ -232,3 +234,38 @@ class TestFilterDataclassKwargs:
 
         with pytest.raises(ValueError, match="kwargs must be a dictionary"):
             filter_dataclass_kwargs(SimpleConfig, "invalid")
+
+    def test_filters_omni_engine_args_unknown_fields(self):
+        """Test that OmniEngineArgs kwargs are filtered to valid fields only."""
+        kwargs = {
+            "model": "dummy",
+            "stage_id": 1,
+            "engine_output_type": "image",
+            "unknown_field": "drop_me",
+        }
+
+        result = filter_dataclass_kwargs(OmniEngineArgs, kwargs)
+
+        assert "model" in result
+        assert "stage_id" in result
+        assert "engine_output_type" in result
+        assert "unknown_field" not in result
+
+    def test_filters_omni_diffusion_config_union_dataclass(self):
+        """Test that OmniDiffusionConfig filters nested dataclass in Union fields."""
+        kwargs = {
+            "model": "dummy",
+            "cache_config": {
+                "rel_l1_thresh": 0.3,
+                "extra_param": "should_drop",
+            },
+            "unknown_top": "drop_me",
+        }
+
+        result = filter_dataclass_kwargs(OmniDiffusionConfig, kwargs)
+
+        assert "model" in result
+        assert "cache_config" in result
+        assert "unknown_top" not in result
+        assert result["cache_config"]["rel_l1_thresh"] == 0.3
+        assert "extra_param" not in result["cache_config"]
