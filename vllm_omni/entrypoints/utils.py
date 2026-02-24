@@ -374,7 +374,7 @@ def filter_dataclass_kwargs(cls: Any, kwargs: dict) -> dict:
                 return {k: _filter_value(v, val_type) for k, v in value.items()}
             return value
 
-        if origin is types.UnionType or origin is types.UnionType or origin is getattr(types, "UnionType", None):
+        if origin is types.UnionType or origin is getattr(types, "UnionType", None):
             for arg in get_args(annotation):
                 if isinstance(arg, type) and is_dataclass(arg) and isinstance(value, dict):
                     return filter_dataclass_kwargs(arg, value)
