@@ -161,10 +161,6 @@ For **online inference** (serving mode), the summary is always per-request. `e2e
 - Stage2's `num_tokens_out`: **0**
 
 so `e2e_total_tokens = 4,860 + 67 + 275 + 0 = 5,202`, which matches the table value `e2e_total_tokens`.
-```
-e2e_total_tokens = 4,860 + 67 + 275 + 0 = 5,202
-```
-This matches the table value: `e2e_total_tokens = 5,202`.
 
 **transfers_total_time_ms**
 
@@ -174,6 +170,4 @@ For each edge:
 
 - 1->2: tx_time_ms (**18.790**) + rx_decode_time_ms (**31.706**) + in_flight_time_ms (**2.819**) = **53.315**
 
-192.581 + 53.315 = **245.896** = transfers_total_time_ms,  which matches the calculation (difference is due to rounding)
-
-The table shows `transfers_total_time_ms = 245.895`, which matches the calculation (difference is due to rounding).
+192.581 + 53.315 = **245.896** = transfers_total_time_ms, which matches the calculation (difference is due to rounding)
