@@ -214,7 +214,7 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
     def chunked_decode_streaming(
         self,
         codes: torch.Tensor,
-        left_context_size: int,
+        left_context_size: list[int] | None = None,
     ) -> list[torch.Tensor]:
         """
         Decode long sequences in chunks to avoid OOM.
@@ -248,7 +248,9 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
             code_seq_lens = [codes.shape[-1]] * codes.shape[0]
         for idx, code_seq_len in enumerate(code_seq_lens):
             # Remove context from output (left_context_size * total_upsample samples)
-            wav_chunk = batch_wav[idx, :, left_context_size * self.total_upsample : code_seq_len * self.total_upsample]
+            wav_chunk = batch_wav[
+                idx, :, left_context_size[idx] * self.total_upsample : code_seq_len * self.total_upsample
+            ]
             wavs.append(wav_chunk)
         return wavs
 

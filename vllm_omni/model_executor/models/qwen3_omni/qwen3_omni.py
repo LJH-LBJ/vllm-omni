@@ -5,6 +5,7 @@
 
 from collections.abc import Iterable
 from functools import cached_property
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -252,7 +253,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         codec: torch.Tensor | None = None,
         sampling_metadata: SamplingMetadata | None = None,
         logits_index: int | None = None,
-        additional_information: dict[str, object] | None = None,
+        runtime_additional_information: list[dict[str, Any]] | None = None,
         **kwargs: object,
     ) -> torch.Tensor | IntermediateTensors | OmniOutput:
         """
@@ -388,9 +389,11 @@ class Qwen3OmniMoeForConditionalGeneration(
             # Generate audio from codec codes
             # Get left_context_size from runtime_additional_information (passed via kwargs)
             # or additional_information parameter
-            left_context_size = None
-            if additional_information is not None:
-                left_context_size = additional_information.get("left_context_size")
+            left_context_size = []
+            if runtime_additional_information is not None:
+                for info in runtime_additional_information:
+                    if "left_context_size" in info:
+                        left_context_size.append(info["left_context_size"])
             else:
                 logger.debug("No additional_information provided to code2wav stage.")
             audio_tensors = self.generate_audio(codes, voice_type, left_context_size=left_context_size)
@@ -469,7 +472,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         self,
         code: torch.Tensor,
         voice_type: str,
-        left_context_size: int | None = None,
+        left_context_size: list[int] | None = None,
     ) -> list[torch.Tensor]:
         """
         Generate audio waveform from codec codes.
