@@ -125,8 +125,7 @@ class OmniGenerationScheduler(VLLMScheduler):
                 # Pop the finished request from waiting queue and don't schedule it
                 self.waiting.pop_request()
                 continue
-            # the initial value of num_cached_tokens is -1
-            # if not handled, the subsequent metrics calculation in vllm will raise error
+            # Count the number of prefix cached tokens.
             if request.num_cached_tokens < 0:
                 request.num_cached_tokens = request.num_computed_tokens
 
