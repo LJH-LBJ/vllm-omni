@@ -1054,8 +1054,9 @@ class OmniGPUModelRunner(GPUModelRunner):
         # cached requests. This is required for stages without preprocess
         # (e.g., code2wav) so runtime_additional_information can be refreshed
         # from scheduler cached infos on every step.
-        if self.vllm_config.model_config.async_chunk:
-            self._update_additional_information(scheduler_output)
+        if hasattr(self.model, "has_preprocess") or hasattr(self.model, "enable_update_additional_information"):
+            if self.vllm_config.model_config.async_chunk:
+                self._update_additional_information(scheduler_output)
 
         if hasattr(self.model, "has_preprocess") and self.model.has_preprocess:
             # Overlay custom prompt_embeds per request for the prompt portion;

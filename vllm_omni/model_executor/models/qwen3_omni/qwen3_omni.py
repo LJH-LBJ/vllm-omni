@@ -158,6 +158,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             self.requires_raw_input_tokens = True
 
         elif self.model_stage == "code2wav":
+            self.enable_update_additional_information = True
             self.thinker = None
             self.talker = None
             # Initialize code2wav (codec codes → audio waveform)
