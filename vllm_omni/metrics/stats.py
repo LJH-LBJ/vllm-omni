@@ -227,7 +227,7 @@ class OrchestratorAggregator:
                 and len(multimodal_output) > 0
             ):
                 nframes = sum(
-                    int(t.shape[0])
+                    int(t.shape[0]) if t.ndim > 0 else 1
                     for t in (multimodal_output if isinstance(multimodal_output, list) else [multimodal_output])
                 )
                 stage_events_for_req = self.stage_events.get(request_id, [])
