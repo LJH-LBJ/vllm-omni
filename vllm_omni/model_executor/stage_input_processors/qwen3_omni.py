@@ -87,7 +87,6 @@ def thinker2talker_async_chunk(
     transfer_manager: Any,
     pooling_output: dict[str, Any],
     request: OmniEngineCoreRequest,
-    **kwargs,
 ) -> list[dict[str, Any]]:
     """
     Process thinker outputs to create talker inputs.
@@ -210,7 +209,6 @@ def talker2code2wav_async_chunk(
     transfer_manager: Any,
     pooling_output: dict[str, Any],
     request: OmniEngineCoreRequest,
-    **kwargs,
 ):
     """
     Pooling version.

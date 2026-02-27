@@ -452,7 +452,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         Args:
             code: [batch, num_quantizers, T] - RVQ codec codes
             voice_type: Voice type (not used in Qwen3, kept for compatibility)
-            left_context_size: Context size for streaming decode (from async_chunk_config)
+            left_context_size: Left context size for streaming decode
             seq_token_counts: Token count for each request in batch
 
         Returns:

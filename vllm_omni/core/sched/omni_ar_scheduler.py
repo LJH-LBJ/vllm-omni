@@ -67,7 +67,6 @@ class OmniARScheduler(VLLMScheduler):
         self.chunk_transfer_adapter = None
         if getattr(model_config, "async_chunk", False):
             self.chunk_transfer_adapter = OmniChunkTransferAdapter(self.vllm_config)
-        self.async_chunk_config = getattr(model_config, "async_chunk_config", None)
 
     def _get_kv_transfer_criteria(self) -> dict | None:
         # Note: vllm_config is available in Scheduler after super().__init__
@@ -354,7 +353,7 @@ class OmniARScheduler(VLLMScheduler):
                     )
                 )
                 if self.chunk_transfer_adapter is not None:
-                    self.chunk_transfer_adapter.save_async(self.async_chunk_config, pooler_output, request)
+                    self.chunk_transfer_adapter.save_async(pooler_output, request)
             else:
                 # Invariant: EngineCore returns no partial prefill outputs.
                 assert not prompt_logprobs_tensors

@@ -24,11 +24,6 @@ class OmniModelConfig(ModelConfig):
     Attributes:
         stage_id: Identifier for the stage in a multi-stage pipeline (default: 0)
         async_chunk: If set to True, perform async chunk
-        async_chunk_config: Configuration dictionary for async chunk processing,
-            including keys like "chunk_size" and "left_context_size".
-            chunk_size: code2wav decode chunk size
-            left_context_size: code2wav left context size
-            (default: {"chunk_size": 25, "left_context_size": 25})
         model_stage: Stage type identifier, e.g., "thinker" or "talker"
             (default: "thinker")
         model_arch: Model architecture name
@@ -50,12 +45,6 @@ class OmniModelConfig(ModelConfig):
 
     stage_id: int = 0
     async_chunk: bool = False
-    async_chunk_config: dict[str, Any] = field(
-        default_factory=lambda: {
-            "chunk_size": 25,  # code2wav decode chunk size
-            "left_context_size": 25,  # code2wav left context size
-        }
-    )
     model_stage: str = "thinker"
     model_arch: str = "Qwen2_5OmniForConditionalGeneration"
     worker_type: str | None = None
