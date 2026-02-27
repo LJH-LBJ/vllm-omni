@@ -285,6 +285,13 @@ class OmniBase:
                 if lora_scale is not None:
                     if not hasattr(cfg.engine_args, "lora_scale") or cfg.engine_args.lora_scale is None:
                         cfg.engine_args.lora_scale = lora_scale
+                quantization_config = kwargs.get("quantization_config")
+                if quantization_config is not None:
+                    if (
+                        not hasattr(cfg.engine_args, "quantization_config")
+                        or cfg.engine_args.quantization_config is None
+                    ):
+                        cfg.engine_args.quantization_config = quantization_config
             except Exception as e:
                 logger.warning("Failed to inject LoRA config for stage: %s", e)
 
@@ -371,9 +378,13 @@ class OmniBase:
             # Allocate endpoints for each stage
             total_stages = len(self.stage_configs)
             self._handshake_endpoints = {}
+
+            # If --stage-id is not set, use local_only mode
+            local_only = self._single_stage_id is None
+
             for sid in range(total_stages):
-                in_endpoint = get_engine_client_zmq_addr(local_only=False, host=self._zmq_master_address)
-                out_endpoint = get_engine_client_zmq_addr(local_only=False, host=self._zmq_master_address)
+                in_endpoint = get_engine_client_zmq_addr(local_only=local_only, host=self._zmq_master_address)
+                out_endpoint = get_engine_client_zmq_addr(local_only=local_only, host=self._zmq_master_address)
                 self._handshake_endpoints[sid] = (in_endpoint, out_endpoint)
                 logger.debug(
                     f"[{self._name}] Allocated endpoints for stage-{sid}: in={in_endpoint}, out={out_endpoint}"
