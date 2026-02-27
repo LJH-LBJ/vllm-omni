@@ -9,7 +9,6 @@ import torch
 from vllm.inputs import TextPrompt
 from vllm.platforms import current_platform
 
-from vllm_omni.distributed.omni_connectors.transfer_adapter.chunk_transfer_adapter import OmniChunkTransferAdapter
 from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.inputs.data import OmniTokensPrompt
 
@@ -208,7 +207,7 @@ def thinker2talker(
 
 
 def talker2code2wav_async_chunk(
-    transfer_manager: OmniChunkTransferAdapter,
+    transfer_manager: Any,
     pooling_output: dict[str, Any],
     request: OmniEngineCoreRequest,
     **kwargs,
@@ -219,9 +218,11 @@ def talker2code2wav_async_chunk(
     if "code_predictor_codes" not in pooling_output:
         return None
 
-    async_chunk_config = kwargs.get("async_chunk_config", {})
-    chunk_size_config = async_chunk_config.get("chunk_size", 25)
-    left_context_size_config = async_chunk_config.get("left_context_size", 25)
+    connector = getattr(transfer_manager, "connector", None)
+    raw_cfg = getattr(connector, "config", {}) or {}
+    cfg = raw_cfg.get("extra", raw_cfg) if isinstance(raw_cfg, dict) else {}
+    chunk_size_config = int(cfg.get("codec_chunk_frames", 25))
+    left_context_size_config = int(cfg.get("codec_left_context_frames", 25))
 
     code_predictor_codes = pooling_output["code_predictor_codes"]
 

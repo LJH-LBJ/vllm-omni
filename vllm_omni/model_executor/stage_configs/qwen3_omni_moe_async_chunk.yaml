@@ -57,9 +57,6 @@ stage_args:
       distributed_executor_backend: "mp"
       hf_config_name: talker_config
       custom_process_next_stage_input_func: vllm_omni.model_executor.stage_input_processors.qwen3_omni.talker2code2wav_async_chunk
-      async_chunk_config:
-        chunk_size: 25 # code2wav decode chunk size
-        left_context_size: 25 # code2wav left context size
     engine_input_source: [0]
     # final_output: true
     # final_output_type: text
@@ -102,3 +99,13 @@ stage_args:
       seed: 42
       detokenize: True
       repetition_penalty: 1.1
+
+runtime:
+
+  connectors:
+    connector_of_shared_memory:
+      name: SharedMemoryConnector
+      extra:
+        # Align with Omni: small chunks with sufficient context overlap.
+        codec_chunk_frames: 25 # code2wav decode chunk size
+        codec_left_context_frames: 25 # code2wav left context size
