@@ -21,14 +21,21 @@ def _extract_last_frame(pooling_output: dict[str, Any]) -> torch.Tensor | None:
 
 def talker2code2wav_async_chunk(
     transfer_manager: Any,
-    pooling_output: dict[str, Any],
+    pooling_output: dict[str, Any] | None,
     request: Any,
     is_finished: bool = False,
 ) -> dict[str, Any] | None:
-    if not isinstance(pooling_output, dict):
-        return None
-
     request_id = request.external_req_id
+    finished = bool(is_finished or request.is_finished())
+
+    if isinstance(pooling_output, dict):
+        frame = _extract_last_frame(pooling_output)
+        if frame is not None:
+            codec_codes = frame.cpu().tolist()
+            transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
+    elif not finished:
+        # Some steps may not produce pooling_output. Only flush on finish.
+        return None
 
     connector = getattr(transfer_manager, "connector", None)
     raw_cfg = getattr(connector, "config", {}) or {}
@@ -40,23 +47,24 @@ def talker2code2wav_async_chunk(
             f"Invalid codec chunk config: codec_chunk_frames={chunk_size_config}, "
             f"codec_left_context_frames={left_context_size_config}"
         )
-
-    frame = _extract_last_frame(pooling_output)
-    if frame is not None:
-        codec_codes = frame.cpu().tolist()
-        transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
-
     length = len(transfer_manager.code_prompt_token_ids[request_id])
+
+    # Avoid emitting empty chunks during normal streaming. If the request is
+    # finished and nothing was produced, emit an EOF marker.
+    if length <= 0:
+        if finished:
+            return {
+                "code_predictor_codes": [],
+                "finished": torch.tensor(True, dtype=torch.bool),
+            }
+        return None
+
     chunk_length = length % chunk_size_config
 
-    if chunk_length != 0 and not is_finished:
+    if chunk_length != 0 and not finished:
         return None
 
     context_length = chunk_length if chunk_length != 0 else chunk_size_config
-
-    if length <= 0:
-        return None
-
     end_index = min(length, left_context_size_config + context_length)
     left_context_size = max(0, int(end_index - context_length))
     window_frames = transfer_manager.code_prompt_token_ids[request_id][-end_index:]
@@ -69,5 +77,5 @@ def talker2code2wav_async_chunk(
     return {
         "code_predictor_codes": code_predictor_codes,
         "left_context_size": left_context_size,
-        "finished": torch.tensor(is_finished, dtype=torch.bool),
+        "finished": torch.tensor(finished, dtype=torch.bool),
     }
