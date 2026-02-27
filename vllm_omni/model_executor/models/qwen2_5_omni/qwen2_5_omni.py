@@ -105,6 +105,8 @@ class Qwen2_5OmniForConditionalGeneration(
             self.talker.init_multi_modal(thinker_config)
             self.model = self.talker
             self.token2wav = None
+            # for CI: Initialize special tokens embeddings early to avoid AttributeError when loading dummy weights
+            self._init_special_tokens_embeddings()
             # set suppress start id according to token2wav
             t2w_token_end_id = getattr(
                 getattr(getattr(config, "token2wav_config", None), "dit_config", None), "num_embeds", None
