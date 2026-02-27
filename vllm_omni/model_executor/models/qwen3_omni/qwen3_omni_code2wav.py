@@ -237,6 +237,7 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
             logger.warning(
                 "left_context_size is None in chunked_decode_streaming; this may cause incorrect output shape."
             )
+            left_context_size = [0] * codes.shape[0]
         # Decode chunk
         wavs = []
         batch_wav = self(codes)

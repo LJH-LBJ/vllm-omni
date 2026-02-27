@@ -359,8 +359,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 codes = input_ids_flatten.reshape(1, 16, -1)
 
             # Generate audio from codec codes
-            # Get left_context_size from runtime_additional_information (passed via kwargs)
-            # or additional_information parameter
+            # Get every request's left_context_size from runtime_additional_information (passed via kwargs)
             left_context_size = []
             if runtime_additional_information is not None:
                 for info in runtime_additional_information:
