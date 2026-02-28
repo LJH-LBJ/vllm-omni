@@ -233,7 +233,7 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
                 codes. For ``batch_size == 1``, this is a list containing a
                 single tensor with shape ``[1, waveform_len]``.
         """
-        if not left_context_size:
+        if len(left_context_size) != len(seq_token_counts):
             logger.warning(
                 "left_context_size is None in chunked_decode_streaming; "
                 "this may cause incorrect output shape or just in dummy run."
