@@ -97,9 +97,6 @@ stage_args:
     engine_input_source: [1]
     final_output: true
     final_output_type: audio
-    # Distributed connector configuration
-    input_connectors:
-      from_stage_0: connector_of_shared_memory
     default_sampling_params:
       temperature: 0.0
       top_p: 1.0
@@ -110,12 +107,11 @@ stage_args:
       repetition_penalty: 1.1
 
 runtime:
-  enabled: true
 
   connectors:
     connector_of_shared_memory:
       name: SharedMemoryConnector
       extra:
         # Align with Omni: small chunks with sufficient context overlap.
-        codec_chunk_frames: 4 # code2wav decode chunk size
+        codec_chunk_frames: 25 # code2wav decode chunk size
         codec_left_context_frames: 25 # code2wav left context size
