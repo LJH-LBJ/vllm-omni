@@ -235,7 +235,7 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
         """
         if not left_context_size:
             logger.warning(
-                "left_context_size is None in chunked_decode_streaming;"
+                "left_context_size is None in chunked_decode_streaming; "
                 "this may cause incorrect output shape or just in dummy run."
             )
             left_context_size = [0] * codes.shape[0]

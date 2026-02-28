@@ -49,7 +49,7 @@ class OmniGenerationScheduler(VLLMScheduler):
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
         scheduled_encoder_inputs: dict[str, list[int]] = {}
         cached_prompt_token_ids: dict[str, list[int]] = {}
-        cached_additional_information: dict[str, list[int]] = {}
+        cached_additional_information: dict[str, dict | None] = {}
 
         # Temporary queue: preserve waiting order, do not disturb non-diffusion requests
         skipped_waiting_requests = create_request_queue(self.policy)
