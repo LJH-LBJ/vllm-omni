@@ -181,59 +181,40 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         # This will be the parallel prediction implementation
         batch_size, seq_len = input_ids.shape
 
-        # For now, use sequential generation (TODO: implement parallel)
-        # Result will be [batch, num_code_groups, seq_len]
-        # - all_codes_per_position will collect [batch, num_code_groups, 1] for each position
-        all_codes_per_position = []
-        middle_hidden_states = []  # Collect hidden states for each position
+        # Vectorized generation across positions (flatten pos into batch)
+        total_positions = batch_size * seq_len
+        layer0_code_flat = input_ids.reshape(total_positions, 1)
 
-        # Generate residual layers for each position
-        for pos in range(seq_len):
-            layer0_code = input_ids[:, pos : pos + 1]  # [batch, 1]
+        # Ensure last_talker_hidden is [batch, 1, hidden_size]
+        if last_talker_hidden is None:
+            raise ValueError("`last_talker_hidden` must be provided for code predictor.")
+        if last_talker_hidden.ndim == 2:
+            # last_talker_hidden is [batch, hidden_size], expand to [batch, 1, hidden_size] for broadcasting
+            last_talker_hidden = last_talker_hidden.unsqueeze(1)
 
-            # Initial input: [last_talker_hidden, layer0_embed]
-            layer0_embed = self.embed_input_ids(layer0_code)
-            self.layer0_embed_buffer[:batch_size].copy_(layer0_embed)
-            pos_all_layers, current_input = self.code_predictor(
-                layer0_code, self.layer0_embed_buffer[:batch_size], last_talker_hidden
-            )
+        last_talker_hidden_flat = (
+            last_talker_hidden.expand(batch_size, seq_len, -1)
+            .reshape(total_positions, 1, last_talker_hidden.shape[-1])
+            .contiguous()
+        )  # [B*T, 1, hidden_size]
 
-            # Stack all layers for this position: [batch, num_code_groups, 1]
-            all_codes_per_position.append(pos_all_layers)
-            middle_hidden_states.append(current_input[:, 2:-1, :])
+        layer0_embed_flat = self.embed_input_ids(layer0_code_flat)  # [B*T, 1, hidden_size]
+        pos_all_layers_flat, current_input_flat = self.code_predictor(
+            layer0_code_flat, layer0_embed_flat, last_talker_hidden_flat
+        )  # current_input_flat is [B*T, num_code_groups+1(last_talker_hidden), hidden_size]
 
-        # Concatenate across positions: [batch, num_code_groups, seq_len]
-        result_codes = torch.cat(all_codes_per_position, dim=2)
+        # Reshape codes back to [batch, num_code_groups, seq_len]
+        result_codes = (
+            pos_all_layers_flat.view(batch_size, seq_len, self.num_code_groups, 1).permute(0, 2, 1, 3).squeeze(-1)
+        )
 
-        # Build summed embeddings for each position (like Transformers)
-        # This combines layer-0 embed, mid layers hidden states, and last layer embed
-        all_summed_embeddings = []
-
-        for pos in range(seq_len):
-            # Layer 0 embedding
-            layer0_code = result_codes[:, 0, pos : pos + 1]  # [batch, 1]
-            layer0_embed = self.embed_input_ids(layer0_code)  # [batch, 1, hidden_size]
-
-            # mid layers hidden states (from CodePredictor)
-            mid_residual_hiddens = middle_hidden_states[pos]  # [batch, num_code_groups-2, hidden_size]
-            mid_list = list(mid_residual_hiddens.split(1, dim=1))
-
-            # last layer embedding
-            last_layer_code = result_codes[:, -1, pos : pos + 1]  # [batch, 1]
-            last_residual_hidden = self.code_predictor.model.codec_embedding[-1](last_layer_code)
-
-            # Concatenate all layers: [batch, num_code_groups, hidden_size]
-            pos_codec_hiddens = torch.cat(
-                [layer0_embed] + mid_list + [last_residual_hidden],
-                dim=1,
-            )
-
-            # Sum across layers: [batch, 1, hidden_size] (like Transformers)
-            pos_summed = pos_codec_hiddens.sum(dim=1, keepdim=True)
-            all_summed_embeddings.append(pos_summed)
-
-        # Concatenate across positions: [batch, seq_len, hidden_size]
-        summed_embeddings = torch.cat(all_summed_embeddings, dim=1).squeeze(1)
+        # Sum embeddings for all code groups: current_input = [last_talker_hidden, layer0, residuals]
+        summed_embeddings = current_input_flat[:, 1:, :].sum(
+            dim=1
+        )  # Sum over code groups, keep batch and hidden dims -> [B*T, hidden_size]
+        summed_embeddings = summed_embeddings.view(
+            batch_size, seq_len, -1
+        )  # Reshape back to [batch, seq_len, hidden_size]
 
         return result_codes, summed_embeddings
 
