@@ -9,7 +9,7 @@ import ssl
 import time
 import traceback
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Literal
 
@@ -71,6 +71,24 @@ class MixRequestFuncOutput(RequestFuncOutput):
     audio_duration: float = 0.0
     audio_frames: int = 0
     audio_rtf: float = 0.0
+    talker_output_tokens: int = 0
+    talker_input_tokens: int = 0
+    code2wav_output_tokens: int = 0
+    code2wav_input_tokens: int = 0
+    talker_ttft: float = 0.0
+    code2wav_ttft: float = 0.0
+    talker_latency: float = 0.0
+    code2wav_latency: float = 0.0
+    talker_last_timestamp: float = 0.0
+    code2wav_last_timestamp: float = 0.0
+    talker_itl: list[float] = field(default_factory=list)
+    code2wav_itl: list[float] = field(default_factory=list)
+    talker_tpot_ms: float = 0.0
+    talker_itl_ms: float = 0.0
+    code2wav_tpot_ms: float = 0.0
+    code2wav_itl_ms: float = 0.0
+    talker_stage_gen_time_ms: float = 0.0
+    code2wav_stage_gen_time_ms: float = 0.0
     text_latency: float = 0.0
 
 
@@ -171,9 +189,48 @@ async def async_request_openai_chat_omni_completions(
                                                 generated_audio = generated_audio + seg
 
                             if metrics := data.get("metrics"):
-                                output.output_tokens = metrics.get("num_tokens_out", 0)
+
+                                def _metric_get(key, default=None):
+                                    if isinstance(metrics, dict):
+                                        return metrics.get(key, default)
+                                    return getattr(metrics, key, default)
+
+                                final_output_type = _metric_get("final_output_type")
+                                num_tokens_out = int(_metric_get("num_tokens_out", 0) or 0)
+                                num_tokens_in = int(_metric_get("num_tokens_in", 0) or 0)
+                                stage_gen_time_ms = float(_metric_get("stage_gen_time_ms", 0.0) or 0.0)
+
+                                if final_output_type == "text":
+                                    # thinker stage
+                                    output.output_tokens = num_tokens_out
+                                elif final_output_type == "audio":
+                                    # code2wav stage
+                                    output.code2wav_output_tokens = num_tokens_out
+                                    output.code2wav_input_tokens = num_tokens_in
+                                    output.code2wav_stage_gen_time_ms = stage_gen_time_ms
+                                    if output.code2wav_ttft == 0.0:
+                                        output.code2wav_ttft = timestamp - st
+                                        output.code2wav_last_timestamp = timestamp
+                                    else:
+                                        output.code2wav_itl.append(timestamp - output.code2wav_last_timestamp)
+                                        output.code2wav_last_timestamp = timestamp
+                                else:
+                                    # talker stage
+                                    output.talker_output_tokens = num_tokens_out
+                                    output.talker_input_tokens = num_tokens_in
+                                    output.talker_stage_gen_time_ms = stage_gen_time_ms
+                                    if output.talker_ttft == 0.0:
+                                        output.talker_ttft = timestamp - st
+                                        output.talker_last_timestamp = timestamp
+                                    else:
+                                        output.talker_itl.append(timestamp - output.talker_last_timestamp)
+                                        output.talker_last_timestamp = timestamp
 
                 output.latency = timestamp - st
+                if output.code2wav_last_timestamp > 0.0:
+                    output.code2wav_latency = output.code2wav_last_timestamp - st
+                if output.talker_last_timestamp > 0.0:
+                    output.talker_latency = output.talker_last_timestamp - st
                 output.generated_text = generated_text
                 if generated_audio is not None:
                     output.audio_duration = len(generated_audio) / 1000.0

@@ -298,12 +298,13 @@ class OrchestratorAggregator:
                 (evt for evt in reversed(self.stage_events.get(req_id, [])) if evt.stage_id == stage_id),
                 None,
             )
-            if stage_event is not None and stage_event.final_output_type == "text":
+            if stage_event is not None:
                 output_to_yield.metrics = {
                     "num_tokens_in": stage_event.num_tokens_in,
                     "num_tokens_out": stage_event.num_tokens_out,
                     "stage_id": stage_event.stage_id,
                     "final_output_type": stage_event.final_output_type,
+                    "stage_gen_time_ms": stage_event.stage_gen_time_ms,
                 }
 
             # 5. Finished: record audio generated frames

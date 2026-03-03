@@ -25,6 +25,26 @@ class MultiModalsBenchmarkMetrics(BenchmarkMetrics):
     median_audio_duration_s: float = 0.0
     std_audio_duration_s: float = 0.0
     percentiles_audio_duration_s: list[tuple[float, float]] = None
+    total_talker_input_tokens: int = 0
+    total_talker_output_tokens: int = 0
+    talker_output_throughput: float = 0.0
+    mean_talker_tpot_ms: float = 0.0
+    median_talker_tpot_ms: float = 0.0
+    std_talker_tpot_ms: float = 0.0
+    percentiles_talker_tpot_ms: list[tuple[float, float]] = None
+    mean_talker_itl_ms: float = 0.0
+    median_talker_itl_ms: float = 0.0
+    std_talker_itl_ms: float = 0.0
+    percentiles_talker_itl_ms: list[tuple[float, float]] = None
+    total_code2wav_input_tokens: int = 0
+    mean_code2wav_tpot_ms: float = 0.0
+    median_code2wav_tpot_ms: float = 0.0
+    std_code2wav_tpot_ms: float = 0.0
+    percentiles_code2wav_tpot_ms: list[tuple[float, float]] = None
+    mean_code2wav_itl_ms: float = 0.0
+    median_code2wav_itl_ms: float = 0.0
+    std_code2wav_itl_ms: float = 0.0
+    percentiles_code2wav_itl_ms: list[tuple[float, float]] = None
 
 
 def print_metrics(
@@ -54,6 +74,8 @@ def print_metrics(
     print_text_metrics(task_type, selected_percentile_metrics, metrics)
     if task_type == TaskType.GENERATION:
         print_audio_metrics(selected_percentile_metrics, metrics)
+        print_talker_metrics(metrics)
+        print_code2wav_metrics(metrics)
     print("=" * 50)
 
 
@@ -97,6 +119,10 @@ def process_one_metric(
         "audio_ttfp": "Time to First Packet",
         "audio_rtf": "Real Time Factor",
         "audio_duration": "Audio Duration",
+        "talker_tpot": "Talker Time per Output Token (excl. 1st token)",
+        "talker_itl": "Talker Inter-token Latency",
+        "code2wav_tpot": "Code2Wav Time per Output Token (excl. 1st token)",
+        "code2wav_itl": "Code2Wav Inter-token Latency",
     }
 
     header = metric_header_map.get(metric_attribute_name, metric_attribute_name)
@@ -128,6 +154,22 @@ def process_one_metric(
         p_str = str(int(percentile)) if percentile.is_integer() else str(percentile)
         label = f"P{p_str} {metric_attribute_name.upper()}{unit_suffix}:"
         print(f"{label:<40} {value:<10.2f}")
+
+
+def print_talker_metrics(metrics: MultiModalsBenchmarkMetrics):
+    print("{s:{c}^{n}}".format(s=" Talker Result ", n=50, c="="))
+    print("{:<40} {:<10}".format("Total talker input tokens:", metrics.total_talker_input_tokens))
+    print("{:<40} {:<10}".format("Total talker output tokens:", metrics.total_talker_output_tokens))
+    print("{:<40} {:<10.2f}".format("Talker output throughput (tok/s):", metrics.talker_output_throughput))
+    process_one_metric("talker_tpot", metrics)
+    process_one_metric("talker_itl", metrics)
+
+
+def print_code2wav_metrics(metrics: MultiModalsBenchmarkMetrics):
+    print("{s:{c}^{n}}".format(s=" Code2Wav Result ", n=50, c="="))
+    print("{:<40} {:<10}".format("Total code2wav input tokens:", metrics.total_code2wav_input_tokens))
+    process_one_metric("code2wav_tpot", metrics)
+    process_one_metric("code2wav_itl", metrics)
 
 
 def calculate_metrics(
@@ -169,6 +211,14 @@ def calculate_metrics(
     audio_rtfs: list[float] = []
     audio_duration: list[float] = []
     audio_frames: list[int] = []
+    talker_tpots: list[float] = []
+    talker_itls: list[float] = []
+    code2wav_tpots: list[float] = []
+    code2wav_itls: list[float] = []
+    talker_input_tokens = 0
+    talker_output_tokens = 0
+    code2wav_input_tokens = 0
+    code2wav_output_tokens = 0
     for i in range(len(outputs)):
         if outputs[i].success:
             output_len = outputs[i].output_tokens
@@ -195,6 +245,57 @@ def calculate_metrics(
             audio_rtfs.append(getattr(outputs[i], "audio_rtf", 0.0))
             audio_duration.append(getattr(outputs[i], "audio_duration", 0.0))
             audio_frames.append(getattr(outputs[i], "audio_frames", 0.0))
+            talker_input_tokens += int(getattr(outputs[i], "talker_input_tokens", 0) or 0)
+            talker_output_tokens += int(getattr(outputs[i], "talker_output_tokens", 0) or 0)
+            code2wav_input_tokens += int(getattr(outputs[i], "code2wav_input_tokens", 0) or 0)
+            code2wav_output_tokens += int(getattr(outputs[i], "code2wav_output_tokens", 0) or 0)
+            talker_stage_ms = float(getattr(outputs[i], "talker_stage_gen_time_ms", 0.0) or 0.0)
+            code2wav_stage_ms = float(getattr(outputs[i], "code2wav_stage_gen_time_ms", 0.0) or 0.0)
+
+            def _stage_latency_s(output, latency_attr: str, stage_ms: float) -> float:
+                latency_s = float(getattr(output, latency_attr, 0.0) or 0.0)
+                if latency_s <= 0.0 and stage_ms > 0.0:
+                    latency_s = stage_ms / 1000.0
+                return latency_s
+
+            def _stage_ttft(output, ttft_attr: str, latency_s: float) -> float:
+                ttft = float(getattr(output, ttft_attr, 0.0) or 0.0)
+                if ttft <= 0.0 and latency_s > 0.0:
+                    ttft = latency_s
+                return ttft
+
+            talker_latency_s = _stage_latency_s(outputs[i], "talker_latency", talker_stage_ms)
+            code2wav_latency_s = _stage_latency_s(outputs[i], "code2wav_latency", code2wav_stage_ms)
+
+            talker_output_len = int(getattr(outputs[i], "talker_output_tokens", 0) or 0)
+            code2wav_output_len = int(getattr(outputs[i], "code2wav_output_tokens", 0) or 0)
+
+            talker_ttft = _stage_ttft(outputs[i], "talker_ttft", talker_latency_s)
+            code2wav_ttft = _stage_ttft(outputs[i], "code2wav_ttft", code2wav_latency_s)
+
+            talker_tpot = 0.0
+            if talker_output_len > 1 and talker_latency_s > 0.0:
+                talker_latency_minus_ttft = max(talker_latency_s - talker_ttft, 0.0)
+                talker_tpot = talker_latency_minus_ttft / (talker_output_len - 1)
+
+            code2wav_tpot = 0.0
+            if code2wav_output_len > 1 and code2wav_latency_s > 0.0:
+                code2wav_latency_minus_ttft = max(code2wav_latency_s - code2wav_ttft, 0.0)
+                code2wav_tpot = code2wav_latency_minus_ttft / (code2wav_output_len - 1)
+            if talker_output_len > 1:
+                talker_tpots.append(talker_tpot)
+                talker_itl_list = getattr(outputs[i], "talker_itl", None)
+                if talker_itl_list:
+                    talker_itls += list(talker_itl_list)
+                else:
+                    talker_itls.append(talker_tpot)
+            if code2wav_output_len > 1:
+                code2wav_tpots.append(code2wav_tpot)
+                code2wav_itl_list = getattr(outputs[i], "code2wav_itl", None)
+                if code2wav_itl_list:
+                    code2wav_itls += list(code2wav_itl_list)
+                else:
+                    code2wav_itls.append(code2wav_tpot)
             e2els.append(outputs[i].latency)
             completed += 1
         else:
@@ -321,6 +422,26 @@ def calculate_metrics(
         std_audio_rtf=np.std(audio_rtfs or 0),
         median_audio_rtf=np.median(audio_rtfs or 0),
         percentiles_audio_rtf=[(p, np.percentile(audio_rtfs or 0, p)) for p in selected_percentiles],
+        total_talker_input_tokens=talker_input_tokens,
+        total_talker_output_tokens=talker_output_tokens,
+        talker_output_throughput=talker_output_tokens / dur_s,
+        mean_talker_tpot_ms=np.mean(talker_tpots or 0) * 1000,
+        std_talker_tpot_ms=np.std(talker_tpots or 0) * 1000,
+        median_talker_tpot_ms=np.median(talker_tpots or 0) * 1000,
+        percentiles_talker_tpot_ms=[(p, np.percentile(talker_tpots or 0, p) * 1000) for p in selected_percentiles],
+        mean_talker_itl_ms=np.mean(talker_itls or 0) * 1000,
+        std_talker_itl_ms=np.std(talker_itls or 0) * 1000,
+        median_talker_itl_ms=np.median(talker_itls or 0) * 1000,
+        percentiles_talker_itl_ms=[(p, np.percentile(talker_itls or 0, p) * 1000) for p in selected_percentiles],
+        total_code2wav_input_tokens=code2wav_input_tokens,
+        mean_code2wav_tpot_ms=np.mean(code2wav_tpots or 0) * 1000,
+        std_code2wav_tpot_ms=np.std(code2wav_tpots or 0) * 1000,
+        median_code2wav_tpot_ms=np.median(code2wav_tpots or 0) * 1000,
+        percentiles_code2wav_tpot_ms=[(p, np.percentile(code2wav_tpots or 0, p) * 1000) for p in selected_percentiles],
+        mean_code2wav_itl_ms=np.mean(code2wav_itls or 0) * 1000,
+        std_code2wav_itl_ms=np.std(code2wav_itls or 0) * 1000,
+        median_code2wav_itl_ms=np.median(code2wav_itls or 0) * 1000,
+        percentiles_code2wav_itl_ms=[(p, np.percentile(code2wav_itls or 0, p) * 1000) for p in selected_percentiles],
         mean_tpot_ms=np.mean(tpots or 0) * 1000,
         std_tpot_ms=np.std(tpots or 0) * 1000,
         median_tpot_ms=np.median(tpots or 0) * 1000,
