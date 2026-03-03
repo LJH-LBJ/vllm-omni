@@ -210,10 +210,9 @@ async def async_request_openai_chat_omni_completions(
                                     output.code2wav_stage_gen_time_ms = stage_gen_time_ms
                                     if output.code2wav_ttft == 0.0:
                                         output.code2wav_ttft = timestamp - st
-                                        output.code2wav_last_timestamp = timestamp
                                     else:
                                         output.code2wav_itl.append(timestamp - output.code2wav_last_timestamp)
-                                        output.code2wav_last_timestamp = timestamp
+                                    output.code2wav_last_timestamp = timestamp
                                 else:
                                     # talker stage
                                     output.talker_output_tokens = num_tokens_out
@@ -221,10 +220,9 @@ async def async_request_openai_chat_omni_completions(
                                     output.talker_stage_gen_time_ms = stage_gen_time_ms
                                     if output.talker_ttft == 0.0:
                                         output.talker_ttft = timestamp - st
-                                        output.talker_last_timestamp = timestamp
                                     else:
                                         output.talker_itl.append(timestamp - output.talker_last_timestamp)
-                                        output.talker_last_timestamp = timestamp
+                                    output.talker_last_timestamp = timestamp
 
                 output.latency = timestamp - st
                 if output.code2wav_last_timestamp > 0.0:
