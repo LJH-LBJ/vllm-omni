@@ -212,9 +212,13 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         summed_embeddings = current_input_flat[:, 1:, :].sum(
             dim=1
         )  # Sum over code groups, keep batch and hidden dims -> [B*T, hidden_size]
-        summed_embeddings = summed_embeddings.view(
-            batch_size, seq_len, -1
-        )  # Reshape back to [batch, seq_len, hidden_size]
+        if seq_len == 1:
+            # Reshape back to [batch, hidden_size]
+            summed_embeddings = summed_embeddings.view(batch_size, -1)
+        else:
+            summed_embeddings = summed_embeddings.view(
+                batch_size, seq_len, -1
+            )  # Reshape back to [batch, seq_len, hidden_size]
 
         return result_codes, summed_embeddings
 
