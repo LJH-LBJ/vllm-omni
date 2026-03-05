@@ -19,8 +19,8 @@ The `async_chunk` feature enables asynchronous, chunked processing of data acros
 
 For qwen3-omni:
 - **Thinker → Talker**: Per decode step (typically chunk_size=1)
-- **Talker → Code2Wav**: Accumulated to code2wav chunk_size(default=25, currently only support default, will support chunk_size soon) before sending
-- **Code2Wav**: Streaming decode with code2wav chunk_size
+- **Talker → Code2Wav**: Accumulated to code2wav chunk_size before sending; the size is configurable via connector extras (see `codec_chunk_frames` below)
+- **Code2Wav**: Streaming decode with the same code2wav chunk size; left context is configurable via `codec_left_context_frames`
 
 With `async_chunk`:
 - Stages can start processing as soon as chunks are available
