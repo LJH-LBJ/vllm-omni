@@ -465,6 +465,17 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
         compilation_config.static_forward_context[prefix] = self
         self.layer_name = prefix
 
+        # Pre-allocate buffers to eliminate torch.cat / torch.stack in forward
+        max_batch_size = max(
+            vllm_config.scheduler_config.max_num_seqs,
+            vllm_config.compilation_config.max_cudagraph_capture_size,
+        )
+        hidden_size = self.config.code_predictor_config.hidden_size
+        dtype = vllm_config.model_config.dtype
+        self._proj_buf = torch.zeros(max_batch_size, self.num_code_groups + 1, hidden_size, dtype=dtype)
+        self._pos_ids = torch.arange(self.num_code_groups + 1, dtype=torch.int64)
+        self._all_codes = torch.empty(max_batch_size, self.num_code_groups, 1, dtype=torch.int64)
+
     def forward(
         self,
         layer0_code: torch.Tensor,
@@ -472,63 +483,85 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
         last_talker_hidden: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Forward pass for code predictor.
+        Forward pass for code predictor (zero-allocation inner loop).
+
+        Uses pre-allocated buffers (_proj_buf, _all_codes, _pos_ids) to
+        eliminate torch.cat / torch.stack in the autoregressive loop.
 
         Args:
-            layer0_code:
-                Code index for code-group (layer) 0.
-                Shape: [batch_size, 1], dtype typically int64.
-
-            last_talker_hidden:
-
-                Shape: [batch_size, hidden_size].
+            layer0_code:        [batch_size, 1]  int64
+            layer0_embed:       [batch_size, 1, hidden_size]
+                Layer-0 codec embedding, produced by the **talker's**
+                language_model.model.codec_embedding (NOT code_predictor's).
+            last_talker_hidden: [batch_size, 1, hidden_size]
+                Last hidden state from the talker transformer.
 
         Returns:
-            pos_all_layers:
-                Predicted codes for all code groups, including `layer0_code`.
-                Shape: [batch_size, num_code_groups, 1].
+            all_codes:     [batch_size, num_code_groups, 1]
+                Predicted codes for all RVQ layers (layer-0 is input, rest are predicted).
+            proj_buf_view: [batch_size, num_code_groups + 1, hidden_size]
+                The projection buffer used as transformer input.
+                Buffer layout (num_code_groups + 1 positions total):
 
-            current_input:
-                The final input embedding sequence after appending embeddings of all
-                predicted codes (one token per predicted layer).
-                Shape: [batch_size, num_code_groups + 2, hidden_size].
+                  pos 0   : last_talker_hidden  ← NOT a codec embedding
+                  pos 1   : layer0_embed        ← talker's codec_embedding(layer0_code)
+                  pos 2   : codec_embedding[0](layer1_code)  ← code_predictor's
+                  pos 3   : codec_embedding[1](layer2_code)  ← code_predictor's
+                  ...     : ...
+                  pos G   : codec_embedding[G-2](layerG-1_code)
+
+                where G = num_code_groups.
+
+                Caller can get the summed codec embedding by:
+                    proj_buf_view[:, 1:, :].sum(dim=1)
+                which sums positions 1..G, i.e. all G codec embeddings,
+                skipping position 0 (last_talker_hidden, not a codec embed).
         """
-        pos_codes = [layer0_code]  # Start with layer 0: [batch, 1]
-        try:
-            current_input = torch.cat([last_talker_hidden, layer0_embed], dim=1)  # [batch, 2, hidden_size]
-        except Exception as e:
-            print(f"Error in current_input: {e}")
-            print(f"last_talker_hidden shape: {last_talker_hidden.shape}")
-            print(f"prev_embed shape: {layer0_embed.shape}")
-            raise e
-        batch_size = current_input.shape[0]
+        batch_size = layer0_code.shape[0]
 
-        # Predict all residual layers (layers 1 to num_code_groups-1) autoregressively
+        # ---- Fill buffer (replaces torch.cat) ----
+        # pos 0 ← talker hidden state (drives code predictor, NOT a codec embed)
+        self._proj_buf[:batch_size, 0:1, :] = last_talker_hidden
+        # pos 1 ← layer-0 codec embed (from talker's codec_embedding)
+        self._proj_buf[:batch_size, 1:2, :] = layer0_embed
+
+        # Write layer-0 code into all_codes (replaces list + torch.stack)
+        self._all_codes[:batch_size, 0] = layer0_code
+
+        # ---- Autoregressive loop: predict layers 1..num_code_groups-1 ----
         for layer_idx in range(self.num_code_groups - 1):
-            seq_len = layer_idx + 2
-            # Compute position_ids dynamically to avoid torch.compile specializing batch_size
-            position_ids = torch.arange(seq_len, device=current_input.device, dtype=torch.int64).repeat(batch_size)
-            # Forward through code_predictor model
+            seq_len = layer_idx + 2  # positions 0..layer_idx+1 are filled
+
+            # View into buffer – no copy, no allocation
+            projected = self._proj_buf[:batch_size, :seq_len, :]
+            # Slice pre-computed position IDs – no arange allocation
+            position_ids = self._pos_ids[:seq_len].repeat(batch_size)
+
             outputs = self.model(
-                inputs_embeds=current_input,
+                inputs_embeds=projected,
                 attention_mask=None,
                 position_ids=position_ids,
                 past_key_values=None,
                 use_cache=False,
                 cache_position=None,
             )
-            hidden_state = outputs.last_hidden_state  # [batch, 2, hidden_size]
 
-            # Use the corresponding lm_head for this layer
-            logits = self.lm_head[layer_idx](hidden_state[:, -1:, :])
+            # Sample next code from the last position's hidden state
+            logits = self.lm_head[layer_idx](outputs.last_hidden_state[:, -1:, :])
             code = torch.ops.vllm.qwen3_omni_code_predictor_sample(logits, self.layer_name)
-            pos_codes.append(code)
-            # Update prev_embed for next layer (if not last layer)
-            # layer_idx=0 predicts layer 1, embed with codec_embedding[1]
-            new_embed = self.model.codec_embedding[layer_idx](code)  # [batch, 1, hidden_size]
-            current_input = torch.cat([current_input, new_embed], dim=1)  # [batch, 3~n, hidden_size]
-        pos_all_layers = torch.stack(pos_codes, dim=1)  # [batch, num_code_groups, 1]
-        return pos_all_layers, current_input
+
+            # Write predicted code directly into pre-allocated tensor
+            self._all_codes[:batch_size, layer_idx + 1] = code
+
+            # Write embedding into next buffer position for next iteration
+            # codec_embedding[layer_idx] embeds code for layer (layer_idx+1)
+            new_embed = self.model.codec_embedding[layer_idx](code)
+            self._proj_buf[:batch_size, layer_idx + 2 : layer_idx + 3, :] = new_embed
+
+        return (
+            self._all_codes[:batch_size],
+            self._proj_buf[:batch_size],
+        )
 
     def load_weights(self, weights: list[tuple[str, torch.Tensor]]) -> set[str]:
         """Load weights with mapping for fused QKV and gate_up projections.

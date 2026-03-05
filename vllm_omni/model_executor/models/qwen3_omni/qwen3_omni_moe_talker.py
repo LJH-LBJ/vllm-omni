@@ -156,12 +156,15 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         alongside the talker's hidden states, and autoregressively predicts the remaining
         residual layers (to num_codec_groups).
 
+        All torch.cat / torch.stack have been replaced with direct index writes
+        into pre-allocated tensors.  The second loop that rebuilt summed_embeddings
+        is merged into the first loop via an arithmetic sum (no concatenation).
+
         Returns:
             tuple containing:
-                - residual_codes: A tensor of shape [batch, num_code_groups, seq_len] containing
-                  the complete set of codec codes
-                - summed_embeddings: A tensor of shape [batch, seq_len, hidden_size]
-                  Sum of all layer embeddings at each position (like Transformers)
+                - result_codes: [batch, num_code_groups, seq_len]
+                - summed_embeddings: [batch, hidden_size] (seq_len==1) or
+                  [batch, seq_len, hidden_size]
         """
         if input_ids is None:
             raise ValueError("`input_ids` containing layer-0 codec codes must be provided.")
@@ -173,69 +176,57 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         if input_ids.ndim == 1:
             input_ids = input_ids.unsqueeze(0)
 
-        # Ensure the tensors are contiguous for the autoregressive sampling loop
         inputs_embeds = inputs_embeds.contiguous()
         input_ids = input_ids.contiguous()
 
-        # Generate full codec codes using MTP
-        # This will be the parallel prediction implementation
         batch_size, seq_len = input_ids.shape
+        hidden_size = self.config.text_config.hidden_size
 
-        # For now, use sequential generation (TODO: implement parallel)
-        # Result will be [batch, num_code_groups, seq_len]
-        # - all_codes_per_position will collect [batch, num_code_groups, 1] for each position
-        all_codes_per_position = []
-        middle_hidden_states = []  # Collect hidden states for each position
+        # Pre-allocate result tensors (one allocation, no list + cat)
+        result_codes = torch.empty(
+            batch_size,
+            self.num_code_groups,
+            seq_len,
+            dtype=torch.int64,
+            device=input_ids.device,
+        )
+        summed_embeddings = torch.zeros(
+            batch_size,
+            seq_len,
+            hidden_size,
+            dtype=inputs_embeds.dtype,
+            device=inputs_embeds.device,
+        )
 
-        # Generate residual layers for each position
+        # Single-pass: generate codes AND compute summed embeddings per position
         for pos in range(seq_len):
             layer0_code = input_ids[:, pos : pos + 1]  # [batch, 1]
 
-            # Initial input: [last_talker_hidden, layer0_embed]
             layer0_embed = self.embed_input_ids(layer0_code)
             self.layer0_embed_buffer[:batch_size].copy_(layer0_embed)
-            pos_all_layers, current_input = self.code_predictor(
+
+            # code_predictor.forward uses pre-allocated buffers internally
+            pos_all_layers, proj_buf_view = self.code_predictor(
                 layer0_code, self.layer0_embed_buffer[:batch_size], last_talker_hidden
             )
 
-            # Stack all layers for this position: [batch, num_code_groups, 1]
-            all_codes_per_position.append(pos_all_layers)
-            middle_hidden_states.append(current_input[:, 2:-1, :])
+            # Write codes directly into result tensor (replaces list + torch.cat)
+            result_codes[:, :, pos : pos + 1] = pos_all_layers
 
-        # Concatenate across positions: [batch, num_code_groups, seq_len]
-        result_codes = torch.cat(all_codes_per_position, dim=2)
+            # --- summed embedding ---
+            # proj_buf_view layout (num_code_groups + 1 positions total):
+            #   pos 0 : last_talker_hidden           <- NOT a codec embed, skip
+            #   pos 1 : talker.codec_embedding(L0)   <- layer-0 embed
+            #   pos 2 : cp.codec_embedding[0](L1)    <- layer-1 embed
+            #   ...   : ...
+            #   pos G : cp.codec_embedding[G-2](LG-1) <- last layer embed
+            #
+            # All codec embeddings already reside in buffer positions 1..G.
+            # Sum over [:, 1:, :] directly — no re-embedding, zero copy.
+            summed_embeddings[:, pos, :] = proj_buf_view[:, 1:, :].sum(dim=1)
 
-        # Build summed embeddings for each position (like Transformers)
-        # This combines layer-0 embed, mid layers hidden states, and last layer embed
-        all_summed_embeddings = []
-
-        for pos in range(seq_len):
-            # Layer 0 embedding
-            layer0_code = result_codes[:, 0, pos : pos + 1]  # [batch, 1]
-            layer0_embed = self.embed_input_ids(layer0_code)  # [batch, 1, hidden_size]
-
-            # mid layers hidden states (from CodePredictor)
-            mid_residual_hiddens = middle_hidden_states[pos]  # [batch, num_code_groups-2, hidden_size]
-            mid_list = list(mid_residual_hiddens.split(1, dim=1))
-
-            # last layer embedding
-            last_layer_code = result_codes[:, -1, pos : pos + 1]  # [batch, 1]
-            last_residual_hidden = self.code_predictor.model.codec_embedding[-1](last_layer_code)
-
-            # Concatenate all layers: [batch, num_code_groups, hidden_size]
-            pos_codec_hiddens = torch.cat(
-                [layer0_embed] + mid_list + [last_residual_hidden],
-                dim=1,
-            )
-
-            # Sum across layers: [batch, 1, hidden_size] (like Transformers)
-            pos_summed = pos_codec_hiddens.sum(dim=1, keepdim=True)
-            all_summed_embeddings.append(pos_summed)
-
-        # Concatenate across positions: [batch, seq_len, hidden_size]
-        summed_embeddings = torch.cat(all_summed_embeddings, dim=1).squeeze(1)
-
-        return result_codes, summed_embeddings
+        # squeeze(1) for backward compat: [batch, hidden] when seq_len==1
+        return result_codes, summed_embeddings.squeeze(1)
 
     def init_multi_modal(self, thinker_config: Any) -> None:
         """
