@@ -158,6 +158,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             self._init_special_tokens_embeddings()
             # suppress tokens by setting their probability to ~1e-9 (finite very small)
             self.suppressed_tokens = self._get_talker_suppressed_tokens()
+            self.suppressed_tokens_gpu = torch.tensor(self.suppressed_tokens, device=self._module_device(self.talker))
+
             self.requires_raw_input_tokens = True
 
         elif self.model_stage == "code2wav":
@@ -1087,15 +1089,12 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         if getattr(self, "model_stage", None) == "talker" and isinstance(logits, torch.Tensor):
             try:
-                logits_cpu = logits.cpu()
-                logits_cpu[:, self.suppressed_tokens] = -1e9
-                logits = logits_cpu.to(logits.device)
+                logits[:, self.suppressed_tokens_gpu] = -1e9
             except Exception as e:
                 print(f"Error in logits suppression: {e}")
                 print(f"logits.shape: {logits.shape}")
-                print(f"self.suppressed_tokens: {self.suppressed_tokens}")
+                print(f"self.suppressed_tokens_gpu: {self.suppressed_tokens_gpu}")
                 raise e
-            logits[:, self.suppressed_tokens] = -1e9
         return logits
 
     def sample(
