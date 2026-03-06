@@ -472,9 +472,23 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
         )
         hidden_size = self.config.code_predictor_config.hidden_size
         dtype = vllm_config.model_config.dtype
-        self._proj_buf = torch.zeros(max_batch_size, self.num_code_groups + 1, hidden_size, dtype=dtype)
-        self._pos_ids = torch.arange(self.num_code_groups + 1, dtype=torch.int64)
-        self._all_codes = torch.empty(max_batch_size, self.num_code_groups, 1, dtype=torch.int64)
+        # persistent=False: these are runtime scratch buffers, not model weights;
+        # register_buffer ensures they follow .to(device) / .half() / .cuda() calls.
+        self.register_buffer(
+            "_proj_buf",
+            torch.zeros(max_batch_size, self.num_code_groups + 1, hidden_size, dtype=dtype),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_pos_ids",
+            torch.arange(self.num_code_groups + 1, dtype=torch.int64),
+            persistent=False,
+        )
+        self.register_buffer(
+            "_all_codes",
+            torch.empty(max_batch_size, self.num_code_groups, 1, dtype=torch.int64),
+            persistent=False,
+        )
 
     def forward(
         self,

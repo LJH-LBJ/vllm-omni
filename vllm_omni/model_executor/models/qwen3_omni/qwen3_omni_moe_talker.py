@@ -132,9 +132,15 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         max_batch_size = max(
             vllm_config.scheduler_config.max_num_seqs, vllm_config.compilation_config.max_cudagraph_capture_size
         )
-        self.layer0_embed_buffer = torch.zeros(
-            (max_batch_size, 1, self.config.text_config.hidden_size),
-            dtype=vllm_config.model_config.dtype,
+        # persistent=False: runtime scratch buffer, not a model weight;
+        # register_buffer ensures it follows .to(device) / .cuda() calls.
+        self.register_buffer(
+            "layer0_embed_buffer",
+            torch.zeros(
+                (max_batch_size, 1, self.config.text_config.hidden_size),
+                dtype=vllm_config.model_config.dtype,
+            ),
+            persistent=False,
         )
 
     def code_predictor_forward(
@@ -225,7 +231,9 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
             # Sum over [:, 1:, :] directly — no re-embedding, zero copy.
             summed_embeddings[:, pos, :] = proj_buf_view[:, 1:, :].sum(dim=1)
 
-        # squeeze(1) for backward compat: [batch, hidden] when seq_len==1
+        # summed_embeddings shape: [batch, seq_len, hidden]
+        # squeeze(1) collapses seq_len dim only when seq_len==1 (decode step),
+        # giving [batch, hidden]; for seq_len>1 (prefill) shape stays [batch, seq_len, hidden].
         return result_codes, summed_embeddings.squeeze(1)
 
     def init_multi_modal(self, thinker_config: Any) -> None:
