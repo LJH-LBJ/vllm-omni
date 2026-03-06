@@ -24,7 +24,7 @@ os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "0"
 models = ["Qwen/Qwen2.5-Omni-7B"]
 
 
-def get_chunk_config():
+def get_config():
     path = modify_stage_config(
         str(Path(__file__).parent.parent / "stage_configs" / "qwen2_5_omni_ci.yaml"),
     )
@@ -36,7 +36,7 @@ if current_omni_platform.is_rocm():
     # ROCm stage config optimized for MI325 GPU
     stage_configs = [str(Path(__file__).parent.parent / "stage_configs" / "rocm" / "qwen2_5_omni_ci.yaml")]
 else:
-    stage_configs = [get_chunk_config()]
+    stage_configs = [get_config()]
 
 # Create parameter combinations for model and stage config
 test_params = [(model, stage_config) for model in models for stage_config in stage_configs]
@@ -74,7 +74,7 @@ def get_max_batch_size(size_type="few"):
 @pytest.mark.advanced_model
 @pytest.mark.core_model
 @pytest.mark.omni
-@hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
+@hardware_test(res={"cuda": "L4", "rocm": "MI325"}, num_cards=2)
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
     """
@@ -112,7 +112,6 @@ def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
 
 
 @pytest.mark.advanced_model
-@pytest.mark.core_model
 @pytest.mark.omni
 @pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_text_to_text_001(omni_server, openai_client) -> None:
