@@ -110,19 +110,28 @@ class Qwen3OmniMoeSparseMoeBlock(nn.Module):
         routing_weights = routing_weights.to(router_logits.dtype)
         return selected_experts, routing_weights
 
-    def _forward_experts(
-        self, hidden_states: torch.Tensor, selected_experts: torch.Tensor, routing_weights: torch.Tensor
-    ):
-        """Forward through individual experts (matching transformers implementation)."""
+    def _forward_experts(self, hidden_states, selected_experts, routing_weights):
+        """Optimized expert forward: avoid one_hot + permute on large sequences."""
         final_hidden_states = torch.zeros_like(hidden_states)
-        expert_mask = torch.nn.functional.one_hot(selected_experts, num_classes=self.num_experts).permute(2, 1, 0)
+        # selected_experts: [num_tokens, top_k]
+        # routing_weights:  [num_tokens, top_k]
 
-        expert_hit = torch.greater(expert_mask.sum(dim=(-1, -2)), 0).nonzero()
-        for expert_idx in expert_hit:
-            idx, top_x = torch.where(expert_mask[expert_idx].squeeze(0))
-            current_state = hidden_states[None, top_x].reshape(-1, hidden_states.shape[-1])
-            current_hidden_states = self.experts[expert_idx](current_state) * routing_weights[top_x, idx, None]
-            final_hidden_states.index_add_(0, top_x, current_hidden_states.to(hidden_states.dtype))
+        for expert_idx in range(self.num_experts):
+            # Boolean mask: [num_tokens, top_k]
+            mask = selected_experts == expert_idx  # [num_tokens, top_k]
+            if not mask.any():
+                continue
+
+            # Find which (token, slot) pairs route to this expert
+            token_indices, slot_indices = torch.where(mask)  # 1D arrays
+
+            # Gather inputs and weights
+            current_state = hidden_states[token_indices]  # [N, hidden_dim]
+            current_weights = routing_weights[token_indices, slot_indices].unsqueeze(-1)  # [N, 1]
+
+            # Forward through expert and scatter-add
+            expert_out = self.experts[expert_idx](current_state) * current_weights
+            final_hidden_states.index_add_(0, token_indices, expert_out.to(hidden_states.dtype))
 
         return final_hidden_states
 
