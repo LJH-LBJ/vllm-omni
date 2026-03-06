@@ -129,19 +129,6 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         self.code_predictor = Qwen3OmniMoeTalkerCodePredictor(
             vllm_config=vllm_config, prefix=maybe_prefix(prefix, "code_predictor")
         )
-        max_batch_size = max(
-            vllm_config.scheduler_config.max_num_seqs, vllm_config.compilation_config.max_cudagraph_capture_size
-        )
-        # persistent=False: runtime scratch buffer, not a model weight;
-        # register_buffer ensures it follows .to(device) / .cuda() calls.
-        self.register_buffer(
-            "layer0_embed_buffer",
-            torch.zeros(
-                (max_batch_size, 1, self.config.text_config.hidden_size),
-                dtype=vllm_config.model_config.dtype,
-            ),
-            persistent=False,
-        )
 
     def code_predictor_forward(
         self,
@@ -209,12 +196,9 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
             layer0_code = input_ids[:, pos : pos + 1]  # [batch, 1]
 
             layer0_embed = self.embed_input_ids(layer0_code)
-            self.layer0_embed_buffer[:batch_size].copy_(layer0_embed)
 
-            # code_predictor.forward uses pre-allocated buffers internally
-            pos_all_layers, proj_buf_view = self.code_predictor(
-                layer0_code, self.layer0_embed_buffer[:batch_size], last_talker_hidden
-            )
+            # code_predictor.forward allocates its scratch tensors internally
+            pos_all_layers, proj_buf_view = self.code_predictor(layer0_code, layer0_embed, last_talker_hidden)
 
             # Write codes directly into result tensor (replaces list + torch.cat)
             result_codes[:, :, pos : pos + 1] = pos_all_layers

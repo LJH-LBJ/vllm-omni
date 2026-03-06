@@ -465,30 +465,8 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
         compilation_config.static_forward_context[prefix] = self
         self.layer_name = prefix
 
-        # Pre-allocate buffers to eliminate torch.cat / torch.stack in forward
-        max_batch_size = max(
-            vllm_config.scheduler_config.max_num_seqs,
-            vllm_config.compilation_config.max_cudagraph_capture_size,
-        )
-        hidden_size = self.config.code_predictor_config.hidden_size
-        dtype = vllm_config.model_config.dtype
-        # persistent=False: these are runtime scratch buffers, not model weights;
-        # register_buffer ensures they follow .to(device) / .half() / .cuda() calls.
-        self.register_buffer(
-            "_proj_buf",
-            torch.zeros(max_batch_size, self.num_code_groups + 1, hidden_size, dtype=dtype),
-            persistent=False,
-        )
-        self.register_buffer(
-            "_pos_ids",
-            torch.arange(self.num_code_groups + 1, dtype=torch.int64),
-            persistent=False,
-        )
-        self.register_buffer(
-            "_all_codes",
-            torch.empty(max_batch_size, self.num_code_groups, 1, dtype=torch.int64),
-            persistent=False,
-        )
+        # Store hidden_size for use in forward() buffer allocation
+        self._hidden_size = self.config.code_predictor_config.hidden_size
 
     def forward(
         self,
@@ -532,24 +510,48 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
                 skipping position 0 (last_talker_hidden, not a codec embed).
         """
         batch_size = layer0_code.shape[0]
+        device = layer0_code.device
+        dtype = last_talker_hidden.dtype
+
+        # Allocate scratch tensors on the correct device each call.
+        # register_buffer is intentionally avoided: registered buffers captured
+        # as graph inputs by torch.compile make the compiled artifact
+        # non-serializable in vLLM's compilation cache.
+        # CUDAGraph replay captures these fixed-shape allocations, so the
+        # per-call overhead is negligible during inference.
+        proj_buf = torch.zeros(
+            batch_size,
+            self.num_code_groups + 1,
+            self._hidden_size,
+            device=device,
+            dtype=dtype,
+        )
+        all_codes = torch.empty(
+            batch_size,
+            self.num_code_groups,
+            1,
+            dtype=torch.int64,
+            device=device,
+        )
+        pos_ids = torch.arange(self.num_code_groups + 1, dtype=torch.int64, device=device)
 
         # ---- Fill buffer (replaces torch.cat) ----
         # pos 0 ← talker hidden state (drives code predictor, NOT a codec embed)
-        self._proj_buf[:batch_size, 0:1, :] = last_talker_hidden
+        proj_buf[:, 0:1, :] = last_talker_hidden
         # pos 1 ← layer-0 codec embed (from talker's codec_embedding)
-        self._proj_buf[:batch_size, 1:2, :] = layer0_embed
+        proj_buf[:, 1:2, :] = layer0_embed
 
         # Write layer-0 code into all_codes (replaces list + torch.stack)
-        self._all_codes[:batch_size, 0] = layer0_code
+        all_codes[:, 0] = layer0_code
 
         # ---- Autoregressive loop: predict layers 1..num_code_groups-1 ----
         for layer_idx in range(self.num_code_groups - 1):
             seq_len = layer_idx + 2  # positions 0..layer_idx+1 are filled
 
             # View into buffer – no copy, no allocation
-            projected = self._proj_buf[:batch_size, :seq_len, :]
-            # Slice pre-computed position IDs – no arange allocation
-            position_ids = self._pos_ids[:seq_len].repeat(batch_size)
+            projected = proj_buf[:, :seq_len, :]
+            # Slice pre-computed position IDs
+            position_ids = pos_ids[:seq_len].repeat(batch_size)
 
             outputs = self.model(
                 inputs_embeds=projected,
@@ -565,17 +567,14 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
             code = torch.ops.vllm.qwen3_omni_code_predictor_sample(logits, self.layer_name)
 
             # Write predicted code directly into pre-allocated tensor
-            self._all_codes[:batch_size, layer_idx + 1] = code
+            all_codes[:, layer_idx + 1] = code
 
             # Write embedding into next buffer position for next iteration
             # codec_embedding[layer_idx] embeds code for layer (layer_idx+1)
             new_embed = self.model.codec_embedding[layer_idx](code)
-            self._proj_buf[:batch_size, layer_idx + 2 : layer_idx + 3, :] = new_embed
+            proj_buf[:, layer_idx + 2 : layer_idx + 3, :] = new_embed
 
-        return (
-            self._all_codes[:batch_size],
-            self._proj_buf[:batch_size],
-        )
+        return all_codes, proj_buf
 
     def load_weights(self, weights: list[tuple[str, torch.Tensor]]) -> set[str]:
         """Load weights with mapping for fused QKV and gate_up projections.
