@@ -12,15 +12,13 @@ from typing import Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import Cache, PretrainedConfig
 from transformers.generation.logits_process import (
     LogitsProcessorList,
     TopKLogitsWarper,
     TopPLogitsWarper,
 )
-from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from vllm.compilation.decorators import support_torch_compile
-from vllm.config import CacheConfig, ModelConfig, VllmConfig, get_current_vllm_config
+from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.forward_context import get_forward_context
 from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
@@ -42,37 +40,43 @@ logger = init_logger(__name__)
 
 
 class Qwen3OmniCodePredictorAttention(nn.Module):
-    """Multi-head self-attention for code predictor with vLLM optimization."""
+    """Standalone multi-head self-attention for code predictor.
+
+    Uses F.scaled_dot_product_attention (SDPA) directly instead of
+    the HF backend-fallback loop.  No KV cache — the code predictor
+    always re-prefills the full (short) sequence each step.
+
+    Input : [B, seq_len, hidden_size]
+    Output: [B, seq_len, hidden_size]
+    """
 
     def __init__(
         self,
         config,
-        layer_idx: int,
-        vllm_config: VllmConfig = None,
         quant_config: QuantizationConfig | None = None,
         prefix: str = "",
     ):
         super().__init__()
 
-        self.num_heads = config.code_predictor_config.num_attention_heads
-        self.num_key_value_heads = config.code_predictor_config.num_key_value_heads
+        cp_cfg = config.code_predictor_config
+        self.num_heads = cp_cfg.num_attention_heads
+        self.num_kv_heads = cp_cfg.num_key_value_heads
         self.head_dim = getattr(
-            config.code_predictor_config,
+            cp_cfg,
             "head_dim",
-            config.code_predictor_config.hidden_size // config.code_predictor_config.num_attention_heads,
+            cp_cfg.hidden_size // cp_cfg.num_attention_heads,
         )
-        self.hidden_size = config.code_predictor_config.hidden_size
-
-        if self.num_heads % self.num_key_value_heads != 0:
-            raise ValueError("num_attention_heads must be divisible by num_key_value_heads")
-
-        self.num_key_value_groups = self.num_heads // self.num_key_value_heads
+        self.hidden_size = cp_cfg.hidden_size
+        self.q_size = self.num_heads * self.head_dim
+        self.kv_size = self.num_kv_heads * self.head_dim
+        self.scaling = self.head_dim**-0.5
+        self._use_gqa = self.num_kv_heads != self.num_heads
 
         self.qkv_proj = QKVParallelLinear(
             hidden_size=self.hidden_size,
             head_size=self.head_dim,
             total_num_heads=self.num_heads,
-            total_num_kv_heads=self.num_key_value_heads,
+            total_num_kv_heads=self.num_kv_heads,
             bias=False,
             quant_config=quant_config,
             prefix=f"{prefix}.qkv_proj",
@@ -88,111 +92,45 @@ class Qwen3OmniCodePredictorAttention(nn.Module):
         )
         self.rotary_emb = get_rope(
             self.head_dim,
-            max_position=config.code_predictor_config.max_position_embeddings,
+            max_position=cp_cfg.max_position_embeddings,
             rope_parameters=None,
             dual_chunk_attention_config=None,
         )
-
-        self.q_size = self.num_heads * self.head_dim
-        self.kv_size = self.num_key_value_heads * self.head_dim
-
-        # Query/Key normalization
-        self.q_norm = RMSNorm(self.head_dim, eps=config.code_predictor_config.rms_norm_eps)
-        self.k_norm = RMSNorm(self.head_dim, eps=config.code_predictor_config.rms_norm_eps)
-        self.is_causal = True
-        self.config = config
-
-        self.attention_backends = ["flash_attention_2", "xformers", "eager", "sdpa"]
-        cudagraph_mode = get_current_vllm_config().compilation_config.cudagraph_mode
-        if "flash_attention_2" in ALL_ATTENTION_FUNCTIONS and cudagraph_mode.has_full_cudagraphs():
-            logger.warning(
-                f"CUDAGraphMode.{cudagraph_mode.name} is currently not supported "
-                f"with flash attention for Qwen3-Omni talker MTP."
-                f"removing flash attention from attention_backends"
-            )
-            self.attention_backends.remove("flash_attention_2")
+        self.q_norm = RMSNorm(self.head_dim, eps=cp_cfg.rms_norm_eps)
+        self.k_norm = RMSNorm(self.head_dim, eps=cp_cfg.rms_norm_eps)
 
     def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_values: Cache | None = None,
-        cache_position: torch.LongTensor | None = None,
-        use_cache: bool = False,
-        position_ids: torch.LongTensor | None = None,
+        position_ids: torch.Tensor,
     ) -> torch.Tensor:
         bsz, seq_len, _ = hidden_states.shape
 
         qkv, _ = self.qkv_proj(hidden_states)
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
 
-        # Reshape for attention
-        q = q.reshape(bsz, seq_len, self.num_heads, self.head_dim)
-        k = k.reshape(bsz, seq_len, self.num_key_value_heads, self.head_dim)
-        v = v.reshape(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        # Norm → flatten → RoPE → reshape to [B, heads, seq, head_dim]
+        q = self.q_norm(q.view(-1, self.num_heads, self.head_dim)).view(q.shape)
+        k = self.k_norm(k.view(-1, self.num_kv_heads, self.head_dim)).view(k.shape)
 
-        # Apply normalization
-        q = self.q_norm(q).contiguous()
-        k = self.k_norm(k).contiguous()
-        q = q.reshape(-1, self.q_size)
-        k = k.reshape(-1, self.kv_size)
-
-        # Apply RoPE
         q, k = self.rotary_emb(position_ids, q, k)
 
-        # Reshape for attention
-        q = q.reshape(bsz, seq_len, self.num_heads, self.head_dim)
-        k = k.reshape(bsz, seq_len, self.num_key_value_heads, self.head_dim)
+        q = q.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+        k = k.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
+        v = v.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
 
-        v_heads = v.transpose(1, 2).contiguous()
-        q_heads = q.transpose(1, 2).contiguous()
-        k_heads = k.transpose(1, 2).contiguous()
+        attn_out = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            scale=self.scaling,
+            is_causal=True,
+            enable_gqa=self._use_gqa,
+        )
 
-        if past_key_values is not None:
-            sin, cos = self.rotary_emb.get_cos_sin(seq_len)
-            # sin and cos are specific to RoPE models; cache_position needed for the static cache
-            cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
-            k_heads, v_heads = past_key_values.update(k_heads, v_heads, self.layer_idx, cache_kwargs)
-
-        # Try attention backends in order of preference, with runtime error handling
-        # This handles cases where the backend is registered but not actually available
-        attn_output = None
-        last_error = None
-
-        for backend_name in self.attention_backends:
-            if backend_name not in ALL_ATTENTION_FUNCTIONS:
-                continue
-
-            try:
-                attention_interface = ALL_ATTENTION_FUNCTIONS[backend_name]
-                attn_output, _ = attention_interface(
-                    self,
-                    q_heads,
-                    k_heads,
-                    v_heads,
-                    None,
-                    dropout=0.0 if not self.training else getattr(self, "attention_dropout", 0.0),
-                    scaling=self.head_dim**-0.5,
-                    sliding_window=None,
-                    use_cache=use_cache,
-                    position_ids=position_ids[:seq_len].unsqueeze(0),
-                    output_hidden_states=True,
-                    output_attentions=False,
-                )
-                break
-            except (ValueError, ImportError, RuntimeError, AttributeError) as e:
-                # Store error and try next backend
-                last_error = e
-                continue
-
-        if attn_output is None:
-            raise RuntimeError(
-                f"All attention backends failed. Last error: {last_error}. "
-                "Please install flash-attn, or ensure PyTorch's scaled_dot_product_attention is available."
-            )
-        attn_output = attn_output.reshape(*(hidden_states.shape[:-1]), -1).contiguous()
-
-        attn_output, _ = self.o_proj(attn_output)
-        return attn_output
+        attn_out = attn_out.transpose(1, 2).reshape(bsz * seq_len, -1)
+        output, _ = self.o_proj(attn_out)
+        return output.view(bsz, seq_len, -1)
 
 
 # ============================================================================
@@ -244,29 +182,17 @@ class Qwen3OmniCodePredictorMLP(nn.Module):
 
 
 class Qwen3OmniCodePredictorMTPLayer(nn.Module):
-    """MTP layer for speculative decoding - predicts next residual code layer."""
+    """Transformer decoder layer for code predictor (SDPA, no KV cache)."""
 
     def __init__(
         self,
-        config: PretrainedConfig,
-        prefix: str,
-        model_config: ModelConfig,
-        layer_idx: int,
-        cache_config: CacheConfig | None = None,
+        config,
         quant_config: QuantizationConfig | None = None,
+        prefix: str = "",
     ) -> None:
         super().__init__()
-        self.layer_idx = layer_idx
-        self.config = config
-
         self.self_attn = Qwen3OmniCodePredictorAttention(
             config,
-            layer_idx,
-            vllm_config=type(
-                "VllmConfig",
-                (),
-                {"cache_config": cache_config, "quant_config": quant_config, "model_config": model_config},
-            )(),
             quant_config=quant_config,
             prefix=f"{prefix}.self_attn",
         )
@@ -275,33 +201,24 @@ class Qwen3OmniCodePredictorMTPLayer(nn.Module):
             quant_config=quant_config,
             prefix=f"{prefix}.mlp",
         )
-        self.input_layernorm = RMSNorm(
-            config.code_predictor_config.hidden_size, eps=config.code_predictor_config.rms_norm_eps
-        )
-        self.post_attention_layernorm = RMSNorm(
-            config.code_predictor_config.hidden_size, eps=config.code_predictor_config.rms_norm_eps
-        )
+        cp_cfg = config.code_predictor_config
+        self.input_layernorm = RMSNorm(cp_cfg.hidden_size, eps=cp_cfg.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(cp_cfg.hidden_size, eps=cp_cfg.rms_norm_eps)
 
-    def mtp_block(
+    def forward(
         self,
         hidden_states: torch.Tensor,
-        past_key_values: Cache | None = None,
-        cache_position: torch.LongTensor | None = None,
-        use_cache: bool = False,
-        position_ids: torch.LongTensor | None = None,
+        position_ids: torch.Tensor,
     ) -> torch.Tensor:
-        # Self-attention with residual
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
-        hidden_states = self.self_attn(hidden_states, past_key_values, cache_position, use_cache, position_ids)
+        hidden_states = self.self_attn(hidden_states, position_ids)
         hidden_states = residual + hidden_states
 
-        # MLP with residual
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
         hidden_states = self.mlp(hidden_states)
         hidden_states = residual + hidden_states
-
         return hidden_states
 
 
@@ -336,11 +253,8 @@ class Qwen3OmniCodePredictorBaseModel(nn.Module):
             [
                 Qwen3OmniCodePredictorMTPLayer(
                     vllm_config.model_config.hf_config,
-                    f"{prefix}.layers.{idx}",
-                    model_config=vllm_config.model_config,
-                    layer_idx=idx,
-                    cache_config=vllm_config.cache_config,
                     quant_config=vllm_config.quant_config,
+                    prefix=f"{prefix}.layers.{idx}",
                 )
                 for idx in range(config.num_hidden_layers)
             ]
@@ -351,40 +265,28 @@ class Qwen3OmniCodePredictorBaseModel(nn.Module):
     def forward(
         self,
         inputs_embeds: torch.Tensor,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
-        past_key_values: Any | None = None,
-        use_cache: bool | None = False,
-        cache_position: torch.LongTensor | None = None,
-        **kwargs: Any,
+        position_ids: torch.Tensor,
     ) -> Any:
         """
-        Forward pass matching HF structure.
+        Forward pass.
 
         Args:
             inputs_embeds: [batch, seq_len, hidden_size]
-            position_ids: Optional position IDs tensor
-            past_key_values: Optional cached key-value pairs
-            use_cache: Whether to use cache
-            cache_position: Optional cache position tensor
-            **kwargs: Additional keyword arguments
+            position_ids: Flat position IDs for RoPE
 
         Returns:
-            Named tuple with .last_hidden_state and .past_key_values attributes
+            Named tuple with .last_hidden_state attribute
         """
-        batch_size, seq_len, _ = inputs_embeds.shape
-        # Forward through decoder layers
         hidden_states = inputs_embeds
 
         for layer in self.layers:
-            hidden_states = layer.mtp_block(hidden_states, past_key_values, cache_position, use_cache, position_ids)
+            hidden_states = layer(hidden_states, position_ids)
 
         # Final norm
         hidden_states = self.norm(hidden_states)
 
-        # Return in HF-compatible format
-        Output = namedtuple("Output", ["last_hidden_state", "past_key_values"])
-        return Output(last_hidden_state=hidden_states, past_key_values=None)  # [batch, num_code_groups-1, hidden_size]
+        Output = namedtuple("Output", ["last_hidden_state"])
+        return Output(last_hidden_state=hidden_states)
 
     def get_input_embeddings(self):
         """Return codec embeddings for HF compatibility."""
@@ -553,14 +455,7 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
             # Slice pre-computed position IDs
             position_ids = pos_ids[:seq_len].repeat(batch_size)
 
-            outputs = self.model(
-                inputs_embeds=projected,
-                attention_mask=None,
-                position_ids=position_ids,
-                past_key_values=None,
-                use_cache=False,
-                cache_position=None,
-            )
+            outputs = self.model(projected, position_ids)
 
             # Sample next code from the last position's hidden state
             logits = self.lm_head[layer_idx](outputs.last_hidden_state[:, -1:, :])
