@@ -106,15 +106,18 @@ class Qwen3OmniCodePredictorAttention(nn.Module):
     ) -> torch.Tensor:
         bsz, seq_len, _ = hidden_states.shape
 
-        qkv, _ = self.qkv_proj(hidden_states)
+        # Flatten to 2D before qkv_proj so q/k are [num_tokens, size],
+        # which is the shape vLLM's rotary_emb expects.
+        qkv, _ = self.qkv_proj(hidden_states.reshape(bsz * seq_len, -1))
         q, k, v = qkv.split([self.q_size, self.kv_size, self.kv_size], dim=-1)
 
-        # Norm → flatten → RoPE → reshape to [B, heads, seq, head_dim]
+        # RMSNorm over head_dim, then RoPE (both operate on 2D [num_tokens, size])
         q = self.q_norm(q.view(-1, self.num_heads, self.head_dim)).view(q.shape)
         k = self.k_norm(k.view(-1, self.num_kv_heads, self.head_dim)).view(k.shape)
 
         q, k = self.rotary_emb(position_ids, q, k)
 
+        # Reshape to [B, heads, seq, head_dim] for SDPA
         q = q.view(bsz, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
         v = v.view(bsz, seq_len, self.num_kv_heads, self.head_dim).transpose(1, 2)
