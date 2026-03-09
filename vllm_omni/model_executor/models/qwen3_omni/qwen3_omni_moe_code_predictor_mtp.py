@@ -6,9 +6,6 @@ The code predictor generates residual RVQ (Residual Vector Quantization) codes
 autoregressively, predicting layers 1 to N based on layer-0 codes from the talker.
 """
 
-from collections import namedtuple
-from typing import Any
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -17,9 +14,7 @@ from transformers.generation.logits_process import (
     TopKLogitsWarper,
     TopPLogitsWarper,
 )
-from vllm.compilation.decorators import support_torch_compile
-from vllm.config import VllmConfig, get_current_vllm_config
-from vllm.forward_context import get_forward_context
+from vllm.config import VllmConfig
 from vllm.logger import init_logger
 from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm.model_executor.layers.linear import (
@@ -30,7 +25,6 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.rotary_embedding import get_rope
 from vllm.model_executor.layers.vocab_parallel_embedding import VocabParallelEmbedding
-from vllm.utils.torch_utils import direct_register_custom_op
 
 logger = init_logger(__name__)
 
@@ -269,7 +263,7 @@ class Qwen3OmniCodePredictorBaseModel(nn.Module):
         self,
         inputs_embeds: torch.Tensor,
         position_ids: torch.Tensor,
-    ) -> Any:
+    ) -> torch.Tensor:
         """
         Forward pass.
 
@@ -278,51 +272,21 @@ class Qwen3OmniCodePredictorBaseModel(nn.Module):
             position_ids: Flat position IDs for RoPE
 
         Returns:
-            Named tuple with .last_hidden_state attribute
+            hidden_states: [batch, seq_len, hidden_size]
         """
         hidden_states = inputs_embeds
 
         for layer in self.layers:
             hidden_states = layer(hidden_states, position_ids)
 
-        # Final norm
         hidden_states = self.norm(hidden_states)
-
-        Output = namedtuple("Output", ["last_hidden_state"])
-        return Output(last_hidden_state=hidden_states)
+        return hidden_states
 
     def get_input_embeddings(self):
         """Return codec embeddings for HF compatibility."""
         return self.codec_embedding
 
 
-def code_predictor_sample(
-    logits: torch.Tensor,
-    layer_name: str,
-) -> torch.Tensor:
-    forward_context = get_forward_context()
-    self = forward_context.no_compile_layers[layer_name]
-    logits = self.logits_processors(None, logits[:, -1])
-    probs = F.softmax(logits, dim=-1)
-    code = torch.multinomial(probs.squeeze(1), num_samples=1)  # [batch, 1]
-    return code
-
-
-def code_predictor_sample_fake(
-    logits: torch.Tensor,
-    layer_name: str,
-) -> torch.Tensor:
-    return torch.empty((logits.shape[0], 1), dtype=torch.int64, device=logits.device)
-
-
-direct_register_custom_op(
-    op_name="qwen3_omni_code_predictor_sample",
-    op_func=code_predictor_sample,
-    fake_impl=code_predictor_sample_fake,
-)
-
-
-@support_torch_compile
 class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
     """
     Code predictor wrapper matching HF structure.
@@ -344,7 +308,10 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
         self.num_code_groups = self.config.code_predictor_config.num_code_groups
 
         # Base transformer model (matches HF structure)
-        self.model = Qwen3OmniCodePredictorBaseModel(vllm_config=vllm_config, prefix=prefix)
+        # prefix must include ".model" to match PyTorch's parameter hierarchy
+        # (e.g. "code_predictor.model.layers.0.self_attn.qkv_proj") for
+        # correct quantization config lookup and TP sharding.
+        self.model = Qwen3OmniCodePredictorBaseModel(vllm_config=vllm_config, prefix=f"{prefix}.model")
 
         # Output heads for each residual layer (1-num_layers-1)
         self.lm_head = nn.ModuleList(
@@ -364,14 +331,13 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
             ]
         )
 
-        compilation_config = get_current_vllm_config().compilation_config
-        if prefix in compilation_config.static_forward_context:
-            raise ValueError(f"Duplicate layer name: {prefix}")
-        compilation_config.static_forward_context[prefix] = self
-        self.layer_name = prefix
-
         # Store hidden_size for use in forward() buffer allocation
         self._hidden_size = self.config.code_predictor_config.hidden_size
+
+        # Lazy torch.compile on the inner transformer only (not the outer
+        # autoregressive loop + sampling).  mode="default" avoids conflicts
+        # with vLLM's CUDAGraphWrapper on the main stream.
+        self._compiled_model_fwd: object | None = None
 
     def forward(
         self,
@@ -449,27 +415,46 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
         # Write layer-0 code into all_codes (replaces list + torch.stack)
         all_codes[:, 0] = layer0_code
 
+        # Lazily set up torch.compile on the inner transformer forward.
+        # Only the 5-layer transformer is compiled; the outer loop + sampling
+        # stay in eager mode (varying seq_len + multinomial are not compile-friendly).
+        if self._compiled_model_fwd is None:
+            self._compiled_model_fwd = torch.compile(
+                self.model.forward,
+                mode="default",
+                dynamic=True,
+            )
+            logger.info("code_predictor: torch.compile enabled (mode=default)")
+        model_fwd = self._compiled_model_fwd
+
+        # Cache module references to bypass nn.Module.__call__ overhead
+        lm_heads = list(self.lm_head)
+        codec_embeds = list(self.model.codec_embedding)
+
         # ---- Autoregressive loop: predict layers 1..num_code_groups-1 ----
         for layer_idx in range(self.num_code_groups - 1):
             seq_len = layer_idx + 2  # positions 0..layer_idx+1 are filled
 
             # View into buffer – no copy, no allocation
             projected = proj_buf[:, :seq_len, :]
-            # Slice pre-computed position IDs
-            position_ids = pos_ids[:seq_len].repeat(batch_size)
+            # Slice pre-computed position IDs (1D flat)
+            position_ids = pos_ids[:seq_len] if batch_size == 1 else pos_ids[:seq_len].repeat(batch_size)
 
-            outputs = self.model(projected, position_ids)
+            hidden_out = model_fwd(projected, position_ids)
 
-            # Sample next code from the last position's hidden state
-            logits = self.lm_head[layer_idx](outputs.last_hidden_state[:, -1:, :])
-            code = torch.ops.vllm.qwen3_omni_code_predictor_sample(logits, self.layer_name)
+            # Sample next code from the last position's logits (inline, no custom op)
+            logits = lm_heads[layer_idx](hidden_out[:, -1, :])
+            logits = self.logits_processors(None, logits)
+            probs = F.softmax(logits, dim=-1)
+            code = torch.multinomial(probs, num_samples=1)  # [batch, 1]
 
             # Write predicted code directly into pre-allocated tensor
             all_codes[:, layer_idx + 1] = code
 
-            # Write embedding into next buffer position for next iteration
-            # codec_embedding[layer_idx] embeds code for layer (layer_idx+1)
-            new_embed = self.model.codec_embedding[layer_idx](code)
+            # Write embedding into buffer.  This is needed both for the next
+            # transformer iteration AND because proj_buf is returned to the
+            # caller who sums proj_buf[:, 1:, :] over all codec positions.
+            new_embed = codec_embeds[layer_idx](code)
             proj_buf[:, layer_idx + 2 : layer_idx + 3, :] = new_embed
 
         return all_codes, proj_buf
