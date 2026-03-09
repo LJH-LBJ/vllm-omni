@@ -347,21 +347,22 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
     def _ensure_model_fwd(self) -> None:
         if self._model_fwd is not None:
             return
-        if os.environ.get("VLLM_CP_COMPILE", "0") == "1":
+        if os.environ.get("VLLM_CP_COMPILE", "1") == "0":
+            self._model_fwd = self.model.forward
+            logger.info("code_predictor: eager mode (VLLM_CP_COMPILE=0)")
+        else:
             self._model_fwd = torch.compile(
                 self.model.forward,
                 mode="default",
                 dynamic=True,
             )
-            logger.info("code_predictor: torch.compile ON (VLLM_CP_COMPILE=1)")
-        else:
-            self._model_fwd = self.model.forward
-            logger.info("code_predictor: eager mode (set VLLM_CP_COMPILE=1 to compile)")
+            logger.info("code_predictor: torch.compile ON (set VLLM_CP_COMPILE=0 to disable)")
 
     # ------------------------------------------------------------------
     #  Forward -- re-prefill + persistent buffers + inline sampling
     # ------------------------------------------------------------------
 
+    @torch.inference_mode()
     def forward(
         self,
         layer0_code: torch.Tensor,
