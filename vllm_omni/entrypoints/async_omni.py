@@ -141,6 +141,7 @@ class AsyncOmni(OmniBase):
             sequence_parallel_size = kwargs.get("sequence_parallel_size")
             tensor_parallel_size = kwargs.get("tensor_parallel_size") or 1
             cfg_parallel_size = kwargs.get("cfg_parallel_size") or 1
+            vae_patch_parallel_size = kwargs.get("vae_patch_parallel_size") or 1
             use_hsdp = kwargs.get("use_hsdp", False)
             hsdp_shard_size = kwargs.get("hsdp_shard_size", -1)
             hsdp_replicate_size = kwargs.get("hsdp_replicate_size", 1)
@@ -165,6 +166,7 @@ class AsyncOmni(OmniBase):
                 ulysses_degree=ulysses_degree,
                 ring_degree=ring_degree,
                 cfg_parallel_size=cfg_parallel_size,
+                vae_patch_parallel_size=vae_patch_parallel_size,
                 use_hsdp=use_hsdp,
                 hsdp_shard_size=hsdp_shard_size,
                 hsdp_replicate_size=hsdp_replicate_size,
@@ -180,6 +182,7 @@ class AsyncOmni(OmniBase):
                 },
                 "engine_args": {
                     "parallel_config": parallel_config,
+                    "model_class_name": kwargs.get("model_class_name", None),
                     "vae_use_slicing": kwargs.get("vae_use_slicing", False),
                     "vae_use_tiling": kwargs.get("vae_use_tiling", False),
                     "cache_backend": cache_backend,
