@@ -1,5 +1,5 @@
 """
-E2E Online tests for Qwen3-Omni model with video input and audio output.
+E2E Online tests for Qwen2.5-Omni model with video input and audio output.
 """
 
 import os
