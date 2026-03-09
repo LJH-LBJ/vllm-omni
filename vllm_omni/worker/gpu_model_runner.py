@@ -1304,7 +1304,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         for k, v in upd.items():
             if isinstance(v, torch.Tensor):
                 if k in gpu_keys:
-                    existing[k] = v.detach()
+                    existing[k] = v.detach().clone()
                 else:
                     existing[k] = v.detach().to("cpu").contiguous()
             elif isinstance(v, list):
