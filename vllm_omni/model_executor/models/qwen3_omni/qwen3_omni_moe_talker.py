@@ -141,8 +141,8 @@ class Qwen3OmniMoeTalkerForConditionalGeneration(
         """Generate full RVQ codes + summed embeddings (single-loop, no KV cache).
 
         The code predictor uses re-prefill: each AR step re-forwards the full
-        (short) sequence through the 5-layer transformer.  The returned
-        ``proj_buf`` already contains all codec embeddings at positions 1..G,
+        (short) sequence through the transformer. The returned ``proj_buf``
+        already contains all codec embeddings at positions 1..G,
         so summed_embeddings = proj_buf[:, 1:, :].sum(dim=1)  — no second
         loop or re-embedding needed.
 
