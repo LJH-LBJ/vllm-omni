@@ -1019,6 +1019,16 @@ class Qwen2_5OmniForConditionalGeneration(
                     self.thinker_embedding.weight = nn.Parameter(
                         thinker_embedding_weights[0].to(self._module_device(self.talker))
                     )
+                else:
+                    # Fallback for load_format: dummy — thinker weights
+                    # are absent because the thinker submodule is not
+                    # instantiated in the talker stage, so the dummy
+                    # weight loader never generates them.
+                    self.thinker_embedding = nn.Embedding(
+                        self.thinker_config.vocab_size,
+                        getattr(self.thinker_config, "embedding_size", self.thinker_config.hidden_size),
+                        device=self._module_device(self.talker),
+                    )
             talker_loaded = self.talker.load_weights(talker_weights)
             talker_loaded = add_prefix_to_loaded_weights(talker_loaded, "talker")
             loaded_weights.update(talker_loaded)
