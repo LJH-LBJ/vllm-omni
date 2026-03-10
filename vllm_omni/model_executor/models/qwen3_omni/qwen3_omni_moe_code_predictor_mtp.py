@@ -1,14 +1,11 @@
 """Qwen3-Omni Code Predictor -- optimized re-prefill, no KV cache.
 
-Mirrors the proven TTS code-predictor design:
-  * SDPA attention (F.scaled_dot_product_attention) -- no HF backend fallback
-  * Persistent pre-allocated buffers (_proj_buf, _pos_ids) -- zero per-call alloc
-  * Inline top-k sampling -- no LogitsProcessorList / custom-op overhead
-  * Optional torch.compile on inner transformer (env VLLM_CP_COMPILE=1)
-  * No @support_torch_compile / static_forward_context / namedtuple
+* SDPA attention (F.scaled_dot_product_attention) -- no HF backend fallback
+* Persistent pre-allocated buffers (_proj_buf, _pos_ids) -- zero per-call alloc
+* Inline top-k sampling -- no LogitsProcessorList / custom-op overhead
+* torch.compile on inner transformer by default
+* No @support_torch_compile / static_forward_context / namedtuple
 """
-
-import os
 
 import torch
 import torch.nn as nn
@@ -215,7 +212,7 @@ class Qwen3OmniCodePredictorDecoderLayer(nn.Module):
 
 
 # ===================================================================
-#  Base Transformer Model (5-layer, re-prefill)
+#  Base Transformer Model (re-prefill, no KV cache)
 # ===================================================================
 
 
@@ -267,16 +264,16 @@ class Qwen3OmniCodePredictorBaseModel(nn.Module):
 class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
     """Optimized code predictor -- re-prefill approach, no KV cache.
 
-    Each AR step forwards the full growing sequence (len 2 -> 33) through
-    the 5-layer transformer.  The extra O(T^2) FLOPs are negligible for
-    T <= 33, and this avoids all KV-cache management overhead.
+    Each AR step forwards the full growing sequence (len 2 -> num_code_groups+1)
+    through the transformer.  The extra O(T^2) FLOPs are negligible for
+    short sequences, and this avoids all KV-cache management overhead.
 
-    Optimizations (matching the TTS reference):
+    Optimizations:
       1. Pre-allocated embedding buffer -- no torch.cat per step.
       2. Pre-allocated position_ids -- no torch.arange per step.
       3. Inline top-k sampling -- no LogitsProcessorList / custom op.
       4. Cached module references -- bypass ModuleList indexing.
-      5. Optional torch.compile on inner transformer (VLLM_CP_COMPILE=1).
+      5. torch.compile on inner transformer.
     """
 
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
@@ -290,10 +287,9 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
         self.num_code_groups = config.code_predictor_config.num_code_groups
         self._hidden_size = config.code_predictor_config.hidden_size
 
-        # Inner transformer (prefix includes ".model" so weight names match HF)
         self.model = Qwen3OmniCodePredictorBaseModel(
             vllm_config=vllm_config,
-            prefix=f"{prefix}.model",
+            prefix=prefix,
         )
 
         # One lm_head per residual layer (layers 1 .. G-1)
@@ -347,16 +343,12 @@ class Qwen3OmniMoeTalkerCodePredictor(nn.Module):
     def _ensure_model_fwd(self) -> None:
         if self._model_fwd is not None:
             return
-        if os.environ.get("VLLM_CP_COMPILE", "1") == "0":
-            self._model_fwd = self.model.forward
-            logger.info("code_predictor: eager mode (VLLM_CP_COMPILE=0)")
-        else:
-            self._model_fwd = torch.compile(
-                self.model.forward,
-                mode="default",
-                dynamic=True,
-            )
-            logger.info("code_predictor: torch.compile ON (set VLLM_CP_COMPILE=0 to disable)")
+        self._model_fwd = torch.compile(
+            self.model.forward,
+            mode="default",
+            dynamic=True,
+        )
+        logger.info("code_predictor: torch.compile enabled")
 
     # ------------------------------------------------------------------
     #  Forward -- re-prefill + persistent buffers + inline sampling
