@@ -672,6 +672,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         # TODO(Peiqi): add voice_type support
         voice_type = self.voice_type
         start_index = info_dict.get("num_processed_tokens", 0)
+        end_index = start_index + input_embeds.shape[0]
         talker_device = self._module_device(self.talker)
 
         # Read thinker outputs for prefill
@@ -765,7 +766,8 @@ class Qwen3OmniMoeForConditionalGeneration(
         
         logger.info(
             f"talker_preprocess_prefill thinker_sequence_embeds: {thinker_sequence_embeds.shape}, "
-            f"thinker_hidden_states: {thinker_hidden_states.shape}"
+            f"thinker_hidden_states: {thinker_hidden_states.shape}, "
+            f"chunk_offset: {chunk_offset}, chunk_size: {chunk_size}"
         )
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
@@ -818,6 +820,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             pass
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
 
+        logger.info(f"req_input_ids: {req_input_ids.shape}, req_embeds: {req_embeds.shape}, start_index: {start_index}, end_index: {end_index}")
+        # return req_input_ids[start_index:end_index], req_embeds[start_index:end_index], update_dict
         return req_input_ids, req_embeds, update_dict
 
     def _talker_cache_thinker_decode_embeds(
@@ -905,10 +909,10 @@ class Qwen3OmniMoeForConditionalGeneration(
         for i in range(len(im_start_indexes) - 1):
             # Segment boundaries in full sequence coordinates
             segment_start_index_full = im_start_indexes[i].item()
-            if i == len(im_start_indexes) - 2:
-                segment_end_index_full = segment_start_index_full + im_start_indexes[i + 1].item()
-            else:
-                segment_end_index_full = im_start_indexes[i + 1].item()
+            # if i == len(im_start_indexes) - 2:
+            #     segment_end_index_full = segment_start_index_full + im_start_indexes[i + 1].item()
+            # else:
+            segment_end_index_full = im_start_indexes[i + 1].item()
 
             # skip segments that don't overlap with current chunk
             logger.info(
@@ -1083,7 +1087,8 @@ class Qwen3OmniMoeForConditionalGeneration(
 
     def _get_talker_assistant_parts(
         self, im_start_index, segment_end_index, speaker_id, thinker_embed, tts_pad_embed, tts_bos_embed, tts_eos_embed
-    ):
+    ):  
+        logger.info(f"im_start_index: {im_start_index}, segment_end_index: {segment_end_index}")
         assistant_hidden = self.talker.text_projection(thinker_embed[im_start_index:segment_end_index]).to(
             tts_pad_embed.device
         )  # [t, d]

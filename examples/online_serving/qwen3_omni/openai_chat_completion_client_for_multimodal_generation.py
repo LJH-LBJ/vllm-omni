@@ -440,7 +440,9 @@ def run_multimodal_generation(args, client: OpenAI) -> None:
             for choice in chat_completion.choices:
                 if choice.message.audio:
                     audio_data = base64.b64decode(choice.message.audio.data)
-                    audio_file_path = f"audio_{count}.wav"
+                    req_id = getattr(chat_completion, "id", None) or str(count)
+                    req_id_safe = str(req_id).replace("/", "_").replace("\\", "_")
+                    audio_file_path = f"audio_{req_id_safe}.wav"
                     with open(audio_file_path, "wb") as f:
                         f.write(audio_data)
                     print(f"Audio saved to {audio_file_path}")
@@ -450,6 +452,7 @@ def run_multimodal_generation(args, client: OpenAI) -> None:
     else:
         printed_content = False
         for chat_completion in chat_completions:
+            chunk_count = 0
             for chunk in chat_completion:
                 for choice in chunk.choices:
                     if hasattr(choice, "delta"):
@@ -459,11 +462,14 @@ def run_multimodal_generation(args, client: OpenAI) -> None:
 
                     if getattr(chunk, "modality", None) == "audio" and content:
                         audio_data = base64.b64decode(content)
-                        audio_file_path = f"audio_{count}.wav"
+                        req_id = getattr(chunk, "id", None) or getattr(chat_completion, "id", None) or str(count)
+                        req_id_safe = str(req_id).replace("/", "_").replace("\\", "_")
+                        audio_file_path = f"audio_{req_id_safe}_{chunk_count}.wav" if chunk_count > 0 else f"audio_{req_id_safe}.wav"
                         with open(audio_file_path, "wb") as f:
                             f.write(audio_data)
                         print(f"\nAudio saved to {audio_file_path}")
                         count += 1
+                        chunk_count += 1
 
                     elif getattr(chunk, "modality", None) == "text":
                         if not printed_content:

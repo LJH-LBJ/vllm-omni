@@ -96,7 +96,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
         scheduler_output: SchedulerOutput,
         intermediate_tensors: IntermediateTensors | None = None,
     ) -> OmniModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:
-        logger.info("enter execute_model")
+        # logger.info("enter execute_model")
         if self.execute_model_state is not None:
             raise RuntimeError("State error: sample_tokens() must be called after execute_model() returns None.")
 

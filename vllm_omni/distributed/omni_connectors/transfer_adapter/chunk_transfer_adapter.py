@@ -211,6 +211,40 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             if key not in payload_data:
                 payload_data[key] = value
 
+        # Merge first decode into prefill buffer when chunk has both (last prefill + 1 decode).
+        # Talker needs "1 first text" from thinker in the prefill so the assistant part gets it.
+        decode_embeds = payload_data.get("thinker_decode_embeddings")
+        if (
+            decode_embeds is not None
+            and isinstance(decode_embeds, torch.Tensor)
+            and decode_embeds.shape[0] > 0
+            and "thinker_prefill_embeddings" in payload_data
+        ):
+            payload_data["thinker_prefill_embeddings"] = torch.cat(
+                [payload_data["thinker_prefill_embeddings"], decode_embeds], dim=0
+            )
+            decode_hidden = payload_data.get("thinker_decode_hidden_states")
+            if (
+                decode_hidden is not None
+                and isinstance(decode_hidden, torch.Tensor)
+                and "thinker_hidden_states" in payload_data
+            ):
+                payload_data["thinker_hidden_states"] = torch.cat(
+                    [payload_data["thinker_hidden_states"], decode_hidden], dim=0
+                )
+            decode_ids = payload_data.get("thinker_output_token_ids")
+            if decode_ids is not None:
+                ids_list = decode_ids if isinstance(decode_ids, list) else decode_ids.tolist()
+                for seq_key in ("thinker_sequences", "thinker_input_ids"):
+                    if seq_key in payload_data:
+                        seq = payload_data[seq_key]
+                        if isinstance(seq, list):
+                            payload_data[seq_key] = seq + ids_list
+                        elif isinstance(seq, torch.Tensor):
+                            payload_data[seq_key] = torch.cat(
+                                [seq, torch.as_tensor(ids_list, device=seq.device, dtype=seq.dtype)], dim=0
+                            )
+
         self.request_payload[req_id] = payload_data
         return payload_data
 
