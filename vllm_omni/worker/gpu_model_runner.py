@@ -1259,14 +1259,21 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
                 )
-                if inputs_embeds is None:
+                # Only allocate from req_embeds when we have content (correct embed dim).
+                # When this round is system-only for talker, req_embeds may be empty [0, D]
+                # with thinker dim D; the buffer uses talker dim, so do not overwrite.
+                if inputs_embeds is None and req_embeds.shape[0] > 0:
                     inputs_embeds = torch.empty(
                         (input_ids.shape[0], req_embeds.shape[-1]),
                         device=req_embeds.device,
                         dtype=req_embeds.dtype,
                     )
 
-                if self.has_talker_mtp and span_len == 1:
+                seg_len = min(span_len, req_embeds.shape[0])
+                preprocess_seg_lens.append(seg_len)
+
+                # Only run MTP decode when we have real content (span_len==1 and non-empty).
+                if self.has_talker_mtp and span_len == 1 and seg_len > 0:
                     last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
                     decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
                     self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
@@ -1278,14 +1285,44 @@ class OmniGPUModelRunner(GPUModelRunner):
                 # TODO(Peiqi): the merge stage could move out from the critical path
                 self._merge_additional_information_update(req_id, update_dict)
 
-                # update the inputs_embeds and input_ids
-                seg_len = min(span_len, req_embeds.shape[0])
-                preprocess_seg_lens.append(seg_len)
-                inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
-                if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
-                    input_ids[s : s + seg_len] = req_input_ids
+                # Update inputs_embeds/input_ids only when this request produced content.
+                # When seg_len==0 (system-only chunk), skip assignment to avoid dtype/dim
+                # mismatch (req_embeds may be thinker-dim, buffer is talker-dim).
+                if seg_len > 0:
+                    inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
+                    if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
+                        input_ids[s : s + seg_len] = req_input_ids
+                else:
+                    # System-only chunk: fill buffer positions with safe values
+                    # so the model forward doesn't crash on uninitialized memory.
+                    if inputs_embeds is not None:
+                        inputs_embeds[s:e].zero_()
+                    input_ids[s:e].zero_()
 
             self._preprocess_seg_lens = preprocess_seg_lens
+            # If this round had only system segments for talker, skip model forward.
+            self._talker_skip_forward = all(seg_len == 0 for seg_len in preprocess_seg_lens)
+
+            # #region agent log
+            if any(sl == 0 for sl in preprocess_seg_lens):
+                _parts = [
+                    f"[DBG-fe04d3] preprocess_state seg_lens={preprocess_seg_lens} skip_fwd={self._talker_skip_forward}"
+                ]
+                _parts.append(
+                    f"emb_shape={list(inputs_embeds.shape) if inputs_embeds is not None else None} ids_shape={list(input_ids.shape)}"
+                )
+                for _si, _sl in enumerate(preprocess_seg_lens):
+                    _qs = int(self.query_start_loc.cpu[_si])
+                    _nt = int(num_scheduled_tokens_np[_si])
+                    _s, _e = _qs, _qs + _nt
+                    _embslice = inputs_embeds[_s:_e] if inputs_embeds is not None else None
+                    _info = f"req{_si} seg_len={_sl} span=[{_s},{_e}]"
+                    if _embslice is not None:
+                        _info += f" nan={torch.isnan(_embslice).any().item()} inf={torch.isinf(_embslice).any().item()} allzero={(_embslice == 0).all().item()} absmax={_embslice.abs().max().item():.6f}"
+                    _info += f" ids={input_ids[_s:_e].tolist()[:8]}"
+                    _parts.append(_info)
+                logger.info("\n".join(_parts))
+            # #endregion
 
             # run talker mtp decode
             if self.has_talker_mtp:

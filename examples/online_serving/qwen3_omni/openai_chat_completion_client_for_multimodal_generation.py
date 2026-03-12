@@ -354,6 +354,7 @@ async def _streaming_input_generator(
         segment = " ".join(words[i : i + chunk_size])
         if i + chunk_size < len(words):
             segment += " "
+        print(f"streaming input chunk: {segment}")
         yield StreamingInputChunk(prompt=segment, is_final=False)
         if chunk_delay_sec > 0:
             await asyncio.sleep(chunk_delay_sec)

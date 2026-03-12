@@ -259,6 +259,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 slot_mappings=slot_mappings_by_group,
             )
 
+            logger.info(f"scheduler_output {scheduler_output}")
             (
                 input_ids,
                 inputs_embeds,
@@ -288,6 +289,13 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         device=logits_indices.device,
                     )
                     self._omni_actual_num_computed_tokens = actual_num_computed_tokens
+
+                    # #region agent log
+                    if any(s == 0 for s in seg_lens):
+                        logger.info(
+                            f"[DBG-fe04d3] logits_adj seg_lens={list(seg_lens)} adjusted={adjusted} num_tokens_padded={num_tokens_padded} logits_indices={logits_indices.tolist()} skip_fwd={getattr(self, '_talker_skip_forward', None)}"
+                        )
+                    # #endregion
                 else:
                     self._omni_actual_num_computed_tokens = None
             else:
@@ -306,88 +314,121 @@ class GPUARModelRunner(OmniGPUModelRunner):
         # When spec decode is enabled, delay clearing connector metadata
         # until after draft model runs in sample_tokens.
         clear_kv_metadata = self.speculative_config is None
-        with (
-            set_forward_context(
-                attn_metadata,
-                self.vllm_config,
-                num_tokens=num_tokens_padded,
-                num_tokens_across_dp=num_tokens_across_dp,
-                cudagraph_runtime_mode=cudagraph_mode,
-                batch_descriptor=batch_desc,
-                ubatch_slices=ubatch_slices_padded,
-                slot_mapping=slot_mappings,  # OMNI: required for KV cache operations
-            ),
-            record_function_or_nullcontext("gpu_model_runner: forward"),
-            self.maybe_get_kv_connector_output(
-                scheduler_output, clear_metadata=clear_kv_metadata
-            ) as kv_connector_output,
-        ):
-            model_output = self._model_forward(
-                input_ids=input_ids,
-                positions=positions,
-                intermediate_tensors=intermediate_tensors,
-                inputs_embeds=inputs_embeds,
-                **model_kwargs,
-                sampling_metadata=self.input_batch.sampling_metadata,
-                logits_index=logits_indices,
-                sampler=self.sampler,
+
+        # Skip talker forward when this round had only system segments.
+        if getattr(self, "_talker_skip_forward", False):
+            self._talker_skip_forward = False
+            hidden_states = torch.zeros(
+                num_tokens_padded,
+                self.hidden_size,
+                dtype=self.dtype,
+                device=self.device,
             )
+            sample_hidden_states = hidden_states[logits_indices]
+            try:
+                logits = self.model.compute_logits(
+                    sample_hidden_states,
+                    sampling_metadata=self.input_batch.sampling_metadata,
+                )
+            except TypeError:
+                logits = self.model.compute_logits(sample_hidden_states)
+            aux_hidden_states = None
+            multimodal_outputs = None
+            kv_connector_output = None
+        else:
+            # #region agent log
+            if getattr(self.model, "model_stage", None) == "talker" and any(
+                s == 0 for s in getattr(self, "_preprocess_seg_lens", [1])
+            ):
+                _emb_info = ""
+                if inputs_embeds is not None:
+                    _emb_info = f" emb_nan={torch.isnan(inputs_embeds).any().item()} emb_inf={torch.isinf(inputs_embeds).any().item()} emb_dim={inputs_embeds.shape[-1]}"
+                logger.info(
+                    f"[DBG-fe04d3] pre_forward ids_shape={list(input_ids.shape) if input_ids is not None else None} emb_shape={list(inputs_embeds.shape) if inputs_embeds is not None else None} emb_none={inputs_embeds is None} pos_shape={list(positions.shape) if isinstance(positions, torch.Tensor) else None} ntok_pad={num_tokens_padded} hidden_sz={self.hidden_size}{_emb_info}"
+                )
+            # #endregion
 
-            # [Omni] Map pending ropes metadata to req_ids.
-            if hasattr(self.model, "flush_pending_metadata"):
-                self.model.flush_pending_metadata(list(req_ids))
+            with (
+                set_forward_context(
+                    attn_metadata,
+                    self.vllm_config,
+                    num_tokens=num_tokens_padded,
+                    num_tokens_across_dp=num_tokens_across_dp,
+                    cudagraph_runtime_mode=cudagraph_mode,
+                    batch_descriptor=batch_desc,
+                    ubatch_slices=ubatch_slices_padded,
+                    slot_mapping=slot_mappings,  # OMNI: required for KV cache operations
+                ),
+                record_function_or_nullcontext("gpu_model_runner: forward"),
+                self.maybe_get_kv_connector_output(
+                    scheduler_output, clear_metadata=clear_kv_metadata
+                ) as kv_connector_output,
+            ):
+                model_output = self._model_forward(
+                    input_ids=input_ids,
+                    positions=positions,
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
+                    **model_kwargs,
+                    sampling_metadata=self.input_batch.sampling_metadata,
+                    logits_index=logits_indices,
+                    sampler=self.sampler,
+                )
 
-        with record_function_or_nullcontext("gpu_model_runner: postprocess"):
-            if self.use_aux_hidden_state_outputs:
-                # True when EAGLE 3 is used.
-                hidden_states, aux_hidden_states = model_output
-            else:
-                # Common case.
-                hidden_states = model_output
-                aux_hidden_states = None
+                # [Omni] Map pending ropes metadata to req_ids.
+                if hasattr(self.model, "flush_pending_metadata"):
+                    self.model.flush_pending_metadata(list(req_ids))
 
-            hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
-            if not self.broadcast_pp_output:
-                # Common case.
-                if not get_pp_group().is_last_rank:
-                    # Return the intermediate tensors.
-                    assert isinstance(hidden_states, IntermediateTensors)
-                    hidden_states.kv_connector_output = kv_connector_output
-                    self.kv_connector_output = kv_connector_output
-                    return hidden_states
-
-                if self.is_pooling_model:
-                    # Return the pooling output.
-                    return self._pool(
-                        hidden_states,
-                        num_scheduled_tokens,
-                        num_scheduled_tokens_np,
-                        kv_connector_output,
-                    )
-                sample_hidden_states = hidden_states[logits_indices]
-                # Try with sampling_metadata first; fall back to without for models that don't support it
-                try:
-                    logits = self.model.compute_logits(
-                        sample_hidden_states, sampling_metadata=self.input_batch.sampling_metadata
-                    )
-                except TypeError:
-                    logits = self.model.compute_logits(sample_hidden_states)
-            else:
-                # Rare case.
-                assert not self.is_pooling_model
-
-                sample_hidden_states = hidden_states[logits_indices]
-                if not get_pp_group().is_last_rank:
-                    all_gather_tensors = {
-                        "residual": not is_residual_scattered_for_sp(self.vllm_config, num_tokens_padded)
-                    }
-                    get_pp_group().send_tensor_dict(
-                        hidden_states.tensors,
-                        all_gather_group=get_tp_group(),
-                        all_gather_tensors=all_gather_tensors,
-                    )
-                    logits = None
+            with record_function_or_nullcontext("gpu_model_runner: postprocess"):
+                if self.use_aux_hidden_state_outputs:
+                    # True when EAGLE 3 is used.
+                    hidden_states, aux_hidden_states = model_output
                 else:
+                    # Common case.
+                    hidden_states = model_output
+                    aux_hidden_states = None
+
+                hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
+
+                # #region agent log
+                if getattr(self.model, "model_stage", None) == "talker" and any(
+                    s == 0 for s in getattr(self, "_preprocess_seg_lens", [1])
+                ):
+                    _hs = (
+                        hidden_states
+                        if isinstance(hidden_states, torch.Tensor)
+                        else (
+                            hidden_states.text_hidden_states if hasattr(hidden_states, "text_hidden_states") else None
+                        )
+                    )
+                    if _hs is not None:
+                        try:
+                            torch.cuda.synchronize()
+                            logger.info(
+                                f"[DBG-fe04d3] post_forward hs_shape={list(_hs.shape)} hs_type={type(hidden_states).__name__} logits_idx={logits_indices.tolist()} ntok_pad={num_tokens_padded} hs_nan={torch.isnan(_hs).any().item()} hs_inf={torch.isinf(_hs).any().item()} hs_absmax={_hs.abs().max().item():.6f} max_idx={logits_indices.max().item()} hs_dim0={_hs.shape[0]} OOB={int(logits_indices.max().item()) >= int(_hs.shape[0])}"
+                            )
+                        except Exception as _e:
+                            logger.info(f"[DBG-fe04d3] post_forward CUDA_SYNC_ERROR: {_e}")
+                # #endregion
+
+                if not self.broadcast_pp_output:
+                    # Common case.
+                    if not get_pp_group().is_last_rank:
+                        # Return the intermediate tensors.
+                        assert isinstance(hidden_states, IntermediateTensors)
+                        hidden_states.kv_connector_output = kv_connector_output
+                        self.kv_connector_output = kv_connector_output
+                        return hidden_states
+
+                    if self.is_pooling_model:
+                        # Return the pooling output.
+                        return self._pool(
+                            hidden_states,
+                            num_scheduled_tokens,
+                            num_scheduled_tokens_np,
+                            kv_connector_output,
+                        )
+                    sample_hidden_states = hidden_states[logits_indices]
                     # Try with sampling_metadata first; fall back to without for models that don't support it
                     try:
                         logits = self.model.compute_logits(
@@ -395,6 +436,29 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         )
                     except TypeError:
                         logits = self.model.compute_logits(sample_hidden_states)
+                else:
+                    # Rare case.
+                    assert not self.is_pooling_model
+
+                    sample_hidden_states = hidden_states[logits_indices]
+                    if not get_pp_group().is_last_rank:
+                        all_gather_tensors = {
+                            "residual": not is_residual_scattered_for_sp(self.vllm_config, num_tokens_padded)
+                        }
+                        get_pp_group().send_tensor_dict(
+                            hidden_states.tensors,
+                            all_gather_group=get_tp_group(),
+                            all_gather_tensors=all_gather_tensors,
+                        )
+                        logits = None
+                    else:
+                        # Try with sampling_metadata first; fall back to without for models that don't support it
+                        try:
+                            logits = self.model.compute_logits(
+                                sample_hidden_states, sampling_metadata=self.input_batch.sampling_metadata
+                            )
+                        except TypeError:
+                            logits = self.model.compute_logits(sample_hidden_states)
 
                 model_output_broadcast_data: dict[str, Any] = {}
                 if logits is not None:
