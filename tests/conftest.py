@@ -405,29 +405,33 @@ def generate_synthetic_audio(
         "np_array": audio_data.copy(),
     }
 
-    # Write to a temp file and read bytes back in one pass.
-    # Using a real file ensures soundfile/libsndfile correctly finalises the
-    # WAV RIFF header (BytesIO can produce a truncated header in some builds).
-    tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    tmp.close()
-    try:
-        sf.write(tmp.name, audio_data, sample_rate, format="WAV", subtype="PCM_16")
-        with open(tmp.name, "rb") as f:
-            audio_bytes = f.read()
-    finally:
-        if os.path.exists(tmp.name):
-            os.unlink(tmp.name)
-
     if save_to_file:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = f"audio_{num_channels}ch_{timestamp}.wav"
+
         try:
-            with open(output_path, "wb") as f:
-                f.write(audio_bytes)
+            sf.write(output_path, audio_data, sample_rate, format="WAV", subtype="PCM_16")
             print(f"Audio saved: {output_path}")
+
+            with open(output_path, "rb") as f:
+                audio_bytes = f.read()
         except Exception as e:
             print(f"Save failed: {e}")
             save_to_file = False
+
+    # If not saving or save failed, write to a temp file and read back.
+    # Using a real file ensures soundfile/libsndfile correctly finalises the
+    # WAV RIFF header (BytesIO can produce a truncated header in some builds).
+    if not save_to_file or audio_bytes is None:
+        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        try:
+            sf.write(tmp.name, audio_data, sample_rate, format="WAV", subtype="PCM_16")
+            with open(tmp.name, "rb") as f:
+                audio_bytes = f.read()
+        finally:
+            if os.path.exists(tmp.name):
+                os.unlink(tmp.name)
 
     # Return result
     base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
