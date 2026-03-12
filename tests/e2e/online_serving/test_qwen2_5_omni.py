@@ -88,7 +88,7 @@ def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
 
     video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(224, 224, 300)['base64']}"
     image_data_url = f"data:image/jpeg;base64,{generate_synthetic_image(224, 224)['base64']}"
-    audio_data_url = f"data:audio/wav;base64,{generate_synthetic_audio(5, 1)['base64']}"
+    audio_data_url = f"data:audio/wav;base64,{generate_synthetic_audio(5, 1, sample_rate=16000)['base64']}"
     messages = dummy_messages_from_mix_data(
         system_prompt=get_system_prompt(),
         video_data_url=video_data_url,
