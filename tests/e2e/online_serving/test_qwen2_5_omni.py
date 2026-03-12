@@ -102,7 +102,7 @@ def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
         "messages": messages,
         "stream": True,
         "key_words": {
-            "audio": ["water", "chirping", "crackling", "rain"],
+            "audio": ["test"],
             "image": ["square", "quadrate"],
         },
     }
@@ -119,7 +119,7 @@ def test_text_to_text_001(omni_server, openai_client) -> None:
     Test text input processing and text/audio output generation via OpenAI API.
     Deploy Setting: default yaml
     Input Modal: text
-    Output Modal: text + audio
+    Output Modal: text
     Datasets: few requests
     """
     messages = dummy_messages_from_mix_data(system_prompt=get_system_prompt(), content_text=get_prompt())
