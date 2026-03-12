@@ -49,6 +49,8 @@ The Python client supports the following command-line arguments:
 - `--image-path` (or `-i`): Path to local image file or URL. If not provided and query-type is `use_image`, uses default image URL. Supports local file paths (automatically encoded to base64) or HTTP/HTTPS URLs and common image formats: JPEG, PNG, GIF, WebP. Example: `--image-path /path/to/image.jpg` or `--image-path https://example.com/image.png`
 - `--audio-path` (or `-a`): Path to local audio file or URL. If not provided and query-type is `use_audio`, uses default audio URL. Supports local file paths (automatically encoded to base64) or HTTP/HTTPS URLs and common audio formats: MP3, WAV, OGG, FLAC, M4A. Example: `--audio-path /path/to/audio.wav` or `--audio-path https://example.com/audio.mp3`
 - `--prompt` (or `-p`): Custom text prompt/question. If not provided, uses default prompt for the selected query type. Example: `--prompt "What are the main activities shown in this video?"`
+- `--stream-input`: Simulate streaming input (chunk user text, reassemble, then send). Use with `--chunk-delay-ms` for delay between chunks.
+- `--chunk-delay-ms`: Delay in ms between simulated input chunks when `--stream-input` is set (default: 0).
 
 
 For example, to use a local video file with custom prompt:
@@ -162,6 +164,14 @@ python openai_chat_completion_client_for_multimodal_generation.py \
     --query-type use_image \
     --stream
 ```
+
+## Input streaming (speech / multimodal)
+Simulate streaming input: user text is chunked (optionally with `--chunk-delay-ms` delay), reassembled, then sent in one request. Audio is saved as `audio_{request_id}.wav`.
+```bash
+python openai_chat_completion_client_for_multimodal_generation.py --stream-input
+python openai_chat_completion_client_for_multimodal_generation.py --stream-input --chunk-delay-ms 50 --prompt "Tell me a short joke."
+```
+Or use the dedicated script: `python streaming_input_example.py --query "Your message"` (see `--output-dir`, `--stream`).
 
 ## Run Local Web UI Demo
 

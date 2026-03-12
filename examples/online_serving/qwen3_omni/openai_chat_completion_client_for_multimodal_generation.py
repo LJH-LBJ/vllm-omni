@@ -1,7 +1,10 @@
+import asyncio
 import base64
 import concurrent.futures
 import os
-from typing import NamedTuple
+from collections.abc import AsyncGenerator
+from dataclasses import dataclass
+from typing import Any, NamedTuple
 
 import requests
 from openai import OpenAI
@@ -332,6 +335,67 @@ query_map = {
 }
 
 
+@dataclass
+class StreamingInputChunk:
+    """One chunk of streaming input (analogous to vLLM StreamingInput)."""
+
+    prompt: str
+    is_final: bool = False
+
+
+async def _streaming_input_generator(
+    user_message: str,
+    chunk_delay_sec: float = 0.0,
+) -> AsyncGenerator[StreamingInputChunk, None]:
+    """Yield streaming input chunks that form the full user message."""
+    words = user_message.split()
+    chunk_size = max(1, (len(words) + 2) // 3)
+    for i in range(0, len(words), chunk_size):
+        segment = " ".join(words[i : i + chunk_size])
+        if i + chunk_size < len(words):
+            segment += " "
+        yield StreamingInputChunk(prompt=segment, is_final=False)
+        if chunk_delay_sec > 0:
+            await asyncio.sleep(chunk_delay_sec)
+    yield StreamingInputChunk(prompt="", is_final=True)
+
+
+def _collect_streaming_input(user_text: str, chunk_delay_sec: float = 0.0) -> str:
+    """Run the async streaming input generator and return the assembled user text."""
+    chunks: list[StreamingInputChunk] = []
+
+    async def _collect():
+        async for ch in _streaming_input_generator(user_text, chunk_delay_sec):
+            chunks.append(ch)
+
+    asyncio.run(_collect())
+    return "".join(c.prompt for c in chunks)
+
+
+def _user_text_from_prompt(prompt: dict[str, Any]) -> str:
+    """Extract the concatenated text from a user prompt message (content list)."""
+    parts = []
+    for item in prompt.get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "text":
+            parts.append(item.get("text") or "")
+    return " ".join(parts).strip() or ""
+
+
+def _prompt_with_replaced_text(prompt: dict[str, Any], assembled_text: str) -> dict[str, Any]:
+    """Replace text segments in prompt content with a single assembled text block."""
+    content = list(prompt.get("content") or [])
+    new_content = []
+    text_replaced = False
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            if not text_replaced:
+                new_content.append({"type": "text", "text": assembled_text})
+                text_replaced = True
+        else:
+            new_content.append(item)
+    return {"role": prompt["role"], "content": new_content}
+
+
 def run_multimodal_generation(args, client: OpenAI) -> None:
     model_name = args.model
     thinker_sampling_params = {
@@ -396,6 +460,13 @@ def run_multimodal_generation(args, client: OpenAI) -> None:
         )
     else:
         prompt = query_func()
+
+    # Optional: simulate streaming input by chunking user text and reassembling
+    if getattr(args, "stream_input", False):
+        user_text = _user_text_from_prompt(prompt)
+        chunk_delay_sec = (getattr(args, "chunk_delay_ms", 0) or 0) / 1000.0
+        assembled_text = _collect_streaming_input(user_text, chunk_delay_sec)
+        prompt = _prompt_with_replaced_text(prompt, assembled_text)
 
     extra_body = {
         "sampling_params_list": sampling_params_list  # Optional, it has a default setting in stage_configs of the corresponding model.
@@ -464,7 +535,9 @@ def run_multimodal_generation(args, client: OpenAI) -> None:
                         audio_data = base64.b64decode(content)
                         req_id = getattr(chunk, "id", None) or getattr(chat_completion, "id", None) or str(count)
                         req_id_safe = str(req_id).replace("/", "_").replace("\\", "_")
-                        audio_file_path = f"audio_{req_id_safe}_{chunk_count}.wav" if chunk_count > 0 else f"audio_{req_id_safe}.wav"
+                        audio_file_path = (
+                            f"audio_{req_id_safe}_{chunk_count}.wav" if chunk_count > 0 else f"audio_{req_id_safe}.wav"
+                        )
                         with open(audio_file_path, "wb") as f:
                             f.write(audio_data)
                         print(f"\nAudio saved to {audio_file_path}")
@@ -533,6 +606,17 @@ def parse_args():
         "--stream",
         action="store_true",
         help="Stream the response.",
+    )
+    parser.add_argument(
+        "--stream-input",
+        action="store_true",
+        help="Simulate streaming input: chunk the user text, reassemble, then send one request.",
+    )
+    parser.add_argument(
+        "--chunk-delay-ms",
+        type=float,
+        default=0,
+        help="Delay between streaming input chunks in ms (used when --stream-input). 0 = no delay.",
     )
     parser.add_argument(
         "--num-concurrent-requests",
