@@ -165,14 +165,40 @@ def thinker2talker_async_chunk(
         talker_additional_info = {
             "finished": torch.tensor(is_finished, dtype=torch.bool),
         }
+        embeds = pooling_output.get("0")
+        hidden_states = pooling_output.get("24")
+        chunk_total = int(embeds.shape[0]) if isinstance(embeds, torch.Tensor) else 0
+        num_decode_tokens = len(output_token_ids) if output_token_ids else 0
+        num_prefill_tokens = max(0, chunk_total - num_decode_tokens)
+
+        # When a step mixes last prefill + first decode, send prefill part so Stage-1
+        # can merge it into the buffer; otherwise the last prefill chunk is lost.
+        if num_prefill_tokens > 0 and isinstance(embeds, torch.Tensor) and isinstance(hidden_states, torch.Tensor):
+            talker_additional_info["thinker_prefill_embeddings"] = embeds[:num_prefill_tokens].detach().cpu()
+            talker_additional_info["thinker_hidden_states"] = hidden_states[:num_prefill_tokens].detach().cpu()
+
         if output_token_ids:
-            talker_additional_info["override_keys"] = ["thinker_decode_embeddings", "thinker_output_token_ids"]
-            talker_additional_info["thinker_decode_embeddings"] = pooling_output.get("0").detach().cpu()
+            talker_additional_info["override_keys"] = [
+                "thinker_decode_embeddings",
+                "thinker_output_token_ids",
+                "thinker_decode_hidden_states",
+            ]
+            # Only the decode rows go to thinker_decode_embeddings
+            if num_decode_tokens > 0 and isinstance(embeds, torch.Tensor):
+                talker_additional_info["thinker_decode_embeddings"] = embeds[num_prefill_tokens:].detach().cpu()
+                if isinstance(hidden_states, torch.Tensor):
+                    talker_additional_info["thinker_decode_hidden_states"] = (
+                        hidden_states[num_prefill_tokens:].detach().cpu()
+                    )
+            else:
+                talker_additional_info["thinker_decode_embeddings"] = embeds.detach().cpu()
+                if isinstance(hidden_states, torch.Tensor):
+                    talker_additional_info["thinker_decode_hidden_states"] = hidden_states.detach().cpu()
             talker_additional_info["thinker_output_token_ids"] = output_token_ids
-        else:
-            # When prefilling a chunked thinker, thinker_hidden_states needs to be updated.
-            talker_additional_info["thinker_prefill_embeddings"] = pooling_output.get("0").detach().cpu()
-            talker_additional_info["thinker_hidden_states"] = pooling_output.get("24").detach().cpu()
+        elif num_prefill_tokens > 0 and isinstance(embeds, torch.Tensor) and isinstance(hidden_states, torch.Tensor):
+            # Pure prefill continuation (no decode yet): whole chunk is prefill
+            talker_additional_info["thinker_prefill_embeddings"] = embeds.detach().cpu()
+            talker_additional_info["thinker_hidden_states"] = hidden_states.detach().cpu()
     return talker_additional_info
 
 
