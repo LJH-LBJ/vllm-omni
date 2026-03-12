@@ -172,14 +172,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
             # Mark as finished for consumption
             self._finished_load_reqs.add(req_id)
-            logger.info(
-                "[Stage-%s] Recv chunk req_id=%s external_req_id=%s key=%s summary={%s}",
-                stage_id,
-                req_id,
-                external_req_id,
-                connector_get_key,
-                self._summarize_chunk_payload(payload_data),
-            )
+            # logger.info(
+            #     "[Stage-%s] Recv chunk req_id=%s external_req_id=%s key=%s summary={%s}",
+            #     stage_id,
+            #     req_id,
+            #     external_req_id,
+            #     connector_get_key,
+            #     self._summarize_chunk_payload(payload_data),
+            # )
             return True
 
         return False
@@ -296,13 +296,13 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if success:
             self.put_req_chunk[request_id] += 1
             logger.debug(f"[Stage-{stage_id}] Sent {connector_put_key}")
-            logger.info(
-                "[Stage-%s] Send chunk req_id=%s key=%s summary={%s}",
-                stage_id,
-                request_id,
-                connector_put_key,
-                self._summarize_chunk_payload(payload_data),
-            )
+            # logger.info(
+            #     "[Stage-%s] Send chunk req_id=%s key=%s summary={%s}",
+            #     stage_id,
+            #     request_id,
+            #     connector_put_key,
+            #     self._summarize_chunk_payload(payload_data),
+            # )
 
         if is_finished:
             self.code_prompt_token_ids.pop(request_id, None)

@@ -252,6 +252,12 @@ class OmniARScheduler(VLLMScheduler):
             req_index = model_runner_output.req_id_to_index[req_id]
             generated_token_ids = sampled_token_ids[req_index] if sampled_token_ids else []
 
+            # When the entire chunk consisted of system tokens (actual==0),
+            # the model ran with dummy inputs and the sampled token is meaningless.
+            # Discard it so it doesn't pollute the request's output.
+            if req_id in actual_num_computed and actual_num_computed[req_id] == 0:
+                generated_token_ids = []
+
             scheduled_spec_token_ids = scheduler_output.scheduled_spec_decode_tokens.get(req_id)
             if scheduled_spec_token_ids and generated_token_ids:
                 num_draft_tokens = len(scheduled_spec_token_ids)
