@@ -419,19 +419,12 @@ def generate_synthetic_audio(
             print(f"Save failed: {e}")
             save_to_file = False
 
-    # If not saving or save failed, write to a temp file and read back.
-    # Using a real file ensures soundfile/libsndfile correctly finalises the
-    # WAV RIFF header (BytesIO can produce a truncated header in some builds).
+    # If not saving or save failed, create in memory
     if not save_to_file or audio_bytes is None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-        tmp.close()
-        try:
-            sf.write(tmp.name, audio_data, sample_rate, format="WAV", subtype="PCM_16")
-            with open(tmp.name, "rb") as f:
-                audio_bytes = f.read()
-        finally:
-            if os.path.exists(tmp.name):
-                os.unlink(tmp.name)
+        buffer = io.BytesIO()
+        sf.write(buffer, audio_data, sample_rate, format="WAV", subtype="PCM_16")
+        buffer.seek(0)
+        audio_bytes = buffer.read()
 
     # Return result
     base64_audio = base64.b64encode(audio_bytes).decode("utf-8")
