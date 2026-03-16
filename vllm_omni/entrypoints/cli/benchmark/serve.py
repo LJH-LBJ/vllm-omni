@@ -18,9 +18,10 @@ class OmniBenchmarkServingSubcommand(OmniBenchmarkSubcommandBase):
         for action in parser._actions:
             if action.dest == "percentile_metrics":
                 action.help = (
-                    "Comma-separated list of selected metrics to report percentiles."
-                    "This argument specifies the metrics to report percentiles."
-                    'Allowed metric names are "ttft", "tpot", "itl", "e2el", "audio_ttfp", "audio_rtf". '
+                    "Comma-separated list of selected metrics to report percentiles. "
+                    "This argument specifies the metrics to report percentiles. "
+                    'Allowed metric names are "ttft", "tpot", "itl", "e2el", '
+                    '"audio_ttfp", "audio_rtf", "audio_duration". '
                 )
             if action.dest == "random_mm_limit_mm_per_prompt":
                 action.help = (

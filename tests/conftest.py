@@ -24,7 +24,6 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import imageio.v3 as iio
 import numpy as np
 import psutil
 import pytest
@@ -74,6 +73,8 @@ def assert_video_valid(frames: Path | np.ndarray, *, width: int, height: int, nu
     """Assert the MP4 has the expected resolution and exact frame count."""
     if isinstance(frames, Path):
         assert frames.exists(), f"Video not found: {frames}"
+        import imageio.v3 as iio
+
         frames = iio.imread(str(frames), plugin="pyav", index=None)
     assert frames.shape[0] == num_frames, f"Expected {num_frames} frames, got {frames.shape[0]}"
     assert frames.shape[1] == height, f"Expected height={height}, got {frames.shape[1]}"
