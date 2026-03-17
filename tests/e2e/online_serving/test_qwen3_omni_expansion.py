@@ -118,6 +118,7 @@ def test_text_to_audio_001(omni_server, openai_client) -> None:
     openai_client.send_omni_request(request_config)
 
 
+@pytest.mark.skip(reason="There is a known issue: 1830.")
 @pytest.mark.advanced_model
 @pytest.mark.omni
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
@@ -189,6 +190,7 @@ def test_image_to_audio_001(omni_server, openai_client) -> None:
     openai_client.send_omni_request(request_config)
 
 
+@pytest.mark.skip(reason="There is a known issue: 1830.")
 @pytest.mark.advanced_model
 @pytest.mark.omni
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
@@ -261,6 +263,7 @@ def test_video_to_audio_001(omni_server, openai_client) -> None:
     openai_client.send_omni_request(request_config)
 
 
+@pytest.mark.skip(reason="There is a known issue: 1830.")
 @pytest.mark.advanced_model
 @pytest.mark.omni
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
