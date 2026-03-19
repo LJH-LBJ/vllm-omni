@@ -1303,27 +1303,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             # If this round had only system segments for talker, skip model forward.
             self._talker_skip_forward = all(seg_len == 0 for seg_len in preprocess_seg_lens)
 
-            # #region agent log
-            if any(sl == 0 for sl in preprocess_seg_lens):
-                _parts = [
-                    f"[DBG-fe04d3] preprocess_state seg_lens={preprocess_seg_lens} skip_fwd={self._talker_skip_forward}"
-                ]
-                _parts.append(
-                    f"emb_shape={list(inputs_embeds.shape) if inputs_embeds is not None else None} ids_shape={list(input_ids.shape)}"
-                )
-                for _si, _sl in enumerate(preprocess_seg_lens):
-                    _qs = int(self.query_start_loc.cpu[_si])
-                    _nt = int(num_scheduled_tokens_np[_si])
-                    _s, _e = _qs, _qs + _nt
-                    _embslice = inputs_embeds[_s:_e] if inputs_embeds is not None else None
-                    _info = f"req{_si} seg_len={_sl} span=[{_s},{_e}]"
-                    if _embslice is not None:
-                        _info += f" nan={torch.isnan(_embslice).any().item()} inf={torch.isinf(_embslice).any().item()} allzero={(_embslice == 0).all().item()} absmax={_embslice.abs().max().item():.6f}"
-                    _info += f" ids={input_ids[_s:_e].tolist()[:8]}"
-                    _parts.append(_info)
-                logger.info("\n".join(_parts))
-            # #endregion
-
             # run talker mtp decode
             if self.has_talker_mtp:
                 self._talker_mtp_forward(decode_req_ids, inputs_embeds)

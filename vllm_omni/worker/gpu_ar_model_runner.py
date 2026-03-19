@@ -7,8 +7,6 @@ and also outputs sampled tokens.
 from __future__ import annotations
 
 from copy import copy
-import json
-import time
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -42,25 +40,6 @@ from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.worker.gpu_model_runner import OmniGPUModelRunner
 
 logger = init_logger(__name__)
-_DEBUG_SESSION_ID = "e9bef0"
-
-
-def _agent_debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
-    try:
-        ts = int(time.time() * 1000)
-        payload = {
-            "sessionId": _DEBUG_SESSION_ID,
-            "id": f"log_{ts}_{hypothesis_id}",
-            "timestamp": ts,
-            "runId": run_id,
-            "hypothesisId": hypothesis_id,
-            "location": location,
-            "message": message,
-            "data": data,
-        }
-        logger.info("[AGENT DEBUG NDJSON] %s", json.dumps(payload, ensure_ascii=True))
-    except Exception:
-        pass
 
 
 class ExecuteModelState(NamedTuple):
@@ -295,26 +274,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 req_ids = list(getattr(cached, "req_ids", []) or [])
                 num_output_tokens = [int(x) for x in (getattr(cached, "num_output_tokens", []) or [])]
                 num_computed_tokens = [int(x) for x in (getattr(cached, "num_computed_tokens", []) or [])]
-                # #region agent log
-                _agent_debug_log(
-                    run_id="concurrency",
-                    hypothesis_id="H2",
-                    location="gpu_ar_model_runner.py:execute_model",
-                    message="talker scheduler progress",
-                    data={
-                        "req_ids": req_ids,
-                        "num_output_tokens": num_output_tokens,
-                        "num_computed_tokens": num_computed_tokens,
-                        "num_scheduled_tokens": {
-                            rid: int(scheduler_output.num_scheduled_tokens.get(rid, 0))
-                            for rid in req_ids
-                        },
-                        "new_req_ids": [getattr(r, "req_id", None) for r in scheduler_output.scheduled_new_reqs],
-                        "finished_req_ids": list(getattr(scheduler_output, "finished_req_ids", []) or []),
-                        "total_num_scheduled_tokens": int(scheduler_output.total_num_scheduled_tokens),
-                    },
-                )
-                # #endregion
 
             # Qwen3-Omni Talker preprocess strips system tokens, so the actual token count
             # per request can be less than what the scheduler scheduled.
@@ -336,13 +295,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         device=logits_indices.device,
                     )
                     self._omni_actual_num_computed_tokens = actual_num_computed_tokens
-
-                    # #region agent log
-                    if any(s == 0 for s in seg_lens):
-                        logger.info(
-                            f"[DBG-fe04d3] logits_adj seg_lens={list(seg_lens)} adjusted={adjusted} num_tokens_padded={num_tokens_padded} logits_indices={logits_indices.tolist()} skip_fwd={getattr(self, '_talker_skip_forward', None)}"
-                        )
-                    # #endregion
                 else:
                     self._omni_actual_num_computed_tokens = None
             else:
@@ -383,18 +335,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
             multimodal_outputs = None
             kv_connector_output = None
         else:
-            # #region agent log
-            if getattr(self.model, "model_stage", None) == "talker" and any(
-                s == 0 for s in getattr(self, "_preprocess_seg_lens", [1])
-            ):
-                _emb_info = ""
-                if inputs_embeds is not None:
-                    _emb_info = f" emb_nan={torch.isnan(inputs_embeds).any().item()} emb_inf={torch.isinf(inputs_embeds).any().item()} emb_dim={inputs_embeds.shape[-1]}"
-                logger.info(
-                    f"[DBG-fe04d3] pre_forward ids_shape={list(input_ids.shape) if input_ids is not None else None} emb_shape={list(inputs_embeds.shape) if inputs_embeds is not None else None} emb_none={inputs_embeds is None} pos_shape={list(positions.shape) if isinstance(positions, torch.Tensor) else None} ntok_pad={num_tokens_padded} hidden_sz={self.hidden_size}{_emb_info}"
-                )
-            # #endregion
-
             with (
                 set_forward_context(
                     attn_metadata,
@@ -436,27 +376,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                     aux_hidden_states = None
 
                 hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
-
-                # #region agent log
-                if getattr(self.model, "model_stage", None) == "talker" and any(
-                    s == 0 for s in getattr(self, "_preprocess_seg_lens", [1])
-                ):
-                    _hs = (
-                        hidden_states
-                        if isinstance(hidden_states, torch.Tensor)
-                        else (
-                            hidden_states.text_hidden_states if hasattr(hidden_states, "text_hidden_states") else None
-                        )
-                    )
-                    if _hs is not None:
-                        try:
-                            torch.cuda.synchronize()
-                            logger.info(
-                                f"[DBG-fe04d3] post_forward hs_shape={list(_hs.shape)} hs_type={type(hidden_states).__name__} logits_idx={logits_indices.tolist()} ntok_pad={num_tokens_padded} hs_nan={torch.isnan(_hs).any().item()} hs_inf={torch.isinf(_hs).any().item()} hs_absmax={_hs.abs().max().item():.6f} max_idx={logits_indices.max().item()} hs_dim0={_hs.shape[0]} OOB={int(logits_indices.max().item()) >= int(_hs.shape[0])}"
-                            )
-                        except Exception as _e:
-                            logger.info(f"[DBG-fe04d3] post_forward CUDA_SYNC_ERROR: {_e}")
-                # #endregion
 
                 if not self.broadcast_pp_output:
                     # Common case.

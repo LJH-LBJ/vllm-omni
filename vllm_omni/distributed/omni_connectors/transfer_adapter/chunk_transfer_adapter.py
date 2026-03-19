@@ -151,6 +151,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             if self.model_mode == "ar":
                 self._update_request_payload(external_req_id, payload_data)
                 request.additional_information = payload_data
+
                 if payload_data.get("finished"):
                     self.finished_requests.add(req_id)
             else:
@@ -172,14 +173,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
             # Mark as finished for consumption
             self._finished_load_reqs.add(req_id)
-            # logger.info(
-            #     "[Stage-%s] Recv chunk req_id=%s external_req_id=%s key=%s summary={%s}",
-            #     stage_id,
-            #     req_id,
-            #     external_req_id,
-            #     connector_get_key,
-            #     self._summarize_chunk_payload(payload_data),
-            # )
+            logger.debug(f"[Stage-{stage_id}] Received one chunk for key {connector_get_key}")
             return True
 
         return False
@@ -207,58 +201,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             elif isinstance(value, list) and key in origin_payload:
                 payload_data[key] = origin_payload[key] + value
 
-        for key, value in origin_payload.items():
-            if key not in payload_data:
-                payload_data[key] = value
-
-        # Merge first decode into prefill buffer when chunk has both (last prefill + 1 decode).
-        # Talker needs "1 first text" from thinker in the prefill so the assistant part gets it.
-        decode_embeds = payload_data.get("thinker_decode_embeddings")
-        if (
-            decode_embeds is not None
-            and isinstance(decode_embeds, torch.Tensor)
-            and decode_embeds.shape[0] > 0
-            and "thinker_prefill_embeddings" in payload_data
-        ):
-            payload_data["thinker_prefill_embeddings"] = torch.cat(
-                [payload_data["thinker_prefill_embeddings"], decode_embeds], dim=0
-            )
-            decode_hidden = payload_data.get("thinker_decode_hidden_states")
-            if (
-                decode_hidden is not None
-                and isinstance(decode_hidden, torch.Tensor)
-                and "thinker_hidden_states" in payload_data
-            ):
-                payload_data["thinker_hidden_states"] = torch.cat(
-                    [payload_data["thinker_hidden_states"], decode_hidden], dim=0
-                )
-            decode_ids = payload_data.get("thinker_output_token_ids")
-            if decode_ids is not None:
-                ids_list = decode_ids if isinstance(decode_ids, list) else decode_ids.tolist()
-                for seq_key in ("thinker_sequences", "thinker_input_ids"):
-                    if seq_key in payload_data:
-                        seq = payload_data[seq_key]
-                        if isinstance(seq, list):
-                            payload_data[seq_key] = seq + ids_list
-                        elif isinstance(seq, torch.Tensor):
-                            payload_data[seq_key] = torch.cat(
-                                [seq, torch.as_tensor(ids_list, device=seq.device, dtype=seq.dtype)], dim=0
-                            )
-
         self.request_payload[req_id] = payload_data
         return payload_data
-
-    @staticmethod
-    def _summarize_chunk_payload(payload_data: dict[str, Any]) -> str:
-        parts: list[str] = []
-        for key, value in payload_data.items():
-            if isinstance(value, torch.Tensor):
-                parts.append(f"{key}=tensor{tuple(value.shape)}")
-            elif isinstance(value, list):
-                parts.append(f"{key}=list[{len(value)}]")
-            else:
-                parts.append(f"{key}={value}")
-        return ", ".join(parts)
 
     def _send_single_request(self, task: dict):
         pooling_output = task["pooling_output"]
@@ -296,13 +240,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if success:
             self.put_req_chunk[request_id] += 1
             logger.debug(f"[Stage-{stage_id}] Sent {connector_put_key}")
-            # logger.info(
-            #     "[Stage-%s] Send chunk req_id=%s key=%s summary={%s}",
-            #     stage_id,
-            #     request_id,
-            #     connector_put_key,
-            #     self._summarize_chunk_payload(payload_data),
-            # )
 
         if is_finished:
             self.code_prompt_token_ids.pop(request_id, None)
