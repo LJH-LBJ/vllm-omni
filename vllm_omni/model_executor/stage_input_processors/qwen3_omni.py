@@ -7,10 +7,13 @@ from typing import Any
 
 import torch
 from vllm.inputs import TextPrompt
+from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
 from vllm_omni.engine import OmniEngineCoreRequest
 from vllm_omni.inputs.data import OmniTokensPrompt
+
+logger = init_logger(__name__)
 
 
 def _compute_talker_prompt_ids_length(info, device: torch.device | str = "cuda") -> int:
@@ -63,28 +66,6 @@ def _ensure_list(x):
     return list(x)
 
 
-def _get_current_thinker_chunk_token_ids(
-    pooling_output: dict[str, Any],
-    request: OmniEngineCoreRequest,
-) -> list[int] | Any:
-    """Return only the newly produced thinker token ids for this chunk."""
-    all_token_ids = _ensure_list(request.all_token_ids)
-    if not isinstance(all_token_ids, list):
-        return all_token_ids
-
-    chunk_len = 0
-    thinker_embeddings = pooling_output.get("0")
-    thinker_hidden_states = pooling_output.get("24")
-    if isinstance(thinker_embeddings, torch.Tensor):
-        chunk_len = int(thinker_embeddings.shape[0])
-    elif isinstance(thinker_hidden_states, torch.Tensor):
-        chunk_len = int(thinker_hidden_states.shape[0])
-
-    if chunk_len <= 0 or chunk_len >= len(all_token_ids):
-        return all_token_ids
-    return all_token_ids[-chunk_len:]
-
-
 def _validate_stage_inputs(stage_list, engine_input_source):
     if not engine_input_source:
         raise ValueError("engine_input_source cannot be empty")
@@ -130,6 +111,7 @@ def thinker2talker_async_chunk(
         all_token_ids = _ensure_list(all_token_ids)
         prompt_token_ids = _ensure_list(prompt_token_ids)
         talker_additional_info = {
+            "request_id": request_id,
             "thinker_prefill_embeddings": pooling_output.get("0").detach().cpu(),
             "thinker_hidden_states": pooling_output.get("24").detach().cpu(),
             "thinker_sequences": all_token_ids,
@@ -157,12 +139,9 @@ def thinker2talker_async_chunk(
                 (save_payload.get("thinker_hidden_states"), talker_additional_info.get("thinker_hidden_states")),
                 dim=0,
             )
-        print(
-            f"thinker2talker_async_chunk: {_get_current_thinker_chunk_token_ids(pooling_output, request)}, "
-            f"is_finished: {is_finished}"
-        )
     else:
         talker_additional_info = {
+            "request_id": request_id,
             "finished": torch.tensor(is_finished, dtype=torch.bool),
         }
         embeds = pooling_output.get("0")
@@ -284,6 +263,7 @@ def talker2code2wav_async_chunk(
     chunk_size_config = int(cfg.get("codec_chunk_frames", 25))
     left_context_size_config = int(cfg.get("codec_left_context_frames", 25))
 
+    request_id = request.external_req_id
     code_predictor_codes = pooling_output["code_predictor_codes"]
 
     if code_predictor_codes is None:
@@ -307,7 +287,6 @@ def talker2code2wav_async_chunk(
     if sum(codec_codes) == 0:
         return None
 
-    request_id = request.external_req_id
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
     length = len(transfer_manager.code_prompt_token_ids[request_id])
     chunk_length = length % chunk_size_config
