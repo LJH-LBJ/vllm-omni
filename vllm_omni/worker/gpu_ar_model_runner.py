@@ -7,6 +7,8 @@ and also outputs sampled tokens.
 from __future__ import annotations
 
 from copy import copy
+import json
+import time
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -40,6 +42,25 @@ from vllm_omni.outputs import OmniModelRunnerOutput
 from vllm_omni.worker.gpu_model_runner import OmniGPUModelRunner
 
 logger = init_logger(__name__)
+_DEBUG_SESSION_ID = "e9bef0"
+
+
+def _agent_debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict[str, Any]) -> None:
+    try:
+        ts = int(time.time() * 1000)
+        payload = {
+            "sessionId": _DEBUG_SESSION_ID,
+            "id": f"log_{ts}_{hypothesis_id}",
+            "timestamp": ts,
+            "runId": run_id,
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+        }
+        logger.info("[AGENT DEBUG NDJSON] %s", json.dumps(payload, ensure_ascii=True))
+    except Exception:
+        pass
 
 
 class ExecuteModelState(NamedTuple):
@@ -259,7 +280,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 slot_mappings=slot_mappings_by_group,
             )
 
-            logger.info(f"scheduler_output {scheduler_output}")
+            # logger.info(f"scheduler_output {scheduler_output}")
             (
                 input_ids,
                 inputs_embeds,
@@ -268,6 +289,32 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 model_kwargs,
                 ec_connector_output,
             ) = self._preprocess(scheduler_output, num_tokens_padded, intermediate_tensors)
+
+            if getattr(self.model, "model_stage", None) == "talker":
+                cached = getattr(scheduler_output, "scheduled_cached_reqs", None)
+                req_ids = list(getattr(cached, "req_ids", []) or [])
+                num_output_tokens = [int(x) for x in (getattr(cached, "num_output_tokens", []) or [])]
+                num_computed_tokens = [int(x) for x in (getattr(cached, "num_computed_tokens", []) or [])]
+                # #region agent log
+                _agent_debug_log(
+                    run_id="concurrency",
+                    hypothesis_id="H2",
+                    location="gpu_ar_model_runner.py:execute_model",
+                    message="talker scheduler progress",
+                    data={
+                        "req_ids": req_ids,
+                        "num_output_tokens": num_output_tokens,
+                        "num_computed_tokens": num_computed_tokens,
+                        "num_scheduled_tokens": {
+                            rid: int(scheduler_output.num_scheduled_tokens.get(rid, 0))
+                            for rid in req_ids
+                        },
+                        "new_req_ids": [getattr(r, "req_id", None) for r in scheduler_output.scheduled_new_reqs],
+                        "finished_req_ids": list(getattr(scheduler_output, "finished_req_ids", []) or []),
+                        "total_num_scheduled_tokens": int(scheduler_output.total_num_scheduled_tokens),
+                    },
+                )
+                # #endregion
 
             # Qwen3-Omni Talker preprocess strips system tokens, so the actual token count
             # per request can be less than what the scheduler scheduled.
