@@ -91,7 +91,7 @@ nav:
       - design/feature/tensor_parallel.md
       - design/feature/cache_dit.md
       - design/feature/teacache.md
-      - design/feature/async_chunk_design.md
+      - design/feature/async_chunk.md
       - design/feature/diffusion_step_execution.md
     - Module Design:
       - design/module/ar_module.md
