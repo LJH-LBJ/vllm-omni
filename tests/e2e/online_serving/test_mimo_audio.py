@@ -42,6 +42,10 @@ def get_chunk_config():
                 0: {
                     "engine_args.custom_process_next_stage_input_func": "vllm_omni.model_executor.stage_input_processors.mimo_audio.llm2code2wav_async_chunk"
                 },
+                1: {
+                    "engine_args.max_model_len": 8192,
+                    "engine_args.max_num_batched_tokens": 8192,
+                },
             },
         },
         deletes={"stage_args": {1: ["custom_process_input_func"]}},
@@ -107,7 +111,7 @@ def test_audio_to_text_audio_001(omni_server, openai_client) -> None:
     Datasets: single request
     """
 
-    audio_data_url = f"data:audio/wav;base64,{generate_synthetic_audio(5, 1)['base64']}"
+    audio_data_url = f"data:audio/wav;base64,{generate_synthetic_audio(5, 1, sample_rate=24000)['base64']}"
     messages = dummy_messages_from_mix_data(
         audio_data_url=audio_data_url,
         content_text=get_prompt("audio"),
