@@ -53,6 +53,7 @@ dev = [
     "openpyxl>=3.0.0", # for nightly CI
     "pyttsx3>=2.99",
     "mistune>=3.2.0", # for example tests
+    "flash-attn>=2.7.4.post1",
 ]
 
 docs = [
