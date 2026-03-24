@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import (
+    OmniServerParams,
     dummy_messages_from_mix_data,
     generate_synthetic_audio,
     generate_synthetic_image,
@@ -39,7 +40,9 @@ else:
     stage_configs = [get_config()]
 
 # Create parameter combinations for model and stage config
-test_params = [(model, stage_config) for model in models for stage_config in stage_configs]
+test_params = [
+    OmniServerParams(model=model, stage_config_path=stage_config) for model in models for stage_config in stage_configs
+]
 
 
 def get_system_prompt():
