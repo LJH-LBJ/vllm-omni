@@ -24,21 +24,25 @@ The following table shows which models are currently supported by parallelism me
 
 ### ImageGen
 
-| Model                    | Model Identifier                     | Ulysses-SP | Ring-SP | CFG-Parallel | Tensor-Parallel | VAE-Patch-Parallel | Expert-Parallel |
-|--------------------------|--------------------------------------|:----------:|:-------:|:------------:|:---------------:|:------------------:|:---------------:|
-| **LongCat-Image**        | `meituan-longcat/LongCat-Image`      |     ✅      |    ✅    |      ❌       |        ✅        |         ❌          |        N/A        |
-| **LongCat-Image-Edit**   | `meituan-longcat/LongCat-Image-Edit` |     ✅      |    ✅    |      ❌       |        ✅        |         ❌          |        N/A        |
-| **Ovis-Image**           | `OvisAI/Ovis-Image`                  |     ❌      |    ❌    |      ❌       |        ❌        |         ❌          |        N/A        |
-| **Qwen-Image**           | `Qwen/Qwen-Image`                    |     ✅      |    ✅    |      ✅       |        ✅        |         ✅          |        N/A        |
-| **Qwen-Image-Edit**      | `Qwen/Qwen-Image-Edit`               |     ✅      |    ✅    |      ✅       |        ✅        |         ❌          |        N/A        |
-| **Qwen-Image-Edit-2509** | `Qwen/Qwen-Image-Edit-2509`          |     ✅      |    ✅    |      ✅       |        ✅        |         ❌          |        N/A        |
-| **Qwen-Image-Layered**   | `Qwen/Qwen-Image-Layered`            |     ✅      |    ✅    |      ✅       |        ✅        |         ❌          |        N/A        |
-| **Z-Image**              | `Tongyi-MAI/Z-Image-Turbo`           |     ✅      |    ✅    |      ❌       |  ✅ (TP=2 only)  |         ✅          |        N/A        |
-| **Stable-Diffusion3.5**  | `stabilityai/stable-diffusion-3.5`   |     ❌      |    ❌    |      ❌       |        ✅        |         ✅          |        N/A        |
-| **FLUX.2-klein**         | `black-forest-labs/FLUX.2-klein-4B`  |     ❌      |    ❌    |      ❌       |        ✅        |         ❌          |        N/A        |
-| **FLUX.1-dev**           | `black-forest-labs/FLUX.1-dev`       |     ❌      |    ❌    |      ✅       |        ✅        |         ❌          |        N/A        |
-| **FLUX.2-dev**           | `black-forest-labs/FLUX.2-dev`       |     ❌      |    ❌    |      ❌       |        ✅        |         ❌          |        N/A        |
-| **HunyuanImage3.0**      | `tencent/HunyuanImage-3.0`, `tencent/HunyuanImage-3.0-Instruct` |     ❌      |    ❌    |      ❌       |        ✅        |         ❌          |        ✅        |
+| Model                    | Model Identifier                     | Ulysses-SP | Ring-SP | CFG-Parallel | Tensor-Parallel | VAE-Patch-Parallel | Expert-Parallel | HSDP |
+|--------------------------|--------------------------------------|:----------:|:-------:|:------------:|:---------------:|:------------------:|:---------------:|:----:|
+| **LongCat-Image**        | `meituan-longcat/LongCat-Image`      |     ✅      |    ✅    |      ❌       |        ✅        |         ❌          |      N/A        | ❌   |
+| **LongCat-Image-Edit**   | `meituan-longcat/LongCat-Image-Edit` |     ✅      |    ✅    |      ❌       |        ✅        |         ❌          |      N/A        | ❌   |
+| **Ovis-Image**           | `OvisAI/Ovis-Image`                  |     ❌      |    ❌    |      ❌       |        ❌        |         ❌          |      N/A        | ❌   |
+| **Qwen-Image**           | `Qwen/Qwen-Image`                    |     ✅      |    ✅    |      ✅       |        ✅        |         ✅          |      N/A        | ❌   |
+| **Qwen-Image-Edit**      | `Qwen/Qwen-Image-Edit`               |     ✅      |    ✅    |      ✅       |        ✅        |         ❌          |      N/A        | ❌   |
+| **Qwen-Image-Edit-2509** | `Qwen/Qwen-Image-Edit-2509`          |     ✅      |    ✅    |      ✅       |        ✅        |         ❌          |      N/A        | ❌   |
+| **Qwen-Image-Layered**   | `Qwen/Qwen-Image-Layered`            |     ✅      |    ✅    |      ✅       |        ✅        |         ❌          |      N/A        | ❌   |
+| **Z-Image**              | `Tongyi-MAI/Z-Image-Turbo`           |     ✅      |    ✅    |      ❌       |  ✅ (TP=2 only)  |         ✅          |      N/A        | ❌   |
+| **Stable-Diffusion3.5**  | `stabilityai/stable-diffusion-3.5`   |     ❌      |    ❌    |      ❌       |        ✅        |         ✅          |      N/A        | ❌   |
+| **FLUX.2-klein**         | `black-forest-labs/FLUX.2-klein-4B`  |     ✅      |    ✅    |      ❌       |        ✅        |         ❌          |      N/A        | ✅   |
+| **FLUX.1-dev**           | `black-forest-labs/FLUX.1-dev`       |     ❌      |    ❌    |      ✅       |        ✅        |         ❌          |      N/A        | ✅   |
+| **FLUX.2-dev**           | `black-forest-labs/FLUX.2-dev`       |     ❌      |    ❌    |      ❌       |        ✅        |         ❌          |      N/A        | ✅   |
+| **HunyuanImage3.0**      | `tencent/HunyuanImage-3.0`, `tencent/HunyuanImage-3.0-Instruct` |     ❌      |    ❌    |      ❌       |        ✅        |         ❌          |      ✅        | ❌   |
+| **Bagel**                  | `ByteDance-Seed/BAGEL-7B-MoT` |     ✅      |    ✅    |      ✅       |        ✅        |         ❌          |      N/A        | ❌   |
+| **DreamID-Omni**           | `XuGuo699/DreamID-Omni`       |     ❌      |    ❌    |      ✅       |        ❌        |         ❌          |      N/A        | ❌   |
+| **FLUX.1-Kontext-dev**   | `black-forest-labs/FLUX.1-Kontext-dev`       |     ❌      |    ❌    |      ❌       |        ✅        |         ❌          |      N/A        | ✅   |
+| **OmniGen2**               | `OmniGen2/OmniGen2`           |     ❌      |    ❌    |      ❌       |        ✅        |         ❌          |      N/A        | ❌   |
 
 !!! note "TP Limitations for Diffusion Models"
     We currently implement Tensor Parallelism (TP) only for the DiT (Diffusion Transformer) blocks. This is because the `text_encoder` component in vLLM-Omni uses the original Transformers implementation, which does not yet support TP.
@@ -57,6 +61,8 @@ The following table shows which models are currently supported by parallelism me
 
 | Model | Model Identifier | Ulysses-SP | Ring-Attention | Tensor-Parallel | HSDP | VAE-Patch-Parallel |
 |-------|------------------|:----------:|:--------------:|:---------------:|:----:| :----:|
+| **Wan2.1** | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Wan2.1** | `Wan-AI/Wan2.1-T2V-14B-Diffusers` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Wan2.2** | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **LTX-2** | `Lightricks/LTX-2` | ✅ | ✅ | ✅ | ❌ | ❌ |
 
