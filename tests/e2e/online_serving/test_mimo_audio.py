@@ -22,11 +22,7 @@ from vllm_omni.model_executor.model_loader.weight_utils import (
 
 MIMO_AUDIO_TOKENIZER_REPO = "XiaomiMiMo/MiMo-Audio-Tokenizer"
 CHAT_TEMPLATE_PATH = str(
-    Path(__file__).parent.parent.parent.parent
-    / "examples"
-    / "online_serving"
-    / "mimo_audio"
-    / "chat_template.jinja"
+    Path(__file__).parent.parent.parent.parent / "examples" / "online_serving" / "mimo_audio" / "chat_template.jinja"
 )
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
