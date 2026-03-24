@@ -21,6 +21,13 @@ from vllm_omni.model_executor.model_loader.weight_utils import (
 )
 
 MIMO_AUDIO_TOKENIZER_REPO = "XiaomiMiMo/MiMo-Audio-Tokenizer"
+CHAT_TEMPLATE_PATH = str(
+    Path(__file__).parent.parent.parent.parent
+    / "examples"
+    / "online_serving"
+    / "mimo_audio"
+    / "chat_template.jinja"
+)
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 models = ["XiaomiMiMo/MiMo-Audio-7B-Instruct"]
@@ -62,7 +69,11 @@ os.environ["MIMO_AUDIO_TOKENIZER_PATH"] = tokenizer_path
 
 # Create parameter combinations for model and stage config
 test_params = [
-    OmniServerParams(model=model, stage_config_path=stage_config)
+    OmniServerParams(
+        model=model,
+        stage_config_path=stage_config,
+        server_args=["--chat-template", CHAT_TEMPLATE_PATH],
+    )
     for model in models
     for stage_config in stage_configs
 ]
