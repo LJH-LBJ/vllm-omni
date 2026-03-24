@@ -106,6 +106,7 @@ def thinker2talker_async_chunk(
     """
 
     request_id = request.external_req_id
+    finished = is_finished
     chunk_id = transfer_manager.put_req_chunk[request_id]
     output_token_ids = request.output_token_ids
     # Convert ConstantList to regular list for OmniSerializer serialization
@@ -126,7 +127,7 @@ def thinker2talker_async_chunk(
             "tts_bos_embed": pooling_output.get("tts_bos_embed").detach().cpu(),
             "tts_eos_embed": pooling_output.get("tts_eos_embed").detach().cpu(),
             "tts_pad_embed": pooling_output.get("tts_pad_embed").detach().cpu(),
-            "finished": torch.tensor(is_finished, dtype=torch.bool),
+            "finished": torch.tensor(finished, dtype=torch.bool),
         }
         speaker = extract_speaker_from_request(request)
         if speaker is not None:
@@ -135,7 +136,7 @@ def thinker2talker_async_chunk(
         if language is not None:
             talker_additional_info["language"] = language
         if transfer_manager.request_payload.get(request_id) is None:
-            if not is_finished:
+            if not finished:
                 transfer_manager.request_payload[request_id] = talker_additional_info
                 return None
         else:
@@ -154,7 +155,7 @@ def thinker2talker_async_chunk(
     else:
         talker_additional_info = {
             "request_id": request_id,
-            "finished": torch.tensor(is_finished, dtype=torch.bool),
+            "finished": torch.tensor(finished, dtype=torch.bool),
         }
         embeds = pooling_output.get("0")
         hidden_states = pooling_output.get("24")
@@ -274,27 +275,35 @@ def talker2code2wav_async_chunk(
     """
     if "code_predictor_codes" not in pooling_output:
         return None
-
     connector = getattr(transfer_manager, "connector", None)
     raw_cfg = getattr(connector, "config", {}) or {}
     cfg = raw_cfg.get("extra", raw_cfg) if isinstance(raw_cfg, dict) else {}
     chunk_size_config = int(cfg.get("codec_chunk_frames", 25))
     left_context_size_config = int(cfg.get("codec_left_context_frames", 25))
 
-    request_id = request.external_req_id
+    request_id = getattr(request, "external_req_id", None)
+
+    if not isinstance(pooling_output, dict) or "code_predictor_codes" not in pooling_output:
+        return None
+
     code_predictor_codes = pooling_output["code_predictor_codes"]
 
     if code_predictor_codes is None:
+        logger.warning("code_predictor_codes is None")
         return None
     if isinstance(code_predictor_codes, torch.Tensor):
         if code_predictor_codes.numel() == 0:
+            logger.warning("code_predictor_codes is empty 0")
             return None
     elif hasattr(code_predictor_codes, "__len__"):
         if len(code_predictor_codes) == 0:
+            logger.warning("code_predictor_codes is empty 1")
             return None
 
     if isinstance(code_predictor_codes, torch.Tensor):
+        # TODO: high concurrency issue here, need to fix it
         if not code_predictor_codes.any():
+            logger.warning("code_predictor_codes is empty 2")
             return None
     else:
         code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
@@ -322,7 +331,6 @@ def talker2code2wav_async_chunk(
         .reshape(-1)
         .tolist()
     )
-
     info = {
         "code_predictor_codes": codes,
         "left_context_size": left_context_size,

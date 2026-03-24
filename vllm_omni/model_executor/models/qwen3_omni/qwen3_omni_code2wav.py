@@ -1,7 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Copyright 2025 The Qwen team.
-"""Inference-only Qwen3-Omni-Moe Code2Wav model."""
+"""Inference-only Qwen3-Omni-Moe Code2Wav model.
+
+Install over the repo file (if root-owned, use sudo):
+  cp rein_workspace/patches/qwen3_omni_code2wav.py \\
+     rein_workspace/vllm-omni/vllm_omni/model_executor/models/qwen3_omni/qwen3_omni_code2wav.py
+"""
 
 from __future__ import annotations
 
@@ -241,22 +246,22 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
         # Decode chunk
         wavs = []
         batch_wav = self(codes)
+        logger.info(f"batch_wav.shape: {batch_wav.shape}, left_context_size: {left_context_size}, seq_token_counts: {seq_token_counts}")
         if seq_token_counts is not None:
             code_seq_lens = [n // self.config.num_quantizers for n in seq_token_counts]
         else:
             # Fallback: assume all batch elements share the same sequence length.
             code_seq_lens = [codes.shape[-1]] * codes.shape[0]
+        logger.info(f"code_seq_lens: {code_seq_lens}")
         for idx, code_seq_len in enumerate(code_seq_lens):
+            logger.info(f"idx: {idx}, code_seq_len: {code_seq_len}")
             # Remove context from output (left_context_size * total_upsample samples)
             wav_chunk = batch_wav[
                 idx, :, left_context_size[idx] * self.total_upsample : code_seq_len * self.total_upsample
             ]
-            # # Remove context from output (left_context_size * total_upsample samples).
-            # start_sample = left_context_size[idx] * self.total_upsample
-            # end_sample = max(start_sample, code_seq_len * self.total_upsample)
-            # end_sample = min(end_sample, batch_wav.shape[-1])
-            # wav_chunk = batch_wav[idx, :, start_sample:end_sample]
+            logger.info(f"wav_chunk.shape: {wav_chunk.shape}")
             wavs.append(wav_chunk)
+        logger.info(f"wavs: {wavs}")
         return wavs
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:

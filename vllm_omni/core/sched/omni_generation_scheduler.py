@@ -97,6 +97,7 @@ class OmniGenerationScheduler(VLLMScheduler):
                     req_index += 1
                     continue
             num_new_tokens = min(required_tokens, token_budget)
+            logger.info(f"num_new_tokens: {num_new_tokens}, required_tokens: {required_tokens}")
             new_blocks = self.kv_cache_manager.allocate_slots(
                 request,
                 num_new_tokens,
