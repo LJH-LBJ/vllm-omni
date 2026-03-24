@@ -412,22 +412,42 @@ class Qwen3OmniMoeForConditionalGeneration(
                     ),
                     input_ids.shape[0],
                 )
-                input_ids_flatten = input_ids.reshape(-1)
-                input_ids_flatten = torch.cat(
-                    [
-                        input_ids_flatten,
-                        torch.zeros(16 - input_ids.shape[0] % 16, dtype=torch.long, device=input_ids.device),
-                    ]
-                )
-                codes = input_ids_flatten.reshape(1, 16, -1)
+                if seq_token_counts is not None:
+                    # Multiple requests batched together where total tokens are not
+                    # divisible by 16 (e.g. finished-sentinel requests with 1 placeholder
+                    # token each). Build per-request codes respecting the batch structure.
+                    batch_size = len(seq_token_counts)
+                    max_seq_len = max(1, max(t // 16 for t in seq_token_counts))
+                    codes = torch.zeros(
+                        (batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype
+                    )
+                    offset = 0
+                    for idx, n in enumerate(seq_token_counts):
+                        chunk = input_ids[offset : offset + n]
+                        offset += n
+                        if chunk.shape[0] >= 16:
+                            seq_len = chunk.shape[0] // 16
+                            codes[idx, :, :seq_len] = chunk[: seq_len * 16].reshape(16, seq_len)
+                else:
+                    input_ids_flatten = input_ids.reshape(-1)
+                    input_ids_flatten = torch.cat(
+                        [
+                            input_ids_flatten,
+                            torch.zeros(16 - input_ids.shape[0] % 16, dtype=torch.long, device=input_ids.device),
+                        ]
+                    )
+                    codes = input_ids_flatten.reshape(1, 16, -1)
 
             # Generate audio from codec codes
             # Get every request's left_context_size from runtime_additional_information (passed via kwargs)
-            left_context_size = []
-            if runtime_additional_information is not None:
-                for info in runtime_additional_information:
-                    if "left_context_size" in info:
-                        left_context_size.append(info["left_context_size"])
+            batch_size = int(codes.shape[0])
+            left_context_size = [0] * batch_size
+            if isinstance(runtime_additional_information, list):
+                for idx, info in enumerate(runtime_additional_information[:batch_size]):
+                    if not isinstance(info, dict):
+                        continue
+                    if "left_context_size" in info and info["left_context_size"] is not None:
+                        left_context_size[idx] = int(info["left_context_size"])
             else:
                 logger.debug("No additional_information provided to code2wav stage.")
             audio_tensors = self.generate_audio(codes, left_context_size, seq_token_counts)
@@ -1031,12 +1051,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         # calculate the start and end index of the current chunk
         chunk_start_index = chunk_offset
         chunk_end_index = chunk_start_index + thinker_result_ids.shape[0]
-        logger.info(
-            "Processing chunk %s to %s of full sequence (total_thinker_tokens=%s)",
-            chunk_offset,
-            chunk_end_index,
-            total_thinker_tokens,
-        )
 
         # Initialize segment_start_tmp to track the end of the previous segment
         segment_start_tmp = chunk_start_index
@@ -1082,6 +1096,12 @@ class Qwen3OmniMoeForConditionalGeneration(
             for segment_start, segment_end, segment_role_token in execute_segments:
                 local_start = segment_start - chunk_start_index
                 local_end = segment_end - chunk_start_index
+                logger.info(
+                    "Processing chunk %s to %s of full sequence (total_thinker_tokens=%s)",
+                    segment_start,
+                    segment_end,
+                    total_thinker_tokens,
+                )
 
                 # Talker should ignore thinker system prompt
                 if (segment_role_token == self.config.system_token_id).item():
