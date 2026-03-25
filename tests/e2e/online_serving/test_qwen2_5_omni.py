@@ -105,8 +105,7 @@ def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
         "messages": messages,
         "stream": True,
         "key_words": {
-            "audio": ["test"],
-            "image": ["square", "quadrate"],
+            "video": ["sphere", "globe", "circle", "round", "ball"],
         },
     }
 
