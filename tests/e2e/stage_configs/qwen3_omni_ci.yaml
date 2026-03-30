@@ -32,7 +32,8 @@ stage_args:
   default_sampling_params:
     temperature: 0.4
     top_p: 0.9
-    top_k: 1
+    top_k: 20
+    min_tokens: 16
     max_tokens: 100
     seed: 42
     ignore_eos: False
