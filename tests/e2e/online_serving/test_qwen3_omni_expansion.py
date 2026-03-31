@@ -274,7 +274,7 @@ def test_video_to_text_audio_001(omni_server, openai_client) -> None:
     """
     video_data_url = f"data:video/mp4;base64,{generate_synthetic_video(224, 224, 300)['base64']}"
 
-    messages = dummy_messages_from_mix_data(video_data_url=video_data_url)
+    messages = dummy_messages_from_mix_data(video_data_url=video_data_url, content_text=get_prompt("text_video"))
 
     request_config = {
         "model": omni_server.model,

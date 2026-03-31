@@ -915,6 +915,11 @@ class Qwen3OmniMoeForConditionalGeneration(
         thinker_decode_embed = info_dict.get("thinker_decode_embeddings", None)
         start_index = info_dict.get("num_processed_tokens", 0)
         thinker_output_token_ids = info_dict.get("thinker_output_token_ids", [])
+        if not thinker_output_token_ids:
+            # async_chunk: thinker decode tokens haven't arrived yet; use pad to wait.
+            # Without this guard, len([]) - 1 == -1 and start_index (0) >= -1 is True,
+            # which would incorrectly trigger EOS before any thinker tokens are received.
+            return self.tts_pad_embed.to(device)
         if start_index >= len(thinker_output_token_ids) - 1:
             if info_dict.get("finished_flag"):
                 return self.tts_pad_embed.to(device)
