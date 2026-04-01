@@ -144,6 +144,12 @@ def thinker2talker_async_chunk(
                 (save_payload.get("thinker_hidden_states"), talker_additional_info.get("thinker_hidden_states")),
                 dim=0,
             )
+            # When thinker does chunked prefill, accumulated embeddings may
+            # not yet cover the full prompt.  Keep accumulating until they do;
+            # sending partial data would crash _thinker_to_talker_prefill.
+            if talker_additional_info["thinker_prefill_embeddings"].shape[0] < len(prompt_token_ids):
+                transfer_manager.request_payload[request_id] = talker_additional_info
+                return None
     else:
         output_token_ids = request.output_token_ids
         # Convert ConstantList to regular list for OmniSerializer serialization
