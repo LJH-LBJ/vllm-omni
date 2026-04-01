@@ -595,6 +595,12 @@ class Qwen3OmniMoeForConditionalGeneration(
         update_dict = {}
         if not info_dict.get("prefill_done", False):
             # prefill
+            num_processed = info_dict.get("num_processed_tokens", 0)
+            has_cache = info_dict.get("cached_prefill_input_ids") is not None
+            logger.info(
+                "talker_preprocess PREFILL: span_len=%d, num_processed=%d, cache_hit=%s",
+                span_len, num_processed, has_cache,
+            )
             input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, **info_dict)
             code_predictor_codes = torch.zeros(
                 (input_embeds.shape[0], self.talker.num_code_groups),
@@ -607,6 +613,10 @@ class Qwen3OmniMoeForConditionalGeneration(
             new_processed = info_dict.get("num_processed_tokens", 0) + span_len
             if total_len is not None and new_processed >= total_len:
                 update_dict["prefill_done"] = True
+                logger.info(
+                    "talker_preprocess PREFILL_DONE: total_len=%d, new_processed=%d",
+                    total_len, new_processed,
+                )
         else:
             # decode
             if not info_dict.get("decode_flag", False):
