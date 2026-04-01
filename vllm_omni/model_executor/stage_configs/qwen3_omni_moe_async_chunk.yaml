@@ -22,7 +22,7 @@ stage_args:
       engine_output_type: latent  # Output hidden states for talker
       distributed_executor_backend: "mp"
       enable_prefix_caching: false
-      max_num_batched_tokens: 32768
+      max_num_batched_tokens: 64 #32768
       hf_config_name: thinker_config
       tensor_parallel_size: 1
       custom_process_next_stage_input_func: vllm_omni.model_executor.stage_input_processors.qwen3_omni.thinker2talker_async_chunk
@@ -36,7 +36,7 @@ stage_args:
       temperature: 0.4
       top_p: 0.9
       top_k: 1
-      max_tokens: 2048
+      max_tokens: 200 #2048
       seed: 42
       detokenize: True
       repetition_penalty: 1.05
@@ -56,7 +56,7 @@ stage_args:
       trust_remote_code: true
       engine_output_type: latent  # Output codec codes for code2wav
       enable_prefix_caching: false
-      max_num_batched_tokens: 32768
+      max_num_batched_tokens: 64 #32768
       distributed_executor_backend: "mp"
       hf_config_name: talker_config
       custom_process_next_stage_input_func: vllm_omni.model_executor.stage_input_processors.qwen3_omni.talker2code2wav_async_chunk

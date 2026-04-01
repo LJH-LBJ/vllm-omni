@@ -593,7 +593,7 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         span_len = input_ids.shape[0]
         update_dict = {}
-        if span_len > 1:
+        if not info_dict.get("prefill_done", False):
             # prefill
             input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, **info_dict)
             code_predictor_codes = torch.zeros(
@@ -602,6 +602,11 @@ class Qwen3OmniMoeForConditionalGeneration(
                 dtype=torch.long,
             )
             update_dict["code_predictor_codes"] = code_predictor_codes
+            # Check if all prefill tokens have been consumed
+            total_len = update_dict.get("cached_prefill_total_len") or info_dict.get("cached_prefill_total_len")
+            new_processed = info_dict.get("num_processed_tokens", 0) + span_len
+            if total_len is not None and new_processed >= total_len:
+                update_dict["prefill_done"] = True
         else:
             # decode
             if not info_dict.get("decode_flag", False):
@@ -690,6 +695,18 @@ class Qwen3OmniMoeForConditionalGeneration(
             voice_type = str(voice_type).lower().strip()
         start_index = info_dict.get("num_processed_tokens", 0)
         end_index = start_index + input_embeds.shape[0]
+
+        # Cache hit: reuse full prefill tensors from first chunk
+        cached_input_ids = info_dict.get("cached_prefill_input_ids")
+        cached_embeds = info_dict.get("cached_prefill_embeds")
+        if cached_input_ids is not None and cached_embeds is not None:
+            self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
+            return (
+                cached_input_ids[start_index:end_index].to(self._module_device(self.talker)),
+                cached_embeds[start_index:end_index].to(device=self._module_device(self.talker), dtype=torch.bfloat16),
+                update_dict,
+            )
+
         # Read thinker outputs for prefill
         thinker_sequence_embeds = info_dict.get("thinker_prefill_embeddings").to(
             device=self._module_device(self.talker), dtype=torch.bfloat16
@@ -790,6 +807,11 @@ class Qwen3OmniMoeForConditionalGeneration(
             pass
         update_dict["prefill_consumed_text_tokens"] = 1
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
+
+        # Cache full prefill tensors for subsequent chunks
+        update_dict["cached_prefill_input_ids"] = req_input_ids.detach()
+        update_dict["cached_prefill_embeds"] = req_embeds.detach()
+        update_dict["cached_prefill_total_len"] = req_input_ids.shape[0]
 
         return req_input_ids[start_index:end_index], req_embeds[start_index:end_index], update_dict
 
