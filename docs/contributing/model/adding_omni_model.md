@@ -566,6 +566,8 @@ def talker2code2wav(
 
 For comprehensive testing guidelines, please refer to the [Test File Structure and Style Guide](../ci/tests_style.md).
 
+Reference test: `tests/model_executor/stage_input_processors/test_qwen3_omni_async_chunk.py`
+
 ## Adding a Model Recipe
 
 After implementing and testing your model, please add a model recipe to the [vllm-project/recipes](https://github.com/vllm-project/recipes) repository. This helps other users understand how to use your model with vLLM-Omni.
