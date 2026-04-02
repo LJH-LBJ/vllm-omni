@@ -597,7 +597,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             # prefill
             num_processed = info_dict.get("num_processed_tokens", 0)
             has_cache = info_dict.get("cached_prefill_input_ids") is not None
-            logger.info(
+            logger.debug(
                 "talker_preprocess PREFILL: span_len=%d, num_processed=%d, cache_hit=%s",
                 span_len, num_processed, has_cache,
             )
@@ -613,7 +613,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             new_processed = info_dict.get("num_processed_tokens", 0) + span_len
             if total_len is not None and new_processed >= total_len:
                 update_dict["prefill_done"] = True
-                logger.info(
+                logger.debug(
                     "talker_preprocess PREFILL_DONE: total_len=%d, new_processed=%d",
                     total_len, new_processed,
                 )
