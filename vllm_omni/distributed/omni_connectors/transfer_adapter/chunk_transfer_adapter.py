@@ -186,11 +186,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         # scheduler will only dispatch the "currently processable" amount of
                         # prefill to Talker each round, avoiding over-scheduling.
                         request.prompt_token_ids = [0] * partial_len
-                        # _all_token_ids must stay in sync because the upstream
-                        # scheduler derives num_tokens from it (not prompt_token_ids).
-                        # Slice-assign to keep the same list object so the
-                        # ConstantList wrapper remains valid.
-                        request._all_token_ids[:] = request.prompt_token_ids
+                        # Keep _all_token_ids aligned with prompt length for scheduler
+                        # accounting, while preserving already generated output ids.
+                        # Slice-assign keeps the ConstantList wrapper valid.
+                        existing_output_ids = list(getattr(request, "_output_token_ids", []))
+                        request._all_token_ids[:] = request.prompt_token_ids + existing_output_ids
                     except Exception as e:
                         logger.debug(
                             "Failed to update dynamic talker prompt length for req %s: %s",
