@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from vllm_omni.model_executor.stage_input_processors.qwen3_omni import thinker2talker_async_chunk
+from vllm_omni.model_executor.stage_input_processors.qwen3_omni import (
+    _compute_partial_talker_prompt_ids_length,
+    thinker2talker_async_chunk,
+)
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -40,26 +43,38 @@ def _pool(prefill_rows: int):
     }
 
 
-def test_thinker2talker_async_chunk_keeps_accumulating_until_full_prompt():
+def test_thinker2talker_async_chunk_sends_first_prefill_chunk_immediately():
     tm = _tm()
     rid = "req-1"
     req = _req(rid, prompt_len=6)
 
-    # chunk-1: store and wait
+    # chunk-1 should be emitted immediately for pipelined thinker->talker prefill.
     out1 = thinker2talker_async_chunk(tm, _pool(prefill_rows=2), req, is_finished=False)
-    assert out1 is None
-    assert rid in tm.request_payload
-    assert tm.request_payload[rid]["thinker_prefill_embeddings"].shape[0] == 2
-
-    # chunk-2: still not enough (4 < prompt_len=6), should keep waiting
-    out2 = thinker2talker_async_chunk(tm, _pool(prefill_rows=2), req, is_finished=False)
-    assert out2 is None
-    assert rid in tm.request_payload
-    assert tm.request_payload[rid]["thinker_prefill_embeddings"].shape[0] == 4
-
-    # chunk-3: now enough (6 == prompt_len), should emit payload
-    out3 = thinker2talker_async_chunk(tm, _pool(prefill_rows=2), req, is_finished=False)
-    assert out3 is not None
-    assert out3["thinker_prefill_embeddings"].shape[0] == 6
-    assert out3["thinker_hidden_states"].shape[0] == 6
+    assert out1 is not None
+    assert out1["thinker_prefill_embeddings"].shape[0] == 2
     assert rid not in tm.request_payload
+
+    # Simulate sender increment after a successful connector.put.
+    tm.put_req_chunk[rid] = 1
+
+    # chunk-2 prefill update should still be delivered via chunk_id>0 path.
+    out2 = thinker2talker_async_chunk(tm, _pool(prefill_rows=2), req, is_finished=False)
+    assert out2 is not None
+    assert out2["thinker_prefill_embeddings"].shape[0] == 2
+    assert "thinker_input_ids" not in out2
+    assert "thinker_sequences" not in out2
+
+def test_compute_partial_talker_prompt_ids_length_progresses_with_received_prefill():
+    # Prompt structure: [im_start, user, a, b, im_start, assistant, c, d, e, f]
+    # For this shape, full talker prefill len is user span (4) + assistant bootstrap (9) = 13.
+    im_start = 151644
+    user = 872
+    assistant = 77091
+    prompt_ids = [im_start, user, 1, 2, im_start, assistant, 3, 4, 5, 6]
+
+    assert _compute_partial_talker_prompt_ids_length(prompt_ids, 0) == 0
+    assert _compute_partial_talker_prompt_ids_length(prompt_ids, 1) == 0
+    assert _compute_partial_talker_prompt_ids_length(prompt_ids, 4) == 4
+    # Assistant bootstrap requires 4 assistant thinker tokens from segment start.
+    assert _compute_partial_talker_prompt_ids_length(prompt_ids, 8) == 4
+    assert _compute_partial_talker_prompt_ids_length(prompt_ids, 10) == 13

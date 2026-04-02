@@ -23,7 +23,6 @@ from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreOutputs
 
-from vllm_omni.distributed.omni_connectors.adapter import compute_talker_prompt_ids_length
 from vllm_omni.engine import (
     OmniEngineCoreRequest,
 )
@@ -682,17 +681,14 @@ class Orchestrator:
             )
             return
 
-        # Pre-arm stage-1+ with placeholder prompt IDs.
-        try:
-            next_prompt_len = max(1, compute_talker_prompt_ids_length(prompt_token_ids))
-        except Exception:
-            next_prompt_len = max(1, len(prompt_token_ids))
+        # Pre-arm stage-1+ with empty prompt IDs. In async chunk mode,
+        # stage-1 prompt length is updated dynamically as upstream chunks arrive.
         original_prompt = req_state.prompt
         if isinstance(original_prompt, dict):
             base_input = copy.deepcopy(original_prompt)
         else:
             base_input = {}
-        base_input["prompt_token_ids"] = [0] * next_prompt_len
+        base_input["prompt_token_ids"] = []
         base_input["multi_modal_data"] = None
         base_input["mm_processor_kwargs"] = None
 

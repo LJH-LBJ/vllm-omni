@@ -150,10 +150,47 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             self.get_req_chunk[req_id] += 1
 
             if self.model_mode == "ar":
-                self._update_request_payload(external_req_id, payload_data)
-                request.additional_information = payload_data
-                if payload_data.get("finished"):
+                merged_payload = self._update_request_payload(external_req_id, payload_data)
+                request.additional_information = merged_payload
+
+                if merged_payload.get("finished"):
                     self.finished_requests.add(req_id)
+                # Derive how many talker prefill tokens are currently buildable
+                # from accumulated thinker prefill chunks, and expose only that
+                # amount to the scheduler each round.
+                # When partial_len >= full_len, thinker prefill has fully covered
+                # the talker prompt and we can mark prefill as complete.
+                thinker_input_ids = merged_payload.get("thinker_input_ids")
+                thinker_prefill_embeddings = merged_payload.get("thinker_prefill_embeddings")
+                if thinker_input_ids is not None and isinstance(thinker_prefill_embeddings, torch.Tensor):
+                    try:
+                        from vllm_omni.model_executor.stage_input_processors.qwen3_omni import (
+                            _compute_partial_talker_prompt_ids_length,
+                        )
+
+                        partial_len = _compute_partial_talker_prompt_ids_length(
+                            thinker_input_ids,
+                            int(thinker_prefill_embeddings.shape[0]),
+                        )
+                        full_len = _compute_partial_talker_prompt_ids_length(
+                            thinker_input_ids,
+                            len(thinker_input_ids),
+                        )
+                        merged_payload["thinker_prefill_complete"] = partial_len >= full_len
+
+                        if partial_len == 0 and not merged_payload.get("finished", False):
+                            # Keep polling until we have at least one schedulable talker token.
+                            return True
+                        if partial_len == 0 and merged_payload.get("finished", False):
+                            partial_len = 1
+
+                        request.prompt_token_ids = [0] * partial_len
+                    except Exception as e:
+                        logger.debug(
+                            "Failed to update dynamic talker prompt length for req %s: %s",
+                            req_id,
+                            e,
+                        )
             else:
                 if payload_data.get("finished"):
                     self.finished_requests.add(req_id)

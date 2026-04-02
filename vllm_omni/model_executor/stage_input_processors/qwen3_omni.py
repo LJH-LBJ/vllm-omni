@@ -55,6 +55,56 @@ def _compute_talker_prompt_ids_length(info, device: torch.device | str = "cuda")
     return sum_user_len + assistant_len
 
 
+def _compute_partial_talker_prompt_ids_length(thinker_input_ids: list[int], received_prefill_len: int) -> int:
+    """Compute talker prompt length buildable from a partial thinker prefill span.
+    Every time a thinker chunk is received, update the length of request.prompt_token_ids to partial_len.
+    This way the scheduler will only dispatch the "currently processable" amount of prefill to Talker each round, avoiding over-scheduling.
+    Args:
+        thinker_input_ids: Full thinker prompt token ids.
+        received_prefill_len: Number of thinker prefill embeddings currently available.
+
+    Returns:
+        Number of talker prefill tokens that can be safely constructed.
+    """
+    im_start_token_id = 151644
+    system_token_id = 8948
+    user_token_id = 872
+    assistant_token_id = 77091
+
+    if not thinker_input_ids or received_prefill_len <= 0:
+        return 0
+
+    full_len = len(thinker_input_ids)
+    covered_end = min(int(received_prefill_len), full_len)
+    im_start_indexes = [i for i, tid in enumerate(thinker_input_ids) if tid == im_start_token_id]
+    im_start_indexes.append(full_len)
+
+    sum_user_len = 0
+    assistant_len = 0
+    for i in range(len(im_start_indexes) - 1):
+        s = im_start_indexes[i]
+        e = im_start_indexes[i + 1]
+        if s >= covered_end or s + 1 >= full_len:
+            break
+
+        seg_end = min(e, covered_end)
+        if seg_end <= s:
+            continue
+
+        role = thinker_input_ids[s + 1]
+        if role == system_token_id:
+            continue
+        if role == user_token_id:
+            sum_user_len += seg_end - s
+            continue
+        if role == assistant_token_id and i == len(im_start_indexes) - 2:
+            # Assistant bootstrap requires first 4 thinker tokens.
+            if seg_end - s >= 4:
+                assistant_len = 9  # 3 + 4 + 1 + 1
+
+    return sum_user_len + assistant_len
+
+
 # =========================
 # Common helpers
 # =========================
@@ -127,29 +177,6 @@ def thinker2talker_async_chunk(
         language = extract_language_from_request(request)
         if language is not None:
             talker_additional_info["language"] = language
-        if transfer_manager.request_payload.get(request_id) is None:
-            if not is_finished:
-                transfer_manager.request_payload[request_id] = talker_additional_info
-                return None
-        else:
-            save_payload = transfer_manager.request_payload.pop(request_id)
-            talker_additional_info["thinker_prefill_embeddings"] = torch.cat(
-                (
-                    save_payload.get("thinker_prefill_embeddings"),
-                    talker_additional_info.get("thinker_prefill_embeddings"),
-                ),
-                dim=0,
-            )
-            talker_additional_info["thinker_hidden_states"] = torch.cat(
-                (save_payload.get("thinker_hidden_states"), talker_additional_info.get("thinker_hidden_states")),
-                dim=0,
-            )
-            # When thinker does chunked prefill, accumulated embeddings may
-            # not yet cover the full prompt.  Keep accumulating until they do;
-            # sending partial data would crash _thinker_to_talker_prefill.
-            if talker_additional_info["thinker_prefill_embeddings"].shape[0] < len(prompt_token_ids):
-                transfer_manager.request_payload[request_id] = talker_additional_info
-                return None
     else:
         output_token_ids = request.output_token_ids
         # Convert ConstantList to regular list for OmniSerializer serialization

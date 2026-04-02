@@ -613,7 +613,10 @@ class Qwen3OmniMoeForConditionalGeneration(
             # Check if all prefill tokens have been consumed
             total_len = update_dict.get("cached_prefill_total_len") or info_dict.get("cached_prefill_total_len")
             new_processed = info_dict.get("num_processed_tokens", 0) + span_len
-            if total_len is not None and new_processed >= total_len:
+            thinker_prefill_complete = bool(
+                update_dict.get("thinker_prefill_complete", info_dict.get("thinker_prefill_complete", False))
+            )
+            if total_len is not None and new_processed >= total_len and thinker_prefill_complete:
                 update_dict["prefill_done"] = True
                 logger.debug(
                     "talker_preprocess PREFILL_DONE: total_len=%d, new_processed=%d",
@@ -709,24 +712,41 @@ class Qwen3OmniMoeForConditionalGeneration(
         start_index = info_dict.get("num_processed_tokens", 0)
         end_index = start_index + input_embeds.shape[0]
 
-        # Cache hit: reuse full prefill tensors from first chunk
+        # Read thinker outputs for prefill
+        thinker_prefill_embeddings = info_dict.get("thinker_prefill_embeddings")
+        thinker_hidden_states_raw = info_dict.get("thinker_hidden_states")
+        if thinker_prefill_embeddings is None or thinker_hidden_states_raw is None:
+            raise ValueError(
+                "additional_information_by_req_id must include "
+                "'thinker_prefill_embeddings' and 'thinker_hidden_states' for talker prefill."
+            )
+
+        thinker_sequence_embeds = thinker_prefill_embeddings.to(
+            device=self._module_device(self.talker), dtype=torch.bfloat16
+        )  # Tensor [P,H]
+        thinker_hidden_states = thinker_hidden_states_raw.to(
+            device=self._module_device(self.talker), dtype=torch.bfloat16
+        )  # Tensor [K,H]
+        prefill_source_len = int(thinker_sequence_embeds.shape[0])
+
+        # Cache hit: reuse prefill tensors if upstream prefill span has not changed.
         cached_input_ids = info_dict.get("cached_prefill_input_ids")
         cached_embeds = info_dict.get("cached_prefill_embeds")
-        if cached_input_ids is not None and cached_embeds is not None:
+        cached_source_len = info_dict.get("cached_prefill_source_len")
+        if (
+            cached_input_ids is not None
+            and cached_embeds is not None
+            and isinstance(cached_source_len, int)
+            and cached_source_len == prefill_source_len
+        ):
             self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
+            update_dict["thinker_prefill_complete"] = bool(info_dict.get("thinker_prefill_complete", False))
             return (
                 cached_input_ids[start_index:end_index].to(self._module_device(self.talker)),
                 cached_embeds[start_index:end_index].to(device=self._module_device(self.talker), dtype=torch.bfloat16),
                 update_dict,
             )
 
-        # Read thinker outputs for prefill
-        thinker_sequence_embeds = info_dict.get("thinker_prefill_embeddings").to(
-            device=self._module_device(self.talker), dtype=torch.bfloat16
-        )  # Tensor [P,H]
-        thinker_hidden_states = info_dict.get("thinker_hidden_states").to(
-            device=self._module_device(self.talker), dtype=torch.bfloat16
-        )  # Tensor [K,H]
         thinker_sequences = (
             info_dict.get("thinker_sequences")
             if info_dict.get("thinker_sequences") is None
@@ -747,12 +767,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         tts_pad_thinker = info_dict.get("tts_pad_embed").to(
             device=self._module_device(self.talker), dtype=torch.bfloat16
         )
-
-        if thinker_sequence_embeds is None or thinker_hidden_states is None:
-            raise ValueError(
-                "additional_information_by_req_id must include "
-                "'thinker_prefill_embeddings' and 'thinker_hidden_states' for talker prefill."
-            )
 
         # Normalize to tensors
         if not isinstance(thinker_sequence_embeds, torch.Tensor):
@@ -788,6 +802,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             tts_bos_thinker=tts_bos_thinker,
             tts_eos_thinker=tts_eos_thinker,
             tts_pad_thinker=tts_pad_thinker,
+            available_count=prefill_source_len,
         )
 
         # Queue trailing_text_hidden for decode (drop first for next steps),
@@ -819,14 +834,18 @@ class Qwen3OmniMoeForConditionalGeneration(
         except Exception:
             pass
         update_dict["prefill_consumed_text_tokens"] = 1
+        update_dict["thinker_prefill_complete"] = bool(info_dict.get("thinker_prefill_complete", False))
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
 
         # Cache full prefill tensors for subsequent chunks
         update_dict["cached_prefill_input_ids"] = req_input_ids.detach()
         update_dict["cached_prefill_embeds"] = req_embeds.detach()
         update_dict["cached_prefill_total_len"] = req_input_ids.shape[0]
+        update_dict["cached_prefill_source_len"] = prefill_source_len
 
-        return req_input_ids[start_index:end_index], req_embeds[start_index:end_index], update_dict
+        slice_end = min(end_index, req_input_ids.shape[0])
+        slice_start = min(start_index, slice_end)
+        return req_input_ids[slice_start:slice_end], req_embeds[slice_start:slice_end], update_dict
 
     def _talker_cache_thinker_decode_embeds(
         self,
@@ -864,6 +883,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         tts_bos_thinker: torch.Tensor | None = None,
         tts_eos_thinker: torch.Tensor | None = None,
         tts_pad_thinker: torch.Tensor | None = None,
+        available_count: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
         Project thinker outputs to talker inputs during prefill stage.
@@ -888,13 +908,32 @@ class Qwen3OmniMoeForConditionalGeneration(
             thinker_embed, tts_bos_thinker, tts_eos_thinker, tts_pad_thinker
         )
 
+        total_available = min(
+            thinker_result_ids.shape[-1],
+            thinker_embed.shape[0],
+            thinker_hidden.shape[0],
+            int(available_count) if available_count is not None else thinker_result_ids.shape[-1],
+        )
+        if total_available <= 0:
+            empty_embeds = torch.empty(
+                (0, self.config.talker_config.text_config.hidden_size),
+                device=input_ids.device,
+                dtype=torch.bfloat16,
+            )
+            empty_ids = torch.empty((0,), device=input_ids.device, dtype=torch.long)
+            return empty_ids, empty_embeds, None
+
         talker_input_embeds = []  # [1 t d]
         talker_input_ids = []
         trailing_text_hidden_all: torch.Tensor | None = None
         # For every chatml parts
         for i in range(len(im_start_indexes) - 1):
             im_start_index = im_start_indexes[i].item()
-            segment_end_index = im_start_indexes[i + 1].item()
+            if im_start_index >= total_available:
+                break
+            segment_end_index = min(im_start_indexes[i + 1].item(), total_available)
+            if segment_end_index <= im_start_index:
+                continue
             role_token = input_ids[0][im_start_index + 1]
             # Talker should ignore thinker system prompt
             if (role_token == self.config.system_token_id).item():
@@ -908,6 +947,9 @@ class Qwen3OmniMoeForConditionalGeneration(
                 talker_input_ids.append(thinker_result_ids[im_start_index:segment_end_index])
             # Take assistant output (for now)
             elif (role_token == self.config.assistant_token_id).item() and i == len(im_start_indexes) - 2:
+                # Assistant bootstrap needs at least 4 thinker tokens.
+                if segment_end_index - im_start_index < 4:
+                    continue
                 talker_assistant_embeds, talker_assistant_ids, trailing_text_hidden = self._get_talker_assistant_parts(
                     im_start_index,
                     segment_end_index,
@@ -930,6 +972,16 @@ class Qwen3OmniMoeForConditionalGeneration(
                 continue
             else:
                 raise AssertionError("Expect role id after <|im_start|> (assistant, user, system)")
+
+        if not talker_input_embeds:
+            empty_embeds = torch.empty(
+                (0, self.config.talker_config.text_config.hidden_size),
+                device=input_ids.device,
+                dtype=torch.bfloat16,
+            )
+            empty_ids = torch.empty((0,), device=input_ids.device, dtype=torch.long)
+            return empty_ids, empty_embeds, trailing_text_hidden_all
+
         talker_input_embed = torch.cat([embed.to(input_ids.device) for embed in talker_input_embeds], dim=0)
         talker_input_id = torch.cat([embed.to(input_ids.device) for embed in talker_input_ids], dim=0)
 
