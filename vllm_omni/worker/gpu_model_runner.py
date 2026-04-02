@@ -1232,7 +1232,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                         dtype=req_embeds.dtype,
                     )
 
-                if self.has_talker_mtp and span_len == 1:
+                if self.has_talker_mtp and "mtp_inputs" in update_dict:
                     last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
                     decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
                     self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
