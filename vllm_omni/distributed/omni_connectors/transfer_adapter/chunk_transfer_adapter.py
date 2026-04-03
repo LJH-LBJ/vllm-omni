@@ -233,7 +233,9 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         if partial_len == 0 and not is_finished_flag:
                             # Keep polling until we have at least
                             # one schedulable talker token.
-                            return True
+                            # Return False so recv_loop re-enqueues the
+                            # request to keep polling.
+                            return False
                         if partial_len == 0 and is_finished_flag:
                             partial_len = 1
 
@@ -259,7 +261,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                                 partial_len,
                                 num_computed_now,
                             )
-                            return True
+                            # Return False so recv_loop re-enqueues the
+                            # request into _pending_load_reqs and keeps
+                            # polling for the next thinker chunk.
+                            return False
 
                         # Scheduler dispatches only the "currently
                         # processable" amount of prefill to Talker.
