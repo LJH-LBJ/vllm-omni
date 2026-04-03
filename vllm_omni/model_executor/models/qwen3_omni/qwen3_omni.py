@@ -558,11 +558,12 @@ class Qwen3OmniMoeForConditionalGeneration(
         if hasattr(talker_hf_config, "speaker_id") and talker_hf_config.speaker_id:
             self.tts_text_spk_token_ids = talker_hf_config.speaker_id
         else:
-            # Default to audio_start_token_id if no speaker mapping
+            # Fallback to a talker-vocab-safe id when no speaker mapping exists.
+            safe_default_spk_id = int(talker_hf_config.codec_pad_id)
             self.tts_text_spk_token_ids = {
-                "default": talker_hf_config.audio_start_token_id,
-                "Ethan": talker_hf_config.audio_start_token_id,
-                "prefix_caching": talker_hf_config.audio_start_token_id,
+                "default": safe_default_spk_id,
+                "Ethan": safe_default_spk_id,
+                "prefix_caching": safe_default_spk_id,
             }
 
         self.default_tts_text_spk_type = list(self.tts_text_spk_token_ids.keys())[0]
@@ -572,8 +573,22 @@ class Qwen3OmniMoeForConditionalGeneration(
     def _get_text_spk_token_id(self, voice_type: str) -> int:
         """Get speaker token ID for voice type."""
         if voice_type not in self.tts_text_spk_token_ids:
-            return self.tts_text_spk_token_ids[self.default_tts_text_spk_type]
-        return self.tts_text_spk_token_ids[voice_type]
+            token_id = self.tts_text_spk_token_ids[self.default_tts_text_spk_type]
+        else:
+            token_id = self.tts_text_spk_token_ids[voice_type]
+
+        token_id = int(token_id)
+        vocab_size = int(self.config.talker_config.text_config.vocab_size)
+        if token_id < 0 or token_id >= vocab_size:
+            safe_id = int(self.config.talker_config.codec_pad_id)
+            logger.warning_once(
+                "Speaker token id %d out of talker vocab range [0, %d); fallback to %d",
+                token_id,
+                vocab_size,
+                safe_id,
+            )
+            return safe_id
+        return token_id
 
     def talker_postprocess(self, hidden_states: torch.Tensor, **info_dict: object):
         """
