@@ -178,6 +178,26 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         )
                         merged_payload["thinker_prefill_complete"] = partial_len >= full_len
 
+                        # During talker prefill, sampled output tokens are not
+                        # semantic decode outputs. Keep scheduler accounting based
+                        # on prompt progress only, otherwise request.num_tokens can
+                        # drift and repeatedly schedule fake 1-token "prefill".
+                        if not merged_payload["thinker_prefill_complete"]:
+                            request._output_token_ids.clear()
+                            request.num_computed_tokens = min(request.num_computed_tokens, partial_len)
+
+                        logger.info(
+                            "[ChunkPrefillState] req=%s chunk=%d partial=%d full=%d computed=%d output_len=%d prompt_len=%d prefill_complete=%s",
+                            req_id,
+                            chunk_id,
+                            partial_len,
+                            full_len,
+                            int(getattr(request, "num_computed_tokens", 0)),
+                            len(getattr(request, "_output_token_ids", [])),
+                            partial_len,
+                            merged_payload["thinker_prefill_complete"],
+                        )
+
                         if partial_len == 0 and not merged_payload.get("finished", False):
                             # Keep polling until we have at least one schedulable talker token.
                             return True

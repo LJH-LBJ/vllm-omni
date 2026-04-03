@@ -629,12 +629,15 @@ class Qwen3OmniMoeForConditionalGeneration(
             thinker_prefill_complete = bool(
                 update_dict.get("thinker_prefill_complete", info_dict.get("thinker_prefill_complete", False))
             )
+            # Enter decode only when local prefill consumption is complete and
+            # upstream thinker prefill has fully covered the talker prompt.
             if total_len is not None and new_processed >= total_len and thinker_prefill_complete:
                 update_dict["prefill_done"] = True
                 logger.debug(
-                    "talker_preprocess PREFILL_DONE: total_len=%d, new_processed=%d",
+                    "talker_preprocess PREFILL_DONE: total_len=%d, new_processed=%d, thinker_prefill_complete=%s",
                     total_len,
                     new_processed,
+                    thinker_prefill_complete,
                 )
         else:
             # decode
