@@ -187,10 +187,9 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         # prefill to Talker each round, avoiding over-scheduling.
                         request.prompt_token_ids = [0] * partial_len
                         # Keep _all_token_ids aligned with prompt length for scheduler
-                        # accounting, while preserving already generated output ids.
-                        # Slice-assign keeps the ConstantList wrapper valid.
-                        existing_output_ids = list(getattr(request, "_output_token_ids", []))
-                        request._all_token_ids[:] = request.prompt_token_ids + existing_output_ids
+                        # accounting during prefill. Slice-assign keeps the
+                        # ConstantList wrapper valid.
+                        request._all_token_ids[:] = request.prompt_token_ids
                     except Exception as e:
                         logger.debug(
                             "Failed to update dynamic talker prompt length for req %s: %s",
@@ -233,19 +232,26 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             self.request_payload[req_id] = payload_data
             return payload_data
         origin_payload = self.request_payload[req_id]
+        merged_payload = dict(origin_payload)
         override_keys = payload_data.pop("override_keys", [])
         for key, value in payload_data.items():
             if key == "finished":
                 continue
             elif key in override_keys:
-                payload_data[key] = value
+                merged_payload[key] = value
             elif isinstance(value, torch.Tensor) and key in origin_payload:
-                payload_data[key] = torch.cat([origin_payload[key], value], dim=0)
+                merged_payload[key] = torch.cat([origin_payload[key], value], dim=0)
             elif isinstance(value, list) and key in origin_payload:
-                payload_data[key] = origin_payload[key] + value
+                merged_payload[key] = origin_payload[key] + value
+            else:
+                merged_payload[key] = value
 
-        self.request_payload[req_id] = payload_data
-        return payload_data
+        # finished is terminal metadata and should always reflect latest chunk.
+        if "finished" in payload_data:
+            merged_payload["finished"] = payload_data["finished"]
+
+        self.request_payload[req_id] = merged_payload
+        return merged_payload
 
     def _send_single_request(self, task: dict):
         pooling_output = task["pooling_output"]
