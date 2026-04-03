@@ -195,18 +195,19 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
                         # During talker prefill, sampled output tokens are not
                         # semantic decode outputs.  Clamp scheduler accounting
-                        # to prompt progress only.
+                        # to prompt progress only.  This must happen for BOTH
+                        # partial and complete prefill to keep num_computed and
+                        # _output_token_ids consistent with prompt_token_ids.
                         num_computed = getattr(
                             request, "num_computed_tokens", 0
                         )
-                        if not merged_payload["thinker_prefill_complete"]:
-                            if num_computed > partial_len:
-                                request.num_computed_tokens = partial_len
-                            out_ids = getattr(
-                                request, "_output_token_ids", None
-                            )
-                            if out_ids is not None and len(out_ids) > 0:
-                                out_ids.clear()
+                        if num_computed > partial_len:
+                            request.num_computed_tokens = partial_len
+                        out_ids = getattr(
+                            request, "_output_token_ids", None
+                        )
+                        if out_ids is not None and len(out_ids) > 0:
+                            out_ids.clear()
 
                         logger.info(
                             "[ChunkPrefillState] req=%s chunk=%d "
