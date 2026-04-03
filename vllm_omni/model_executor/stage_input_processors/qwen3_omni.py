@@ -192,14 +192,29 @@ def thinker2talker_async_chunk(
         if language is not None:
             talker_additional_info["language"] = language
 
-        if output_token_ids:
-            talker_additional_info["override_keys"] = ["thinker_decode_embeddings", "thinker_output_token_ids"]
-            talker_additional_info["thinker_decode_embeddings"] = pooling_output.get("0").detach().cpu()
-            talker_additional_info["thinker_output_token_ids"] = output_token_ids
-        else:
-            # When prefilling a chunked thinker, thinker_hidden_states needs to be updated.
-            talker_additional_info["thinker_prefill_embeddings"] = pooling_output.get("0").detach().cpu()
+        # Determine whether this chunk still carries prefill embeddings.
+        # On the *last* prefill step the scheduler processes the remaining
+        # prompt tokens AND sampling produces the first decode token, so
+        # ``output_token_ids`` is non-empty even though the bulk of
+        # ``pooling_output["0"]`` is still prefill hidden states.
+        # Use the embedding count to distinguish: prefill steps produce
+        # num_scheduled_tokens > 1 embeddings, pure decode steps produce 1.
+        embed_tensor = pooling_output.get("0")
+        is_prefill_chunk = embed_tensor is not None and embed_tensor.shape[0] > 1
+
+        if is_prefill_chunk:
+            # Still (partially) prefilling – accumulate prefill embeddings.
+            talker_additional_info["thinker_prefill_embeddings"] = embed_tensor.detach().cpu()
             talker_additional_info["thinker_hidden_states"] = pooling_output.get("24").detach().cpu()
+            if output_token_ids:
+                # Last prefill step also produced the first decode token;
+                # forward the id list so talker can begin tracking decode.
+                talker_additional_info["override_keys"] = ["thinker_output_token_ids"]
+                talker_additional_info["thinker_output_token_ids"] = output_token_ids
+        elif output_token_ids:
+            talker_additional_info["override_keys"] = ["thinker_decode_embeddings", "thinker_output_token_ids"]
+            talker_additional_info["thinker_decode_embeddings"] = embed_tensor.detach().cpu()
+            talker_additional_info["thinker_output_token_ids"] = output_token_ids
 
     return talker_additional_info
 

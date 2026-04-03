@@ -236,6 +236,31 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             return True
                         if partial_len == 0 and is_finished_flag:
                             partial_len = 1
+
+                        # If partial_len has not grown beyond what the
+                        # scheduler already consumed and thinker is not
+                        # finished, this chunk carries no new prefill
+                        # progress for talker.  Stay in WAITING_FOR_CHUNK
+                        # to avoid the scheduler spinning on +1 padding
+                        # tokens.
+                        num_computed_now = getattr(
+                            request, "num_computed_tokens", 0
+                        )
+                        if (
+                            not is_finished_flag
+                            and not merged_payload["thinker_prefill_complete"]
+                            and num_computed_now >= partial_len
+                        ):
+                            logger.debug(
+                                "[ChunkPrefillStall] req=%s partial=%d "
+                                "computed=%d — no new prefill data, "
+                                "staying in WAITING_FOR_CHUNK",
+                                req_id,
+                                partial_len,
+                                num_computed_now,
+                            )
+                            return True
+
                         # Scheduler dispatches only the "currently
                         # processable" amount of prefill to Talker.
                         new_prompt = [0] * partial_len
