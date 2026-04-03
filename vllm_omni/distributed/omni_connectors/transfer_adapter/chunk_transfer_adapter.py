@@ -153,7 +153,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 merged_payload = self._update_request_payload(external_req_id, payload_data)
                 request.additional_information = merged_payload
 
-                if merged_payload.get("finished"):
+                if bool(merged_payload.get("finished", False)):
                     self.finished_requests.add(req_id)
                 # Derive how many talker prefill tokens are currently buildable
                 # from accumulated thinker prefill chunks, and expose only that
@@ -161,8 +161,13 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 # When partial_len >= full_len, thinker prefill has fully covered
                 # the talker prompt and we can mark prefill as complete.
                 thinker_input_ids = merged_payload.get("thinker_input_ids")
-                thinker_prefill_embeddings = merged_payload.get("thinker_prefill_embeddings")
-                if thinker_input_ids is not None and isinstance(thinker_prefill_embeddings, torch.Tensor):
+                thinker_prefill_embeddings = merged_payload.get(
+                    "thinker_prefill_embeddings"
+                )
+                if (
+                    thinker_input_ids is not None
+                    and isinstance(thinker_prefill_embeddings, torch.Tensor)
+                ):
                     try:
                         from vllm_omni.model_executor.stage_input_processors.qwen3_omni import (
                             _compute_partial_talker_prompt_ids_length,
@@ -176,43 +181,76 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             thinker_input_ids,
                             len(thinker_input_ids),
                         )
-                        merged_payload["thinker_prefill_complete"] = partial_len >= full_len
+                        merged_payload["thinker_prefill_complete"] = (
+                            partial_len >= full_len
+                        )
+
+                        # Reset prefill_done when thinker has not fully covered
+                        # the talker prompt.  The model may have set it to True
+                        # on a previous step because its cached prefill tensors
+                        # were exhausted; now that more thinker data has arrived
+                        # we must re-enter the prefill path.
+                        if not merged_payload["thinker_prefill_complete"]:
+                            merged_payload["prefill_done"] = False
 
                         # During talker prefill, sampled output tokens are not
-                        # semantic decode outputs. Keep scheduler accounting based
-                        # on prompt progress only, otherwise request.num_tokens can
-                        # drift and repeatedly schedule fake 1-token "prefill".
+                        # semantic decode outputs.  Clamp scheduler accounting
+                        # to prompt progress only.
+                        num_computed = getattr(
+                            request, "num_computed_tokens", 0
+                        )
                         if not merged_payload["thinker_prefill_complete"]:
-                            request._output_token_ids.clear()
-                            request.num_computed_tokens = min(request.num_computed_tokens, partial_len)
+                            if num_computed > partial_len:
+                                request.num_computed_tokens = partial_len
+                            out_ids = getattr(
+                                request, "_output_token_ids", None
+                            )
+                            if out_ids is not None and len(out_ids) > 0:
+                                out_ids.clear()
 
                         logger.info(
-                            "[ChunkPrefillState] req=%s chunk=%d partial=%d full=%d computed=%d output_len=%d prompt_len=%d prefill_complete=%s",
+                            "[ChunkPrefillState] req=%s chunk=%d "
+                            "partial=%d full=%d computed=%d "
+                            "output_len=%d prompt_len=%d "
+                            "prefill_complete=%s",
                             req_id,
                             chunk_id,
                             partial_len,
                             full_len,
-                            int(getattr(request, "num_computed_tokens", 0)),
-                            len(getattr(request, "_output_token_ids", [])),
+                            int(num_computed),
+                            len(
+                                getattr(
+                                    request, "_output_token_ids", []
+                                )
+                            ),
                             partial_len,
                             merged_payload["thinker_prefill_complete"],
                         )
 
-                        if partial_len == 0 and not merged_payload.get("finished", False):
-                            # Keep polling until we have at least one schedulable talker token.
+                        is_finished_flag = bool(
+                            merged_payload.get("finished", False)
+                        )
+                        if partial_len == 0 and not is_finished_flag:
+                            # Keep polling until we have at least
+                            # one schedulable talker token.
                             return True
-                        if partial_len == 0 and merged_payload.get("finished", False):
+                        if partial_len == 0 and is_finished_flag:
                             partial_len = 1
-                        # scheduler will only dispatch the "currently processable" amount of
-                        # prefill to Talker each round, avoiding over-scheduling.
-                        request.prompt_token_ids = [0] * partial_len
-                        # Keep _all_token_ids aligned with prompt length for scheduler
-                        # accounting during prefill. Slice-assign keeps the
-                        # ConstantList wrapper valid.
-                        request._all_token_ids[:] = request.prompt_token_ids
+                        # Scheduler dispatches only the "currently
+                        # processable" amount of prefill to Talker.
+                        new_prompt = [0] * partial_len
+                        request.prompt_token_ids = new_prompt
+                        # Replace _all_token_ids entirely to avoid
+                        # size-mismatch with ConstantList slice-assign.
+                        try:
+                            request._all_token_ids[:] = []
+                            request._all_token_ids.extend(new_prompt)
+                        except Exception:
+                            request._all_token_ids = list(new_prompt)
                     except Exception as e:
                         logger.debug(
-                            "Failed to update dynamic talker prompt length for req %s: %s",
+                            "Failed to update dynamic talker "
+                            "prompt length for req %s: %s",
                             req_id,
                             e,
                         )
@@ -253,9 +291,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             return payload_data
         origin_payload = self.request_payload[req_id]
         merged_payload = dict(origin_payload)
-        override_keys = payload_data.pop("override_keys", [])
+        # Use .get() to avoid mutating the caller's dict.
+        override_keys = payload_data.get("override_keys", [])
         for key, value in payload_data.items():
-            if key == "finished":
+            if key in ("finished", "override_keys"):
                 continue
             elif key in override_keys:
                 merged_payload[key] = value

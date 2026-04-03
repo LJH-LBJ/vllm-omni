@@ -164,6 +164,8 @@ class Qwen3OmniMoeForConditionalGeneration(
                 "last_talker_hidden",
                 "trailing_text_hidden",
                 "tts_pad_embed_projected",
+                "cached_prefill_input_ids",
+                "cached_prefill_embeds",
             }
 
         elif self.model_stage == "code2wav":
@@ -624,11 +626,12 @@ class Qwen3OmniMoeForConditionalGeneration(
             if input_embeds.shape[0] == 0 and span_len > 0:
                 # Guard against empty prefill slices causing downstream
                 # hidden_states[logits_indices] out-of-bounds.
+                # Do NOT set prefill_done here — more thinker chunks may
+                # arrive later and grow the cached prefill tensors.
                 input_ids = scheduled_input_ids[:1]
                 input_embeds = scheduled_input_embeds[:1]
-                update_dict["prefill_done"] = True
-                logger.warning(
-                    "talker_preprocess PREFILL fallback: empty prefill slice at num_processed=%d, force decode handoff",
+                logger.debug(
+                    "talker_preprocess PREFILL: empty prefill slice at num_processed=%d, awaiting more thinker data",
                     info_dict.get("num_processed_tokens", 0),
                 )
             code_predictor_codes = torch.zeros(
@@ -648,6 +651,11 @@ class Qwen3OmniMoeForConditionalGeneration(
             # upstream thinker prefill has fully covered the talker prompt.
             if total_len is not None and new_processed >= total_len and thinker_prefill_complete:
                 update_dict["prefill_done"] = True
+                # Free large prefill caches — they are no longer needed
+                # during decode and can waste significant GPU memory.
+                update_dict["cached_prefill_input_ids"] = None
+                update_dict["cached_prefill_embeds"] = None
+                update_dict["cached_prefill_source_len"] = None
                 logger.debug(
                     "talker_preprocess PREFILL_DONE: total_len=%d, new_processed=%d, thinker_prefill_complete=%s",
                     total_len,
