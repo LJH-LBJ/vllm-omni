@@ -592,6 +592,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             input_embeds = self.talker.embed_input_ids(input_ids)
 
         span_len = input_ids.shape[0]
+        scheduled_input_ids = input_ids
+        scheduled_input_embeds = input_embeds
         update_dict = {}
         if not info_dict.get("prefill_done", False):
             # prefill
@@ -604,6 +606,16 @@ class Qwen3OmniMoeForConditionalGeneration(
                 has_cache,
             )
             input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, **info_dict)
+            if input_embeds.shape[0] == 0 and span_len > 0:
+                # Guard against empty prefill slices causing downstream
+                # hidden_states[logits_indices] out-of-bounds.
+                input_ids = scheduled_input_ids[:1]
+                input_embeds = scheduled_input_embeds[:1]
+                update_dict["prefill_done"] = True
+                logger.warning(
+                    "talker_preprocess PREFILL fallback: empty prefill slice at num_processed=%d, force decode handoff",
+                    info_dict.get("num_processed_tokens", 0),
+                )
             code_predictor_codes = torch.zeros(
                 (input_embeds.shape[0], self.talker.num_code_groups),
                 device=self._module_device(self.talker),
@@ -612,7 +624,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict["code_predictor_codes"] = code_predictor_codes
             # Check if all prefill tokens have been consumed
             total_len = update_dict.get("cached_prefill_total_len") or info_dict.get("cached_prefill_total_len")
-            new_processed = info_dict.get("num_processed_tokens", 0) + span_len
+            consumed_len = input_embeds.shape[0]
+            new_processed = info_dict.get("num_processed_tokens", 0) + consumed_len
             thinker_prefill_complete = bool(
                 update_dict.get("thinker_prefill_complete", info_dict.get("thinker_prefill_complete", False))
             )
@@ -640,7 +653,10 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
             update_dict["mtp_inputs"] = last_talker_hidden, text_step
 
-        update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + span_len
+        if not info_dict.get("prefill_done", False):
+            update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + input_embeds.shape[0]
+        else:
+            update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + span_len
         return input_ids, input_embeds, update_dict
 
     def talker_mtp(

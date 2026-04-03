@@ -176,14 +176,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             thinker_input_ids,
                             len(thinker_input_ids),
                         )
-                        # Use model-side realized prefill length as the hard upper bound
-                        # once available, to avoid scheduling one extra token when the
-                        # static estimator and actual built prefill differ slightly.
-                        cached_prefill_total_len = merged_payload.get("cached_prefill_total_len")
-                        if isinstance(cached_prefill_total_len, int) and cached_prefill_total_len > 0:
-                            partial_len = min(partial_len, cached_prefill_total_len)
-                            full_len = min(full_len, cached_prefill_total_len)
-
                         merged_payload["thinker_prefill_complete"] = partial_len >= full_len
 
                         if partial_len == 0 and not merged_payload.get("finished", False):
