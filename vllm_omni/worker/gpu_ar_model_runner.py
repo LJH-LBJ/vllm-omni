@@ -534,10 +534,25 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 if sampler_output is not None:
                     return sampler_output
             self.input_batch.update_async_output_token_ids()
-            return self.sampler(
+            # --- CUDA OOB diagnostic: sync before sampler ---
+            try:
+                torch.cuda.synchronize()
+                logger.info("[CUDA_DIAG] pre-sampler sync OK, logits=%s", logits.shape if logits is not None else None)
+            except RuntimeError as _diag_err:
+                logger.error("[CUDA_DIAG] OOB BEFORE sampler: %s", _diag_err)
+                raise
+            result = self.sampler(
                 logits=logits,
                 sampling_metadata=sampling_metadata,
             )
+            # --- CUDA OOB diagnostic: sync after sampler ---
+            try:
+                torch.cuda.synchronize()
+                logger.info("[CUDA_DIAG] post-sampler sync OK")
+            except RuntimeError as _diag_err:
+                logger.error("[CUDA_DIAG] OOB AFTER sampler: %s", _diag_err)
+                raise
+            return result
 
         return super()._sample(logits, spec_decode_metadata)
 
