@@ -58,10 +58,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.waiting_for_chunk_waiting_requests: deque[Any] = deque()
         self.waiting_for_chunk_running_requests: deque[Any] = deque()
         self.requests_with_ready_chunks = set()
-        # Per-request count of thinker decode chunks received after
-        # thinker prefill is complete.  Used to grow the talker prompt
-        # for decode-phase scheduling.
-        self._thinker_decode_count: dict[str, int] = {}
 
     @classmethod
     def create_connector(cls, model_config: Any):
@@ -204,23 +200,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             # prefill cache; that value must not be overwritten
                             # by a lingering False from the connector payload.
                             merged_payload.pop("prefill_done", None)
-
-                        # After thinker prefill is complete, extend the
-                        # talker prompt for each thinker decode chunk so the
-                        # scheduler can schedule one new token per step.
-                        # Each decode chunk carries exactly one embedding in
-                        # thinker_decode_embeddings (override mode), so we
-                        # count decode chunks rather than relying on
-                        # output_token_ids length (which mixes prefill and
-                        # decode outputs).
-                        if merged_payload.get("thinker_prefill_complete", False):
-                            if "thinker_decode_embeddings" in payload_data:
-                                self._thinker_decode_count[req_id] = (
-                                    self._thinker_decode_count.get(req_id, 0) + 1
-                                )
-                            partial_len += self._thinker_decode_count.get(
-                                req_id, 0
-                            )
 
                         # During talker prefill, sampled output tokens are not
                         # semantic decode outputs.  Clamp scheduler accounting
@@ -452,8 +431,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.get_req_chunk.pop(request_id, None)
         self.requests_with_ready_chunks.discard(request_id)
         self.request_ids_mapping.pop(request_id, None)
-        self._thinker_decode_count.pop(request_id, None)
-
         self._cancelled_load_reqs.add(request_id)
         self._finished_load_reqs.discard(request_id)
 
