@@ -58,6 +58,16 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.waiting_for_chunk_waiting_requests: deque[Any] = deque()
         self.waiting_for_chunk_running_requests: deque[Any] = deque()
         self.requests_with_ready_chunks = set()
+        # Requests currently in chunked-prefill mode (thinker_prefill_complete
+        # is False).  Used by process_pending_chunks to suppress spurious
+        # output_token_ids that `_update_request_with_output` adds between
+        # chunk polls — without this the scheduler schedules 1 extra token
+        # that the model cannot serve (prefill embedding OOB).
+        self._chunked_prefill_reqs: set[str] = set()
+        # Per-request count of thinker decode chunks received after
+        # thinker prefill completes.  Used to grow the talker prompt
+        # for decode-phase scheduling.
+        self._thinker_decode_count: dict[str, int] = {}
 
     @classmethod
     def create_connector(cls, model_config: Any):
@@ -201,6 +211,40 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             # by a lingering False from the connector payload.
                             merged_payload.pop("prefill_done", None)
 
+                        # Track prefill/decode state for per-step output
+                        # suppression in process_pending_chunks.
+                        thinker_prefill_complete = merged_payload.get(
+                            "thinker_prefill_complete", False
+                        )
+                        if not thinker_prefill_complete:
+                            self._chunked_prefill_reqs.add(req_id)
+                        else:
+                            self._chunked_prefill_reqs.discard(req_id)
+
+                        # After thinker prefill completes, extend the
+                        # talker prompt for each thinker decode chunk.
+                        # Only apply the count when the talker has
+                        # consumed ALL prefill tokens to avoid a race
+                        # where the scheduler schedules the last prefill
+                        # chunk and sees the decode-extended prompt.
+                        if thinker_prefill_complete:
+                            if "thinker_decode_embeddings" in payload_data:
+                                self._thinker_decode_count[req_id] = (
+                                    self._thinker_decode_count.get(
+                                        req_id, 0
+                                    )
+                                    + 1
+                                )
+                            num_computed = getattr(
+                                request, "num_computed_tokens", 0
+                            )
+                            if num_computed >= partial_len:
+                                partial_len += (
+                                    self._thinker_decode_count.get(
+                                        req_id, 0
+                                    )
+                                )
+
                         # During talker prefill, sampled output tokens are not
                         # semantic decode outputs.  Clamp scheduler accounting
                         # to prompt progress only.  After thinker prefill is
@@ -211,9 +255,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         num_computed = getattr(
                             request, "num_computed_tokens", 0
                         )
-                        if not merged_payload.get(
-                            "thinker_prefill_complete", False
-                        ):
+                        if not thinker_prefill_complete:
                             if num_computed > partial_len:
                                 request.num_computed_tokens = partial_len
                             out_ids = getattr(
@@ -431,6 +473,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.get_req_chunk.pop(request_id, None)
         self.requests_with_ready_chunks.discard(request_id)
         self.request_ids_mapping.pop(request_id, None)
+        self._chunked_prefill_reqs.discard(request_id)
+        self._thinker_decode_count.pop(request_id, None)
         self._cancelled_load_reqs.add(request_id)
         self._finished_load_reqs.discard(request_id)
 
@@ -478,12 +522,30 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self,
         waiting_queue: Any,
         running_queue: list[Request],
+        requests: dict[str, Request] | None = None,
     ) -> None:
         """
         Process pending chunks for waiting and running queues.
         """
         if self.connector.stage_id == 0:
             return
+
+        # Suppress spurious output tokens for requests still in
+        # chunked-prefill.  Between chunk polls the AR scheduler's
+        # _update_request_with_output appends sampled tokens which
+        # make num_tokens > num_computed, tricking the scheduler
+        # into scheduling a decode-like step the model cannot serve
+        # (prefill embeddings at that index don't exist yet).
+        if requests is not None:
+            for req_id in list(self._chunked_prefill_reqs):
+                request = requests.get(req_id)
+                if request is None:
+                    self._chunked_prefill_reqs.discard(req_id)
+                    continue
+                out_ids = getattr(request, "_output_token_ids", None)
+                if out_ids is not None and len(out_ids) > 0:
+                    out_ids.clear()
+
         self._process_chunk_queue(
             waiting_queue, self.waiting_for_chunk_waiting_requests, RequestStatus.WAITING, self._finished_load_reqs
         )
