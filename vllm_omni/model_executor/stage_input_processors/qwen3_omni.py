@@ -100,7 +100,7 @@ def _compute_partial_talker_prompt_ids_length(thinker_input_ids: list[int], rece
         if role == assistant_token_id and i == len(im_start_indexes) - 2:
             # Assistant bootstrap requires first 4 thinker tokens.
             if seg_end - s >= 4:
-                assistant_len = 9  # 3 + 4 + 1 + 1
+                assistant_len += 9  # 3 + 4 + 1 + 1
 
     return sum_user_len + assistant_len
 

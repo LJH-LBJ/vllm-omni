@@ -371,7 +371,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
             # --- CUDA OOB diagnostic: sync after preprocess ---
             try:
                 torch.cuda.synchronize()
-                logger.debug("[CUDA_DIAG] post-preprocess sync OK")
+                logger.info("[CUDA_DIAG] post-preprocess sync OK")
             except RuntimeError as _diag_err:
                 logger.error("[CUDA_DIAG] OOB detected AFTER preprocess: %s", _diag_err)
                 raise
@@ -390,7 +390,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
             # --- CUDA OOB diagnostic: sync after model forward ---
             try:
                 torch.cuda.synchronize()
-                logger.debug("[CUDA_DIAG] post-forward sync OK")
+                logger.info("[CUDA_DIAG] post-forward sync OK")
             except RuntimeError as _diag_err:
                 logger.error("[CUDA_DIAG] OOB detected AFTER model forward: %s", _diag_err)
                 raise
@@ -432,7 +432,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 # --- CUDA OOB diagnostic: sync after logits_indices ---
                 try:
                     torch.cuda.synchronize()
-                    logger.debug("[CUDA_DIAG] post-logits_indices sync OK")
+                    logger.info("[CUDA_DIAG] post-logits_indices sync OK")
                 except RuntimeError as _diag_err:
                     logger.error(
                         "[CUDA_DIAG] OOB detected AFTER hidden_states[logits_indices]: "
