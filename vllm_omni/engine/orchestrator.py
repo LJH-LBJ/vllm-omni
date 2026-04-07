@@ -711,14 +711,34 @@ class Orchestrator:
             )
             return
 
-        # Pre-arm stage-1+ with empty prompt IDs. In async chunk mode,
-        # stage-1 prompt length is updated dynamically as upstream chunks arrive.
+        # Pre-arm stage-1+ with a correctly-sized placeholder prompt.
+        # Using an empty list would make add_request write 0 zeros into
+        # token_ids_cpu, leaving positions 0:partial_len uninitialized when
+        # the chunk adapter later sets prompt_token_ids = [0]*partial_len.
+        # That causes OOB in codec_embedding (vocab=3072).
+        #
+        # Instead, pre-fill [0]*full_talker_len so that:
+        #   - add_request writes full_talker_len zeros into token_ids_cpu
+        #   - num_tokens_no_spec is set to the correct decode start position
+        #   - chunk adapter grows prompt_token_ids to ≤ full_talker_len,
+        #     all positions already zeroed → no OOB
+        full_talker_len = 0
+        try:
+            from vllm_omni.model_executor.stage_input_processors.qwen3_omni import (
+                _compute_partial_talker_prompt_ids_length,
+            )
+            full_talker_len = _compute_partial_talker_prompt_ids_length(
+                list(prompt_token_ids), len(prompt_token_ids)
+            )
+        except Exception:
+            pass  # non-Qwen3Omni model or import failure; fall back to empty
+
         original_prompt = req_state.prompt
         if isinstance(original_prompt, dict):
             base_input = copy.deepcopy(original_prompt)
         else:
             base_input = {}
-        base_input["prompt_token_ids"] = []
+        base_input["prompt_token_ids"] = [0] * full_talker_len if full_talker_len > 0 else []
         base_input["multi_modal_data"] = None
         base_input["mm_processor_kwargs"] = None
 
