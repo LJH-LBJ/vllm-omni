@@ -524,10 +524,28 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             return
         if not hasattr(cached_reqs, "additional_information"):
             cached_reqs.additional_information = {}
+        # Propagate current prompt_token_ids into the cached-request data so
+        # that the model runner's _update_states can sync req_state and trigger
+        # zero-filling for async-chunk talker requests.
+        #
+        # Background: OmniARScheduler wraps scheduled_new_reqs in
+        # OmniNewRequestData but leaves scheduled_cached_reqs as the base
+        # vLLM CachedRequestData, which has no prompt_token_ids field.
+        # When a thinker chunk arrives and the talker's prompt grows from
+        # partial_len to a larger partial_len (e.g. 200→400), the chunk
+        # adapter sets request.prompt_token_ids = [0]*new_len on the live
+        # Request object.  Without this patch that new value never reaches
+        # the model runner's CachedRequestState, so the zero-fill guard
+        # (len(req_state.prompt_token_ids) > num_tokens_no_spec) stays False
+        # and the codec_embedding sees a -1 placeholder → OOB.
+        if not hasattr(cached_reqs, "prompt_token_ids"):
+            cached_reqs.prompt_token_ids = {}
         for req_id in cached_reqs.req_ids:
             request = requests.get(req_id) if req_id else None
             additional_info = getattr(request, "additional_information", None) if request else None
             cached_reqs.additional_information[req_id] = additional_info
+            if request is not None:
+                cached_reqs.prompt_token_ids[req_id] = request.prompt_token_ids
 
     def _process_chunk_queue(
         self,
