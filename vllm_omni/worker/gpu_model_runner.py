@@ -1261,6 +1261,14 @@ class OmniGPUModelRunner(GPUModelRunner):
 
                 # call the custom process function
                 embed_slice = inputs_embeds[s:e] if inputs_embeds is not None else None
+                # --- CUDA OOB diagnostic: sync immediately before model.preprocess ---
+                if getattr(self.model, 'has_preprocess', False):
+                    try:
+                        torch.cuda.synchronize()
+                        logger.info("[CUDA_DIAG] pre-model.preprocess sync OK req=%s", req_id)
+                    except RuntimeError as _diag_err:
+                        logger.error("[CUDA_DIAG] OOB BEFORE model.preprocess req=%s: %s", req_id, _diag_err)
+                        raise
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
                 )
