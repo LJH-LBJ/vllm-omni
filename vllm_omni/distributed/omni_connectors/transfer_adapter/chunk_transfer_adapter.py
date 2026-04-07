@@ -58,6 +58,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.waiting_for_chunk_waiting_requests: deque[Any] = deque()
         self.waiting_for_chunk_running_requests: deque[Any] = deque()
         self.requests_with_ready_chunks = set()
+        # Per-request count of thinker decode chunks received after
+        # thinker prefill is complete.  Used to grow the talker prompt
+        # for decode-phase scheduling.
+        self._thinker_decode_count: dict[str, int] = {}
 
     @classmethod
     def create_connector(cls, model_config: Any):
@@ -201,21 +205,43 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             # by a lingering False from the connector payload.
                             merged_payload.pop("prefill_done", None)
 
+                        # After thinker prefill is complete, extend the
+                        # talker prompt for each thinker decode chunk so the
+                        # scheduler can schedule one new token per step.
+                        # Each decode chunk carries exactly one embedding in
+                        # thinker_decode_embeddings (override mode), so we
+                        # count decode chunks rather than relying on
+                        # output_token_ids length (which mixes prefill and
+                        # decode outputs).
+                        if merged_payload.get("thinker_prefill_complete", False):
+                            if "thinker_decode_embeddings" in payload_data:
+                                self._thinker_decode_count[req_id] = (
+                                    self._thinker_decode_count.get(req_id, 0) + 1
+                                )
+                            partial_len += self._thinker_decode_count.get(
+                                req_id, 0
+                            )
+
                         # During talker prefill, sampled output tokens are not
                         # semantic decode outputs.  Clamp scheduler accounting
-                        # to prompt progress only.  This must happen for BOTH
-                        # partial and complete prefill to keep num_computed and
-                        # _output_token_ids consistent with prompt_token_ids.
+                        # to prompt progress only.  After thinker prefill is
+                        # complete, the AR scheduler takes over: we must NOT
+                        # clear output_token_ids or clamp num_computed, since
+                        # the scheduler relies on num_tokens growth from
+                        # _update_request_with_output to schedule decode steps.
                         num_computed = getattr(
                             request, "num_computed_tokens", 0
                         )
-                        if num_computed > partial_len:
-                            request.num_computed_tokens = partial_len
-                        out_ids = getattr(
-                            request, "_output_token_ids", None
-                        )
-                        if out_ids is not None and len(out_ids) > 0:
-                            out_ids.clear()
+                        if not merged_payload.get(
+                            "thinker_prefill_complete", False
+                        ):
+                            if num_computed > partial_len:
+                                request.num_computed_tokens = partial_len
+                            out_ids = getattr(
+                                request, "_output_token_ids", None
+                            )
+                            if out_ids is not None and len(out_ids) > 0:
+                                out_ids.clear()
 
                         logger.info(
                             "[ChunkPrefillState] req=%s chunk=%d "
@@ -426,6 +452,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.get_req_chunk.pop(request_id, None)
         self.requests_with_ready_chunks.discard(request_id)
         self.request_ids_mapping.pop(request_id, None)
+        self._thinker_decode_count.pop(request_id, None)
 
         self._cancelled_load_reqs.add(request_id)
         self._finished_load_reqs.discard(request_id)
