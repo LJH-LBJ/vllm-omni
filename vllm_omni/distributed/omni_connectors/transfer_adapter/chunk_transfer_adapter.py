@@ -216,7 +216,21 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         thinker_prefill_complete = merged_payload.get(
                             "thinker_prefill_complete", False
                         )
-                        if not thinker_prefill_complete:
+                        # Only leave _chunked_prefill_reqs when the
+                        # *talker* has actually consumed ALL prefill
+                        # tokens (num_computed >= full_len).  The
+                        # thinker may signal prefill_complete while
+                        # the talker still has an outstanding last
+                        # prefill chunk; during that window
+                        # _update_request_with_output still appends
+                        # tokens that must be suppressed.
+                        num_computed = getattr(
+                            request, "num_computed_tokens", 0
+                        )
+                        if (
+                            not thinker_prefill_complete
+                            or num_computed < full_len
+                        ):
                             self._chunked_prefill_reqs.add(req_id)
                         else:
                             self._chunked_prefill_reqs.discard(req_id)
@@ -235,10 +249,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                                     )
                                     + 1
                                 )
-                            num_computed = getattr(
-                                request, "num_computed_tokens", 0
-                            )
-                            if num_computed >= partial_len:
+                            if num_computed >= full_len:
                                 partial_len += (
                                     self._thinker_decode_count.get(
                                         req_id, 0
