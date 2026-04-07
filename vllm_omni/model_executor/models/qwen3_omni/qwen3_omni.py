@@ -735,6 +735,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict["mtp_inputs"] = last_talker_hidden, text_step
 
         if not info_dict.get("prefill_done", False):
+            # If still in prefill, input_embeds.shape[0] may be less than span_len due to partial prefill consumption.
+            # Count only the consumed tokens.
             update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + input_embeds.shape[0]
         else:
             update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + span_len

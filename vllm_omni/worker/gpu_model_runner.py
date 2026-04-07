@@ -503,6 +503,31 @@ class OmniGPUModelRunner(GPUModelRunner):
                 end_token_index = num_computed_tokens + len(new_token_ids)
                 self.input_batch.token_ids_cpu[req_index, start_token_index:end_token_index] = new_token_ids
                 self.input_batch.num_tokens_no_spec[req_index] = end_token_index
+            elif self.vllm_config.model_config.async_chunk:
+                # Async-chunk talker: prompt_token_ids may have grown since the
+                # request was first admitted (e.g. chunk_transfer_adapter
+                # enlarged `new_prompt` from partial_len to full_len).
+                # token_ids_cpu for those new positions is never written under
+                # the `is_last_rank=True` branch above, so it may contain:
+                # 1. A -1 placeholder at position `num_computed_tokens`, written
+                #    by upstream _bookkeeping_sync under async scheduling.
+                # 2. Stale values from a prior request that held this batch slot.
+                # Either kind results in OOB when codec_embedding (vocab=3072)
+                # is called on those positions via embed_input_ids in the
+                # supports_mm_inputs branch of _preprocess.
+                # Zero-fill from num_computed_tokens to cover both cases.
+                prompt_ids = req_state.prompt_token_ids
+                prompt_len = len(prompt_ids)
+                if prompt_len > num_computed_tokens:
+                    logger.info(
+                        "[async_chunk] zero-filling token_ids_cpu[%d, %d:%d] for req=%s "
+                        "(stale-data / async-placeholder guard)",
+                        req_index, num_computed_tokens, prompt_len, req_id,
+                    )
+                    self.input_batch.token_ids_cpu[
+                        req_index, num_computed_tokens:prompt_len
+                    ] = 0
+                    self.input_batch.num_tokens_no_spec[req_index] = prompt_len
 
             # Add spec_token_ids to token_ids_cpu.
             self.input_batch.update_req_spec_token_ids(req_state, scheduled_spec_tokens)
