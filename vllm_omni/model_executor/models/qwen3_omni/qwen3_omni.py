@@ -1001,7 +1001,18 @@ class Qwen3OmniMoeForConditionalGeneration(
                     im_start_index, segment_end_index, multimodal_mask, thinker_hidden, thinker_embed
                 )
                 talker_input_embeds.append(talker_user_part)
-                talker_input_ids.append(thinker_result_ids[im_start_index:segment_end_index])
+                # Use safe talker-domain IDs instead of raw thinker IDs.
+                # The actual content comes from talker_input_embeds;
+                # input_ids are only placeholders and must stay within
+                # codec_embedding vocab range to avoid OOB in any path
+                # that indexes into the talker embedding table.
+                _safe_ids = torch.full(
+                    (segment_end_index - im_start_index,),
+                    fill_value=int(self.config.talker_config.codec_pad_id),
+                    dtype=thinker_result_ids.dtype,
+                    device=thinker_result_ids.device,
+                )
+                talker_input_ids.append(_safe_ids)
             # Take assistant output (for now)
             elif (role_token == self.config.assistant_token_id).item() and i == len(im_start_indexes) - 2:
                 # Assistant bootstrap needs at least 4 thinker tokens.
@@ -1231,9 +1242,11 @@ class Qwen3OmniMoeForConditionalGeneration(
             trailing_text_hidden = tts_eos_embed
 
         input_embeds = assistant_text_hidden + assistant_codec_hidden
+        # Use talker-domain codec_pad_id instead of thinker-domain
+        # tts_pad_token_id (151671) which exceeds codec_embedding vocab.
         input_ids = torch.full(
             (assistant_text_hidden.shape[0],),
-            fill_value=self.config.tts_pad_token_id,
+            fill_value=int(self.config.talker_config.codec_pad_id),
             dtype=torch.long,
             device=assistant_text_hidden.device,
         )
