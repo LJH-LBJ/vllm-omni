@@ -516,5 +516,15 @@ class Qwen3OmniMoeModel(Qwen3MoeLLMForCausalLM):
         self,
         input_ids: torch.Tensor,
     ) -> torch.Tensor:
-        """Embed codec input IDs."""
+        """Embed codec input IDs.
+
+        During async-chunk prefill the talker's token_ids_cpu is filled
+        with placeholder zeros.  If stale / uninitialised data leaks into
+        input_ids (e.g. a -1 bookkeeping placeholder), an unclamped
+        lookup would crash with a CUDA index-out-of-bounds assertion.
+        Clamp to [0, vocab_size) as a safety net — the embeddings are
+        overwritten by thinker projections in talker_preprocess anyway.
+        """
+        vocab_size = self.model.codec_embedding.num_embeddings
+        input_ids = input_ids.clamp(min=0, max=vocab_size - 1)
         return self.model.codec_embedding(input_ids)
