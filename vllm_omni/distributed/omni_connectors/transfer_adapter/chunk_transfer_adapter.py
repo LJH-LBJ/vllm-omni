@@ -192,6 +192,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         # we must re-enter the prefill path.
                         if not merged_payload["thinker_prefill_complete"]:
                             merged_payload["prefill_done"] = False
+                        else:
+                            # Thinker prefill is complete: remove any stale
+                            # prefill_done=False that accumulated from earlier
+                            # partial chunks.  The model's own update_dict sets
+                            # prefill_done=True when it finishes consuming the
+                            # prefill cache; that value must not be overwritten
+                            # by a lingering False from the connector payload.
+                            merged_payload.pop("prefill_done", None)
 
                         # During talker prefill, sampled output tokens are not
                         # semantic decode outputs.  Clamp scheduler accounting
