@@ -847,6 +847,21 @@ class Qwen3OmniMoeForConditionalGeneration(
             available_count=prefill_source_len,
         )
 
+        # --- CUDA OOB diagnostic: sync after _thinker_to_talker_prefill ---
+        try:
+            torch.cuda.synchronize()
+            logger.info(
+                "[CUDA_DIAG] post-_thinker_to_talker_prefill sync OK, "
+                "req_input_ids=%s req_embeds=%s",
+                req_input_ids.shape, req_embeds.shape,
+            )
+        except RuntimeError as _diag_err:
+            logger.error(
+                "[CUDA_DIAG] OOB detected AFTER _thinker_to_talker_prefill: %s",
+                _diag_err,
+            )
+            raise
+
         # Queue trailing_text_hidden for decode (drop first for next steps),
         try:
             if isinstance(trailing_text_hidden, torch.Tensor) and trailing_text_hidden.numel() > 0:
@@ -1027,6 +1042,17 @@ class Qwen3OmniMoeForConditionalGeneration(
         talker_input_embed = torch.cat([embed.to(input_ids.device) for embed in talker_input_embeds], dim=0)
         talker_input_id = torch.cat([embed.to(input_ids.device) for embed in talker_input_ids], dim=0)
 
+        logger.info(
+            "[CUDA_DIAG] _thinker_to_talker_prefill done: "
+            "total_available=%d talker_ids=%s talker_embeds=%s "
+            "id_min=%d id_max=%d",
+            total_available,
+            talker_input_id.shape,
+            talker_input_embed.shape,
+            int(talker_input_id.min()) if talker_input_id.numel() > 0 else -1,
+            int(talker_input_id.max()) if talker_input_id.numel() > 0 else -1,
+        )
+
         return talker_input_id, talker_input_embed, trailing_text_hidden_all
 
     def _thinker_decode_to_talker_decode(
@@ -1155,9 +1181,35 @@ class Qwen3OmniMoeForConditionalGeneration(
             device=tts_pad_embed.device,
             dtype=torch.long,
         )
+        # --- CUDA OOB diagnostic: validate codec tokens before embedding ---
+        _codec_vocab = getattr(self.talker, 'vocab_size', None)
+        if _codec_vocab is None:
+            try:
+                _codec_vocab = self.talker.language_model.model.codec_embedding.num_embeddings
+            except AttributeError:
+                _codec_vocab = None
+        if _codec_vocab is not None:
+            _bad_mask = (codec_special_tokens < 0) | (codec_special_tokens >= _codec_vocab)
+            if _bad_mask.any():
+                logger.error(
+                    "[CUDA_DIAG] codec_special_tokens OOB! tokens=%s vocab_size=%d",
+                    codec_special_tokens.tolist(), _codec_vocab,
+                )
+                codec_special_tokens = codec_special_tokens.clamp(0, _codec_vocab - 1)
+        logger.info(
+            "[CUDA_DIAG] _get_talker_assistant_parts: codec_tokens=%s, vocab_size=%s, speaker_id=%d",
+            codec_special_tokens.tolist(), _codec_vocab, speaker_id,
+        )
         embed_input_ids = self.talker.embed_input_ids(codec_special_tokens).to(
             device=tts_pad_embed.device, dtype=torch.bfloat16
         )
+        # --- CUDA OOB diagnostic: sync after embed_input_ids ---
+        try:
+            torch.cuda.synchronize()
+            logger.info("[CUDA_DIAG] post-embed_input_ids sync OK")
+        except RuntimeError as _diag_err:
+            logger.error("[CUDA_DIAG] OOB AFTER embed_input_ids: %s", _diag_err)
+            raise
         assistant_codec_hidden = torch.cat(
             (
                 torch.zeros(
