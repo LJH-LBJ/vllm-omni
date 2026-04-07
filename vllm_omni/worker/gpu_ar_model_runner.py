@@ -428,6 +428,13 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         kv_connector_output,
                     )
 
+                # --- CUDA OOB diagnostic: log values BEFORE gather ---
+                logger.info(
+                    "[CUDA_DIAG] pre-gather: hidden_states=%s logits_indices=%s (max=%s)",
+                    hidden_states.shape,
+                    logits_indices.tolist() if isinstance(logits_indices, torch.Tensor) and logits_indices.numel() <= 8 else logits_indices,
+                    int(logits_indices.max()) if isinstance(logits_indices, torch.Tensor) and logits_indices.numel() > 0 else logits_indices,
+                )
                 sample_hidden_states = hidden_states[logits_indices]
                 # --- CUDA OOB diagnostic: sync after logits_indices ---
                 try:
