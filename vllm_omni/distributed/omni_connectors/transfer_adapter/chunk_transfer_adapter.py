@@ -235,37 +235,12 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         else:
                             self._chunked_prefill_reqs.discard(req_id)
 
-                        # After thinker prefill completes, extend the
-                        # talker prompt for each thinker decode chunk.
-                        # Only apply the count when the talker has
-                        # consumed ALL prefill tokens to avoid a race
-                        # where the scheduler schedules the last prefill
-                        # chunk and sees the decode-extended prompt.
-                        if thinker_prefill_complete:
-                            if "thinker_decode_embeddings" in payload_data:
-                                self._thinker_decode_count[req_id] = (
-                                    self._thinker_decode_count.get(
-                                        req_id, 0
-                                    )
-                                    + 1
-                                )
-                            if num_computed >= full_len:
-                                partial_len += (
-                                    self._thinker_decode_count.get(
-                                        req_id, 0
-                                    )
-                                )
+                        # Do NOT grow prompt for decode — the AR scheduler
+                        # drives decode via output_token_ids (+1/step).
 
-                        # During talker prefill, sampled output tokens are not
-                        # semantic decode outputs.  Clamp scheduler accounting
-                        # to prompt progress only.  After thinker prefill is
-                        # complete, the AR scheduler takes over: we must NOT
-                        # clear output_token_ids or clamp num_computed, since
-                        # the scheduler relies on num_tokens growth from
-                        # _update_request_with_output to schedule decode steps.
-                        num_computed = getattr(
-                            request, "num_computed_tokens", 0
-                        )
+                        # During prefill, clamp scheduler accounting to
+                        # prompt progress; after prefill, let the AR
+                        # scheduler own output_token_ids growth.
                         if not thinker_prefill_complete:
                             if num_computed > partial_len:
                                 request.num_computed_tokens = partial_len
@@ -312,13 +287,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         # progress for talker.  Stay in WAITING_FOR_CHUNK
                         # to avoid the scheduler spinning on +1 padding
                         # tokens.
-                        num_computed_now = getattr(
-                            request, "num_computed_tokens", 0
-                        )
                         if (
                             not is_finished_flag
                             and not merged_payload["thinker_prefill_complete"]
-                            and num_computed_now >= partial_len
+                            and num_computed >= partial_len
                         ):
                             logger.debug(
                                 "[ChunkPrefillStall] req=%s partial=%d "
@@ -326,7 +298,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                                 "staying in WAITING_FOR_CHUNK",
                                 req_id,
                                 partial_len,
-                                num_computed_now,
+                                num_computed,
                             )
                             # Return False so recv_loop re-enqueues the
                             # request into _pending_load_reqs and keeps
@@ -335,15 +307,25 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
                         # Scheduler dispatches only the "currently
                         # processable" amount of prefill to Talker.
-                        new_prompt = [0] * partial_len
-                        request.prompt_token_ids = new_prompt
-                        # Replace _all_token_ids entirely to avoid
-                        # size-mismatch with ConstantList slice-assign.
-                        try:
-                            request._all_token_ids[:] = []
-                            request._all_token_ids.extend(new_prompt)
-                        except Exception:
-                            request._all_token_ids = list(new_prompt)
+                        # After talker finishes prefill (num_computed >=
+                        # full_len), do NOT overwrite prompt/all_token_ids:
+                        # the AR scheduler owns scheduling via
+                        # output_token_ids, and resetting _all_token_ids
+                        # would destroy accumulated decode outputs.
+                        talker_prefill_done = (
+                            thinker_prefill_complete
+                            and num_computed >= full_len
+                        )
+                        if not talker_prefill_done:
+                            new_prompt = [0] * partial_len
+                            request.prompt_token_ids = new_prompt
+                            # Replace _all_token_ids entirely to avoid
+                            # size-mismatch with ConstantList slice-assign.
+                            try:
+                                request._all_token_ids[:] = []
+                                request._all_token_ids.extend(new_prompt)
+                            except Exception:
+                                request._all_token_ids = list(new_prompt)
                     except Exception as e:
                         logger.debug(
                             "Failed to update dynamic talker "
