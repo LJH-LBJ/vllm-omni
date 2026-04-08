@@ -64,10 +64,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         # chunk polls — without this the scheduler schedules 1 extra token
         # that the model cannot serve (prefill embedding OOB).
         self._chunked_prefill_reqs: set[str] = set()
-        # Per-request count of thinker decode chunks received after
-        # thinker prefill completes.  Used to grow the talker prompt
-        # for decode-phase scheduling.
-        self._thinker_decode_count: dict[str, int] = {}
 
     @classmethod
     def create_connector(cls, model_config: Any):
@@ -319,13 +315,9 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         if not talker_prefill_done:
                             new_prompt = [0] * partial_len
                             request.prompt_token_ids = new_prompt
-                            # Replace _all_token_ids entirely to avoid
-                            # size-mismatch with ConstantList slice-assign.
-                            try:
-                                request._all_token_ids[:] = []
-                                request._all_token_ids.extend(new_prompt)
-                            except Exception:
-                                request._all_token_ids = list(new_prompt)
+                            # Single assignment avoids intermediate
+                            # empty state from two-step clear+extend.
+                            request._all_token_ids = list(new_prompt)
                     except Exception as e:
                         logger.debug(
                             "Failed to update dynamic talker "
@@ -467,7 +459,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.requests_with_ready_chunks.discard(request_id)
         self.request_ids_mapping.pop(request_id, None)
         self._chunked_prefill_reqs.discard(request_id)
-        self._thinker_decode_count.pop(request_id, None)
         self._cancelled_load_reqs.add(request_id)
         self._finished_load_reqs.discard(request_id)
 
@@ -533,6 +524,16 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             for req_id in list(self._chunked_prefill_reqs):
                 request = requests.get(req_id)
                 if request is None:
+                    self._chunked_prefill_reqs.discard(req_id)
+                    continue
+                # Proactively remove from set once talker has
+                # consumed all prefill tokens — avoids lingering
+                # output suppression during early decode steps.
+                num_comp = getattr(request, "num_computed_tokens", 0)
+                num_prompt = len(
+                    getattr(request, "prompt_token_ids", None) or []
+                )
+                if num_comp >= num_prompt > 0:
                     self._chunked_prefill_reqs.discard(req_id)
                     continue
                 out_ids = getattr(request, "_output_token_ids", None)
