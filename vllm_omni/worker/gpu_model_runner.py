@@ -60,6 +60,13 @@ class OmniGPUModelRunner(GPUModelRunner):
         self.model_intermediate_buffer: dict[str, dict[str, Any]] = {}
         self._omni_num_scheduled_tokens_np: np.ndarray | None = None
         self._omni_last_model_output: object | None = None
+        # Stage 0 (thinker) owns its prompt directly and never receives
+        # async chunks from upstream.  The prompt-sync and zero-fill guard
+        # in _update_states must be skipped for it — otherwise valid
+        # thinker prompt tokens get overwritten with zeros.
+        self._is_downstream_stage = (
+            getattr(self.vllm_config.model_config, "stage_id", 0) > 0
+        )
 
     def initialize_metadata_builders(self, kv_cache_config, kernel_block_sizes):
         """Override to fix scheduler_metadata buffer size for FA3 + CUDA graph.
@@ -504,7 +511,16 @@ class OmniGPUModelRunner(GPUModelRunner):
             # prompt_token_ids unless we copy it here.
             # Safe for non-async-chunk mode: getattr returns None and the
             # dict lookup is skipped, leaving prompt_token_ids unchanged.
-            _sched_prompt_ids: dict | None = getattr(req_data, "prompt_token_ids", None)
+            #
+            # Skip for stage 0 (thinker): its prompt never changes and
+            # attach_cached_additional_information attaches prompt_token_ids
+            # unconditionally, which could trigger the zero-fill guard below
+            # and destroy valid thinker prompt tokens.
+            _sched_prompt_ids: dict | None = (
+                getattr(req_data, "prompt_token_ids", None)
+                if self._is_downstream_stage
+                else None
+            )
             # Track whether a new async-chunk arrived and changed the talker
             # prompt.  We cannot rely solely on `prompt_len > num_tokens_no_spec`
             # because:
@@ -536,8 +552,11 @@ class OmniGPUModelRunner(GPUModelRunner):
                 end_token_index = num_computed_tokens + len(new_token_ids)
                 self.input_batch.token_ids_cpu[req_index, start_token_index:end_token_index] = new_token_ids
                 self.input_batch.num_tokens_no_spec[req_index] = end_token_index
-            elif _async_chunk_prompt_changed or len(req_state.prompt_token_ids) > int(
-                self.input_batch.num_tokens_no_spec[req_index]
+            elif self._is_downstream_stage and (
+                _async_chunk_prompt_changed
+                or len(req_state.prompt_token_ids) > int(
+                    self.input_batch.num_tokens_no_spec[req_index]
+                )
             ):
                 # The prompt has grown beyond what was last written to
                 # token_ids_cpu.  This happens in the async-chunk talker where
