@@ -318,6 +318,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             # Single assignment avoids intermediate
                             # empty state from two-step clear+extend.
                             request._all_token_ids = list(new_prompt)
+                            # Also clear output_token_ids so a racing
+                            # append_output_token_ids cannot grow
+                            # _all_token_ids beyond the prompt length.
+                            out = getattr(
+                                request, "_output_token_ids", None
+                            )
+                            if out is not None:
+                                out.clear()
                     except Exception as e:
                         logger.debug(
                             "Failed to update dynamic talker "
@@ -539,6 +547,21 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 out_ids = getattr(request, "_output_token_ids", None)
                 if out_ids is not None and len(out_ids) > 0:
                     out_ids.clear()
+                # After clearing spurious output tokens, sync
+                # _all_token_ids back to prompt length.  A race
+                # between the recv_loop (which resets _all_token_ids
+                # to the new prompt) and update_from_output (which
+                # appends a sampled token) can leave _all_token_ids
+                # longer than the prompt — causing the scheduler to
+                # over-schedule and the talker to OOB.
+                prompt = getattr(request, "prompt_token_ids", None)
+                all_ids = getattr(request, "_all_token_ids", None)
+                if (
+                    prompt is not None
+                    and all_ids is not None
+                    and len(all_ids) != len(prompt)
+                ):
+                    request._all_token_ids = list(prompt)
 
         self._process_chunk_queue(
             waiting_queue, self.waiting_for_chunk_waiting_requests, RequestStatus.WAITING, self._finished_load_reqs
