@@ -368,14 +368,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 defer_finalize=defer_kv_connector_finalize,
             ) as kv_connector_output,
         ):
-            # --- CUDA OOB diagnostic: sync after preprocess ---
-            try:
-                torch.cuda.synchronize()
-                logger.info("[CUDA_DIAG] post-preprocess sync OK")
-            except RuntimeError as _diag_err:
-                logger.error("[CUDA_DIAG] OOB detected AFTER preprocess: %s", _diag_err)
-                raise
-
             model_output = self._model_forward(
                 input_ids=input_ids,
                 positions=positions,
@@ -386,14 +378,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 logits_index=logits_indices,
                 sampler=self.sampler,
             )
-
-            # --- CUDA OOB diagnostic: sync after model forward ---
-            try:
-                torch.cuda.synchronize()
-                logger.info("[CUDA_DIAG] post-forward sync OK")
-            except RuntimeError as _diag_err:
-                logger.error("[CUDA_DIAG] OOB detected AFTER model forward: %s", _diag_err)
-                raise
 
             # [Omni] Map pending ropes metadata to req_ids.
             if hasattr(self.model, "flush_pending_metadata"):
@@ -428,25 +412,7 @@ class GPUARModelRunner(OmniGPUModelRunner):
                         kv_connector_output,
                     )
 
-                # --- CUDA OOB diagnostic: log values BEFORE gather ---
-                logger.info(
-                    "[CUDA_DIAG] pre-gather: hidden_states=%s logits_indices=%s (max=%s)",
-                    hidden_states.shape,
-                    logits_indices.tolist() if isinstance(logits_indices, torch.Tensor) and logits_indices.numel() <= 8 else logits_indices,
-                    int(logits_indices.max()) if isinstance(logits_indices, torch.Tensor) and logits_indices.numel() > 0 else logits_indices,
-                )
                 sample_hidden_states = hidden_states[logits_indices]
-                # --- CUDA OOB diagnostic: sync after logits_indices ---
-                try:
-                    torch.cuda.synchronize()
-                    logger.info("[CUDA_DIAG] post-logits_indices sync OK")
-                except RuntimeError as _diag_err:
-                    logger.error(
-                        "[CUDA_DIAG] OOB detected AFTER hidden_states[logits_indices]: "
-                        "hidden_states=%s logits_indices=%s err=%s",
-                        hidden_states.shape, logits_indices, _diag_err,
-                    )
-                    raise
                 # Try with sampling_metadata first; fall back to without for models that don't support it
                 try:
                     logits = self.model.compute_logits(
@@ -534,24 +500,10 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 if sampler_output is not None:
                     return sampler_output
             self.input_batch.update_async_output_token_ids()
-            # --- CUDA OOB diagnostic: sync before sampler ---
-            try:
-                torch.cuda.synchronize()
-                logger.info("[CUDA_DIAG] pre-sampler sync OK, logits=%s", logits.shape if logits is not None else None)
-            except RuntimeError as _diag_err:
-                logger.error("[CUDA_DIAG] OOB BEFORE sampler: %s", _diag_err)
-                raise
             result = self.sampler(
                 logits=logits,
                 sampling_metadata=sampling_metadata,
             )
-            # --- CUDA OOB diagnostic: sync after sampler ---
-            try:
-                torch.cuda.synchronize()
-                logger.info("[CUDA_DIAG] post-sampler sync OK")
-            except RuntimeError as _diag_err:
-                logger.error("[CUDA_DIAG] OOB AFTER sampler: %s", _diag_err)
-                raise
             return result
 
         return super()._sample(logits, spec_decode_metadata)

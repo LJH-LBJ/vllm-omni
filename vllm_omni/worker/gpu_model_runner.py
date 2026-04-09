@@ -529,8 +529,8 @@ class OmniGPUModelRunner(GPUModelRunner):
             #   - The trim branch above may reset num_tokens_no_spec using the
             #     stale num_prompt_tokens value (from add_request), masking the
             #     actual high-water mark written to token_ids_cpu.
-            # Either issue can leave bad values (-1, stale) in the scheduled
-            # region → OOB in codec_embedding (vocab=3072).
+            # Either issue can leave bad values (-1, stale) in the scheduled region
+            # → OOB in codec_embedding (vocab=3072).
             _async_chunk_prompt_changed = False
             if _sched_prompt_ids is not None:
                 _new_ids = _sched_prompt_ids.get(req_id)
@@ -579,7 +579,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                 prompt_len = len(req_state.prompt_token_ids)
                 curr_nts = int(self.input_batch.num_tokens_no_spec[req_index])
                 fill_start = min(num_computed_tokens, curr_nts)
-                logger.info(
+                logger.debug(
                     "[async_chunk] zero-filling token_ids_cpu[%d, %d:%d] for req=%s "
                     "(stale-data / async-placeholder guard, "
                     "num_computed=%d, num_tokens_no_spec=%d)",
@@ -1348,14 +1348,6 @@ class OmniGPUModelRunner(GPUModelRunner):
 
                 # call the custom process function
                 embed_slice = inputs_embeds[s:e] if inputs_embeds is not None else None
-                # --- CUDA OOB diagnostic: sync immediately before model.preprocess ---
-                if getattr(self.model, 'has_preprocess', False):
-                    try:
-                        torch.cuda.synchronize()
-                        logger.info("[CUDA_DIAG] pre-model.preprocess sync OK req=%s", req_id)
-                    except RuntimeError as _diag_err:
-                        logger.error("[CUDA_DIAG] OOB BEFORE model.preprocess req=%s: %s", req_id, _diag_err)
-                        raise
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
                 )
