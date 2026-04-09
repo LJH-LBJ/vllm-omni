@@ -951,10 +951,16 @@ class Qwen3OmniMoeForConditionalGeneration(
         update_dict: dict[str, Any],
     ) -> None:
         """
-        Cache thinker embeds for decode stage.
+        Cache thinker decode embeds that arrive while the talker is still
+        prefilling.  Uses ``_last_seen_output_len`` to guard against stale
+        re-injection from ``request.additional_information``.
         """
         thinker_decode_embeds = info_dict.get("thinker_decode_embeddings", None)
-        if thinker_decode_embeds is not None:
+        thinker_output_token_ids = info_dict.get("thinker_output_token_ids", [])
+        last_seen_len = info_dict.get("_last_seen_output_len", 0)
+        current_output_len = len(thinker_output_token_ids)
+
+        if thinker_decode_embeds is not None and current_output_len > last_seen_len:
             cached_thinker_decode_embeds = info_dict.get("cached_thinker_decode_embeddings", None)
             if cached_thinker_decode_embeds is None:
                 update_dict["cached_thinker_decode_embeddings"] = thinker_decode_embeds
@@ -968,6 +974,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict["cached_thinker_decode_embeddings"] = torch.cat(
                     [cached_thinker_decode_embeds, thinker_decode_embeds], dim=0
                 )
+            update_dict["_last_seen_output_len"] = current_output_len
         update_dict["thinker_decode_embeddings"] = None
 
     def _thinker_to_talker_prefill(
@@ -1104,9 +1111,14 @@ class Qwen3OmniMoeForConditionalGeneration(
         update_dict,
     ):
         """
-        Project thinker outputs to talker inputs during prefill stage.
-        Returns:
-            (input_ids, input_embeds) for talker
+        Project thinker outputs to talker inputs during decode stage.
+
+        Chunked prefill causes ``request.additional_information`` to be
+        re-copied into the model buffer every scheduler step, which means
+        the same ``thinker_decode_embeddings`` tensor is re-injected even
+        when no new thinker chunk has arrived.  We use
+        ``_last_seen_output_len`` (length of ``thinker_output_token_ids``)
+        as a freshness marker: only append when the length has increased.
         """
         cached_thinker_decode_embeds = info_dict.get("cached_thinker_decode_embeddings", None)
         thinker_decode_embed = info_dict.get("thinker_decode_embeddings", None)

@@ -579,7 +579,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                 prompt_len = len(req_state.prompt_token_ids)
                 curr_nts = int(self.input_batch.num_tokens_no_spec[req_index])
                 fill_start = min(num_computed_tokens, curr_nts)
-                logger.debug(
+                logger.info(
                     "[async_chunk] zero-filling token_ids_cpu[%d, %d:%d] for req=%s "
                     "(stale-data / async-placeholder guard, "
                     "num_computed=%d, num_tokens_no_spec=%d)",
