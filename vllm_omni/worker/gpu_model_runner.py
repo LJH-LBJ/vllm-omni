@@ -502,6 +502,15 @@ class OmniGPUModelRunner(GPUModelRunner):
             if new_block_ids is not None:
                 self.input_batch.block_table.append_row(new_block_ids, req_index)
 
+            if self._is_downstream_stage:
+                logger.info(
+                    "[DIAG-WORKER] CACHED req=%s scheduler_num_computed=%d "
+                    "req_state.num_computed=%d req_index=%s in_batch=%s",
+                    req_id, num_computed_tokens,
+                    req_state.num_computed_tokens,
+                    req_index,
+                    req_index is not None,
+                )
             # Sync prompt_token_ids from scheduler for async-chunk
             # (downstream stages only; thinker prompt never changes).
             _sched_prompt_ids: dict | None = (
