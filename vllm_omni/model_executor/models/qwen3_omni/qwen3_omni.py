@@ -505,6 +505,14 @@ class Qwen3OmniMoeForConditionalGeneration(
                 logger.warning_once("runtime_additional_information is deprecated, use model_intermediate_buffer")
             code_predictor_codes = [info.get("code_predictor_codes") for info in info_dicts]
             multimodal_outputs = {"code_predictor_codes": torch.cat(code_predictor_codes, dim=0)}
+            # Diagnostic: log code_predictor_codes details from buffer
+            _merged = multimodal_outputs["code_predictor_codes"]
+            if _merged.numel() > 0:
+                _cb0_vals = _merged[:, 0].tolist() if _merged.ndim >= 2 else _merged.tolist()
+                logger.info(
+                    "[talker-output-diag] shape=%s codebook0=%s dtype=%s device=%s",
+                    list(_merged.shape), _cb0_vals, _merged.dtype, _merged.device,
+                )
             span_len = multimodal_outputs["code_predictor_codes"].shape[0]
             talker_hidden = talker_hidden[:span_len]
             return OmniOutput(text_hidden_states=talker_hidden, multimodal_outputs=multimodal_outputs)

@@ -1374,6 +1374,14 @@ class OmniGPUModelRunner(GPUModelRunner):
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
             req_embeds, code_predictor_codes = self.talker_mtp(req_input_ids, req_embeds, last_talker_hidden, text_step)
+        # Diagnostic: log MTP input token and resulting codebook-0
+        if decode_batch_size > 0:
+            _mtp_ids = req_input_ids[:decode_batch_size].detach().cpu().tolist()
+            _cb0 = code_predictor_codes[:decode_batch_size, 0].detach().cpu().tolist()
+            logger.info(
+                "[talker-mtp-diag] input_ids=%s codebook0=%s codes_shape=%s",
+                _mtp_ids, _cb0, list(code_predictor_codes.shape),
+            )
         # code_predictor_codes stays on GPU here; _update_intermediate_buffer
         # keeps it device-resident when the key is in gpu_resident_buffer_keys.
         # D2H is deferred to sample_tokens where hidden_states.to("cpu") already

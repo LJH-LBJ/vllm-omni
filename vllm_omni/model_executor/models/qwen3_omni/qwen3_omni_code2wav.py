@@ -137,6 +137,16 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
         hidden = self.code_embedding(codes + self.code_offset).mean(1)
         # Shape: [batch, seq_len, hidden_size]
 
+        # One-time diagnostic: log model dtype
+        if not getattr(self, "_dtype_logged", False):
+            self._dtype_logged = True
+            _emb_dtype = hidden.dtype
+            _param_dtype = next(self.parameters()).dtype
+            logger.info(
+                "[code2wav-dtype-diag] param_dtype=%s embedding_output_dtype=%s codes_device=%s",
+                _param_dtype, _emb_dtype, codes.device,
+            )
+
         # Stage 2: Pre-Transformer (add temporal context)
         hidden = self.pre_transformer(inputs_embeds=hidden).last_hidden_state
         # Shape: [batch, seq_len, hidden_size]
@@ -153,6 +163,16 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
         for block in self.decoder:
             wav = block(wav)
         # Shape: [batch, 1, waveform_len]
+
+        # Diagnostic: log pre-clamp stats
+        logger.debug(
+            "[code2wav-preclamp] dtype=%s mean=%.6f std=%.6f min=%.6f max=%.6f",
+            wav.dtype,
+            wav.mean().item(),
+            wav.std().item(),
+            wav.min().item(),
+            wav.max().item(),
+        )
 
         # Clamp to valid audio range
         return wav.clamp(min=-1.0, max=1.0)
