@@ -231,15 +231,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         else:
                             self._chunked_prefill_reqs.discard(req_id)
 
-                        # Do NOT grow prompt for decode — the AR scheduler
-                        # drives decode via output_token_ids (+1/step).
-
-                        # During prefill, clamp scheduler accounting to
-                        # prompt progress; after prefill, let the AR
-                        # scheduler own output_token_ids growth.
+                        # During prefill, clear stray output tokens so
+                        # the scheduler does not count them as decode
+                        # progress; after prefill, let the AR scheduler
+                        # own output_token_ids growth.
                         if not thinker_prefill_complete:
-                            if num_computed > partial_len:
-                                request.num_computed_tokens = partial_len
                             out_ids = getattr(
                                 request, "_output_token_ids", None
                             )

@@ -500,11 +500,10 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 if sampler_output is not None:
                     return sampler_output
             self.input_batch.update_async_output_token_ids()
-            result = self.sampler(
+            return self.sampler(
                 logits=logits,
                 sampling_metadata=sampling_metadata,
             )
-            return result
 
         return super()._sample(logits, spec_decode_metadata)
 

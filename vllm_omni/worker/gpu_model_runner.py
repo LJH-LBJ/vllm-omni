@@ -502,35 +502,13 @@ class OmniGPUModelRunner(GPUModelRunner):
             if new_block_ids is not None:
                 self.input_batch.block_table.append_row(new_block_ids, req_index)
 
-            # Sync prompt_token_ids from scheduler output for async-chunk
-            # support.  When a new thinker chunk arrives, the scheduler
-            # updates request.prompt_token_ids to the new partial length
-            # and puts the request back into scheduled_cached_reqs (NOT
-            # scheduled_new_reqs, because the KV cache state is preserved).
-            # The model runner's req_state therefore never sees the grown
-            # prompt_token_ids unless we copy it here.
-            # Safe for non-async-chunk mode: getattr returns None and the
-            # dict lookup is skipped, leaving prompt_token_ids unchanged.
-            #
-            # Skip for stage 0 (thinker): its prompt never changes and
-            # attach_cached_additional_information attaches prompt_token_ids
-            # unconditionally, which could trigger the zero-fill guard below
-            # and destroy valid thinker prompt tokens.
+            # Sync prompt_token_ids from scheduler for async-chunk
+            # (downstream stages only; thinker prompt never changes).
             _sched_prompt_ids: dict | None = (
                 getattr(req_data, "prompt_token_ids", None)
                 if self._is_downstream_stage
                 else None
             )
-            # Track whether a new async-chunk arrived and changed the talker
-            # prompt.  We cannot rely solely on `prompt_len > num_tokens_no_spec`
-            # because:
-            #   - _bookkeeping_sync increments num_tokens_no_spec by 1 (writing
-            #     a -1 placeholder) after each step.
-            #   - The trim branch above may reset num_tokens_no_spec using the
-            #     stale num_prompt_tokens value (from add_request), masking the
-            #     actual high-water mark written to token_ids_cpu.
-            # Either issue can leave bad values (-1, stale) in the scheduled region
-            # → OOB in codec_embedding (vocab=3072).
             _async_chunk_prompt_changed = False
             if _sched_prompt_ids is not None:
                 _new_ids = _sched_prompt_ids.get(req_id)
@@ -538,16 +516,10 @@ class OmniGPUModelRunner(GPUModelRunner):
                     if len(_new_ids) != len(req_state.prompt_token_ids):
                         _async_chunk_prompt_changed = True
                     req_state.prompt_token_ids = _new_ids
-                    # Keep num_prompt_tokens in sync so the trim branch
-                    # above computes the correct end_idx on subsequent
-                    # iterations.
                     if req_index is not None:
                         self.input_batch.num_prompt_tokens[req_index] = len(_new_ids)
 
-            # For the last rank, we don't need to update the token_ids_cpu
-            # because the sampled tokens are already cached.
             if not is_last_rank:
-                # Add new_token_ids to token_ids_cpu.
                 start_token_index = num_computed_tokens
                 end_token_index = num_computed_tokens + len(new_token_ids)
                 self.input_batch.token_ids_cpu[req_index, start_token_index:end_token_index] = new_token_ids
@@ -558,31 +530,14 @@ class OmniGPUModelRunner(GPUModelRunner):
                     self.input_batch.num_tokens_no_spec[req_index]
                 )
             ):
-                # The prompt has grown beyond what was last written to
-                # token_ids_cpu.  This happens in the async-chunk talker where
-                # chunk_transfer_adapter enlarges prompt_token_ids one chunk at
-                # a time (e.g. [0]*200 → [0]*400).
-                #
-                # Positions [num_computed_tokens:prompt_len] in token_ids_cpu
-                # may contain bad values:
-                #   1. A -1 placeholder written by _bookkeeping_sync under
-                #      async scheduling at num_tokens_no_spec (which may be
-                #      anywhere between num_computed_tokens and the old
-                #      prompt length + 1).
-                #   2. Stale data from a prior request that occupied this slot.
-                # Either causes OOB in codec_embedding (vocab=3072).
-                #
-                # Zero-fill from the MINIMUM of num_computed_tokens and the
-                # current num_tokens_no_spec to ensure the -1 placeholder
-                # (written at any position up to num_tokens_no_spec) is
-                # also cleared.
+                # Async-chunk prompt grew — zero-fill stale/placeholder
+                # values in token_ids_cpu to prevent OOB in codec_embedding.
                 prompt_len = len(req_state.prompt_token_ids)
                 curr_nts = int(self.input_batch.num_tokens_no_spec[req_index])
                 fill_start = min(num_computed_tokens, curr_nts)
                 logger.info(
                     "[async_chunk] zero-filling token_ids_cpu[%d, %d:%d] for req=%s "
-                    "(stale-data / async-placeholder guard, "
-                    "num_computed=%d, num_tokens_no_spec=%d)",
+                    "(num_computed=%d, num_tokens_no_spec=%d)",
                     req_index, fill_start, prompt_len, req_id,
                     num_computed_tokens, curr_nts,
                 )

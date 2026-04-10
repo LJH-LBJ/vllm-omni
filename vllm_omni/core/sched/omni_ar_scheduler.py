@@ -431,6 +431,10 @@ class OmniARScheduler(VLLMScheduler):
 
         # [Omni] Cleanup state for finished requests
         for req in stopped_running_reqs:
+            if self.chunk_transfer_adapter is not None:
+                self.chunk_transfer_adapter.cleanup_receiver(
+                    req.request_id,
+                )
             if req.request_id not in self.waiting_for_transfer_free:
                 if req.request_id in self.transfer_triggered_requests:
                     self.transfer_triggered_requests.remove(req.request_id)
