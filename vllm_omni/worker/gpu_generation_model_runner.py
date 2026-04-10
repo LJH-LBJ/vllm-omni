@@ -68,17 +68,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner):
             req_state = self.requests.get(req_id)
             assert req_state is not None
             _new_prompt = cached_reqs.prompt_token_ids.get(req_id) if _has_pt else None
-            _old_len = len(req_state.prompt_token_ids) if req_state.prompt_token_ids else 0
-            _new_len = len(_new_prompt) if _new_prompt else 0
-            _new_min = min(_new_prompt) if _new_prompt else None
-            _new_max = max(_new_prompt) if _new_prompt else None
-            _new_head = _new_prompt[:8] if _new_prompt else None
-            logger.info(
-                "[code2wav-urs] req=%s has_pt=%s old_len=%d new_len=%d "
-                "min=%s max=%s head=%s type=%s",
-                req_id, _has_pt, _old_len, _new_len,
-                _new_min, _new_max, _new_head, type(cached_reqs).__name__,
-            )
             req_state.prompt_token_ids = _new_prompt
             req_states.append(req_state)
             # Remove the request from the current input batch only if it is still present.
@@ -87,17 +76,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner):
         for req_state in req_states:
             # update the request state in self.input_batch
             self.input_batch.add_request(req_state)
-            # Verify token_ids_cpu after add_request
-            _ri = self.input_batch.req_id_to_index.get(req_state.req_id)
-            if _ri is not None and req_state.prompt_token_ids:
-                _pl = len(req_state.prompt_token_ids)
-                _cpu_slice = self.input_batch.token_ids_cpu[_ri, :min(_pl, 8)].tolist()
-                logger.info(
-                    "[code2wav-urs-verify] req=%s idx=%d prompt_len=%d "
-                    "cpu_head=%s prompt_head=%s",
-                    req_state.req_id, _ri, _pl,
-                    _cpu_slice, req_state.prompt_token_ids[:8],
-                )
             # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
             if self.uses_mrope:
                 self._init_mrope_positions(req_state)

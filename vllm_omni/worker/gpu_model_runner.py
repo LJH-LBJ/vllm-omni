@@ -519,21 +519,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                     if req_index is not None:
                         self.input_batch.num_prompt_tokens[req_index] = len(_new_ids)
 
-            # DIAG: check token_ids_cpu state before any writes in _update_states
-            if self._is_downstream_stage and req_index is not None and num_computed_tokens == 0:
-                _pl = len(req_state.prompt_token_ids) if req_state.prompt_token_ids else 0
-                _cpu_head = self.input_batch.token_ids_cpu[req_index, :min(_pl, 8)].tolist() if _pl > 0 else []
-                _nts = int(self.input_batch.num_tokens_no_spec[req_index])
-                logger.info(
-                    "[code2wav-us] req=%s idx=%d nc=%d nts=%d apc=%s sched_pt=%s "
-                    "prompt_len=%d cpu_head=%s prompt_head=%s",
-                    req_id, req_index, num_computed_tokens, _nts,
-                    _async_chunk_prompt_changed,
-                    _sched_prompt_ids is not None,
-                    _pl, _cpu_head,
-                    req_state.prompt_token_ids[:8] if req_state.prompt_token_ids and _pl >= 8 else None,
-                )
-
             if not is_last_rank:
                 start_token_index = num_computed_tokens
                 end_token_index = num_computed_tokens + len(new_token_ids)
@@ -545,20 +530,14 @@ class OmniGPUModelRunner(GPUModelRunner):
                     self.input_batch.num_tokens_no_spec[req_index]
                 )
             ):
-                # Async-chunk prompt changed — update token_ids_cpu.
-                # For AR talker stages the prompt is placeholder zeros,
-                # so zero-filling is sufficient.  For generation stages
-                # (e.g. code2wav) the prompt carries actual codec codes
-                # that must be written verbatim; the scheduler resets
-                # num_computed_tokens to 0 each chunk so the model
-                # re-processes the full (context + new) window.
+                # Async-chunk prompt update for downstream stages.
                 prompt_len = len(req_state.prompt_token_ids)
                 curr_nts = int(self.input_batch.num_tokens_no_spec[req_index])
                 fill_start = min(num_computed_tokens, curr_nts)
-                if num_computed_tokens == 0 and _async_chunk_prompt_changed:
-                    # Generation-mode: prompt was replaced wholesale.
-                    # Write the actual token ids so codec_embedding
-                    # receives correct codes instead of zeros.
+                if num_computed_tokens == 0:
+                    # Generation mode (code2wav): write actual codec codes.
+                    # num_computed_tokens==0 because the scheduler resets it each chunk;
+                    # AR mode never hits this (num_computed_tokens monotonically increases).
                     self.input_batch.token_ids_cpu[
                         req_index, :prompt_len
                     ] = req_state.prompt_token_ids
