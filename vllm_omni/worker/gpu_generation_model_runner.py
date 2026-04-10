@@ -88,14 +88,14 @@ class GPUGenerationModelRunner(OmniGPUModelRunner):
             # update the request state in self.input_batch
             self.input_batch.add_request(req_state)
             # Verify token_ids_cpu after add_request
-            _ri = self.input_batch.req_id_to_index.get(req_state.request_id)
+            _ri = self.input_batch.req_id_to_index.get(req_state.req_id)
             if _ri is not None and req_state.prompt_token_ids:
                 _pl = len(req_state.prompt_token_ids)
                 _cpu_slice = self.input_batch.token_ids_cpu[_ri, :min(_pl, 8)].tolist()
                 logger.info(
                     "[code2wav-urs-verify] req=%s idx=%d prompt_len=%d "
                     "cpu_head=%s prompt_head=%s",
-                    req_state.request_id, _ri, _pl,
+                    req_state.req_id, _ri, _pl,
                     _cpu_slice, req_state.prompt_token_ids[:8],
                 )
             # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
