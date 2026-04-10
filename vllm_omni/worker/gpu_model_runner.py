@@ -519,6 +519,21 @@ class OmniGPUModelRunner(GPUModelRunner):
                     if req_index is not None:
                         self.input_batch.num_prompt_tokens[req_index] = len(_new_ids)
 
+            # DIAG: check token_ids_cpu state before any writes in _update_states
+            if self._is_downstream_stage and req_index is not None and num_computed_tokens == 0:
+                _pl = len(req_state.prompt_token_ids) if req_state.prompt_token_ids else 0
+                _cpu_head = self.input_batch.token_ids_cpu[req_index, :min(_pl, 8)].tolist() if _pl > 0 else []
+                _nts = int(self.input_batch.num_tokens_no_spec[req_index])
+                logger.info(
+                    "[code2wav-us] req=%s idx=%d nc=%d nts=%d apc=%s sched_pt=%s "
+                    "prompt_len=%d cpu_head=%s prompt_head=%s",
+                    req_id, req_index, num_computed_tokens, _nts,
+                    _async_chunk_prompt_changed,
+                    _sched_prompt_ids is not None,
+                    _pl, _cpu_head,
+                    req_state.prompt_token_ids[:8] if req_state.prompt_token_ids and _pl >= 8 else None,
+                )
+
             if not is_last_rank:
                 start_token_index = num_computed_tokens
                 end_token_index = num_computed_tokens + len(new_token_ids)
