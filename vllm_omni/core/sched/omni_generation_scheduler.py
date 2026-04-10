@@ -310,7 +310,7 @@ class OmniGenerationScheduler(VLLMScheduler):
             scheduler_output.scheduled_new_reqs = new_list  # type: ignore[assignment]
 
             if self.chunk_transfer_adapter:
-                self.chunk_transfer_adapter.postprocess_scheduler_output(scheduler_output)
+                self.chunk_transfer_adapter.postprocess_scheduler_output(scheduler_output, self.requests)
 
         except Exception:
             # If anything goes wrong, leave the original output unchanged

@@ -595,31 +595,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if requests is not None:
             self.attach_cached_additional_information(scheduler_output, requests)
 
-        # --- DIAG: log what the scheduler is sending ---
-        new_reqs = getattr(scheduler_output, "scheduled_new_reqs", [])
-        for nr in (new_reqs or []):
-            rid = getattr(nr, "req_id", None)
-            nc = getattr(nr, "num_computed_tokens", "?")
-            plen = len(getattr(nr, "prompt_token_ids", []) or [])
-            logger.info(
-                "[DIAG-SCHED] NEW req=%s num_computed=%s prompt_len=%d",
-                rid, nc, plen,
-            )
-        cached = getattr(scheduler_output, "scheduled_cached_reqs", None)
-        if cached and getattr(cached, "req_ids", None):
-            nc_list = getattr(cached, "num_computed_tokens", [])
-            for idx, rid in enumerate(cached.req_ids):
-                nc_val = nc_list[idx] if idx < len(nc_list) else "?"
-                req = (requests or {}).get(rid)
-                req_nc = getattr(req, "num_computed_tokens", "?") if req else "?"
-                logger.info(
-                    "[DIAG-SCHED] CACHED req=%s snapshot_num_computed=%s "
-                    "live_req.num_computed=%s prompt_len=%d",
-                    rid, nc_val, req_nc,
-                    len(getattr(req, "prompt_token_ids", []) or []) if req else 0,
-                )
-        # --- END DIAG ---
-
         self._clear_chunk_ready(scheduler_output)
 
     @staticmethod

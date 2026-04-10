@@ -502,15 +502,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             if new_block_ids is not None:
                 self.input_batch.block_table.append_row(new_block_ids, req_index)
 
-            if self._is_downstream_stage:
-                logger.info(
-                    "[DIAG-WORKER] CACHED req=%s scheduler_num_computed=%d "
-                    "req_state.num_computed=%d req_index=%s in_batch=%s",
-                    req_id, num_computed_tokens,
-                    req_state.num_computed_tokens,
-                    req_index,
-                    req_index is not None,
-                )
             # Sync prompt_token_ids from scheduler for async-chunk
             # (downstream stages only; thinker prompt never changes).
             _sched_prompt_ids: dict | None = (
@@ -539,20 +530,29 @@ class OmniGPUModelRunner(GPUModelRunner):
                     self.input_batch.num_tokens_no_spec[req_index]
                 )
             ):
-                # Async-chunk prompt grew — zero-fill stale/placeholder
-                # values in token_ids_cpu to prevent OOB in codec_embedding.
+                # Async-chunk prompt changed — update token_ids_cpu.
+                # For AR talker stages the prompt is placeholder zeros,
+                # so zero-filling is sufficient.  For generation stages
+                # (e.g. code2wav) the prompt carries actual codec codes
+                # that must be written verbatim; the scheduler resets
+                # num_computed_tokens to 0 each chunk so the model
+                # re-processes the full (context + new) window.
                 prompt_len = len(req_state.prompt_token_ids)
                 curr_nts = int(self.input_batch.num_tokens_no_spec[req_index])
                 fill_start = min(num_computed_tokens, curr_nts)
-                logger.info(
-                    "[async_chunk] zero-filling token_ids_cpu[%d, %d:%d] for req=%s "
-                    "(num_computed=%d, num_tokens_no_spec=%d)",
-                    req_index, fill_start, prompt_len, req_id,
-                    num_computed_tokens, curr_nts,
-                )
-                self.input_batch.token_ids_cpu[
-                    req_index, fill_start:prompt_len
-                ] = 0
+                if num_computed_tokens == 0 and _async_chunk_prompt_changed:
+                    # Generation-mode: prompt was replaced wholesale.
+                    # Write the actual token ids so codec_embedding
+                    # receives correct codes instead of zeros.
+                    self.input_batch.token_ids_cpu[
+                        req_index, :prompt_len
+                    ] = req_state.prompt_token_ids
+                else:
+                    # AR-mode: prompt grew incrementally with
+                    # placeholders — zero-fill the new region.
+                    self.input_batch.token_ids_cpu[
+                        req_index, fill_start:prompt_len
+                    ] = 0
                 self.input_batch.num_tokens_no_spec[req_index] = prompt_len
 
             # Add spec_token_ids to token_ids_cpu.
