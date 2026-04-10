@@ -7,6 +7,7 @@ from typing import Any
 
 import torch
 from vllm.inputs import TextPrompt
+from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
 from vllm_omni.engine import OmniEngineCoreRequest
@@ -17,6 +18,8 @@ from vllm_omni.model_executor.stage_input_processors.tts_utils import (
     extract_speaker_from_prompt,
     extract_speaker_from_request,
 )
+
+logger = init_logger(__name__)
 
 
 def _compute_talker_prompt_ids_length(info, device: torch.device | str = "cuda") -> int:
@@ -348,6 +351,22 @@ def talker2code2wav_async_chunk(
         .reshape(-1)
         .tolist()
     )
+
+    if length <= 5 or length % 50 == 0 or is_finished:
+        code_min = min(codes) if codes else None
+        code_max = max(codes) if codes else None
+        logger.info(
+            "[code2wav-send] req=%s frames=%d emit_frames=%d left_ctx=%d codes_len=%d min=%s max=%s head=%s finished=%s",
+            request_id,
+            length,
+            end_index,
+            left_context_size,
+            len(codes),
+            code_min,
+            code_max,
+            codes[:8],
+            is_finished,
+        )
 
     info = {
         "code_predictor_codes": codes,

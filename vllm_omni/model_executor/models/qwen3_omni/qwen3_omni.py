@@ -430,6 +430,18 @@ class Qwen3OmniMoeForConditionalGeneration(
                         left_context_size.append(info["left_context_size"])
             else:
                 logger.debug("No additional_information provided to code2wav stage.")
+            code_min = int(codes.min().item()) if codes.numel() > 0 else -1
+            code_max = int(codes.max().item()) if codes.numel() > 0 else -1
+            code_head = codes[0, :, 0].tolist() if codes.ndim == 3 and codes.shape[-1] > 0 else []
+            logger.info(
+                "[code2wav-model] codes_shape=%s seq_token_counts=%s left_ctx=%s min=%d max=%d first_frame=%s",
+                tuple(codes.shape),
+                seq_token_counts,
+                left_context_size,
+                code_min,
+                code_max,
+                code_head,
+            )
             audio_tensors = self.generate_audio(codes, left_context_size, seq_token_counts)
 
             return audio_tensors

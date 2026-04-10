@@ -401,6 +401,18 @@ class GPUGenerationModelRunner(OmniGPUModelRunner):
         # [Omni] Copy req_id mappings to avoid async scheduling mutation.
         req_ids_output_copy = self.input_batch.req_ids.copy()
         req_id_to_index_output_copy = self.input_batch.req_id_to_index.copy()
+        if pooler_output:
+            first_output = pooler_output[0].get("model_outputs") if isinstance(pooler_output[0], dict) else None
+            if isinstance(first_output, torch.Tensor):
+                audio_tensor = first_output.float()
+                logger.info(
+                    "[code2wav-out] req=%s shape=%s mean=%.6f std=%.6f max_abs=%.6f",
+                    req_ids_output_copy[0] if req_ids_output_copy else "?",
+                    tuple(audio_tensor.shape),
+                    float(audio_tensor.mean().item()),
+                    float(audio_tensor.std().item()) if audio_tensor.numel() > 1 else 0.0,
+                    float(audio_tensor.abs().max().item()),
+                )
         output = OmniModelRunnerOutput(
             req_ids=req_ids_output_copy,
             req_id_to_index=req_id_to_index_output_copy,
