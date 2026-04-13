@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -252,6 +251,11 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
             wav_chunk = batch_wav[
                 idx, :, left_context_size[idx] * self.total_upsample : code_seq_len * self.total_upsample
             ]
+            # # Remove context from output (left_context_size * total_upsample samples).
+            # start_sample = left_context_size[idx] * self.total_upsample
+            # end_sample = max(start_sample, code_seq_len * self.total_upsample)
+            # end_sample = min(end_sample, batch_wav.shape[-1])
+            # wav_chunk = batch_wav[idx, :, start_sample:end_sample]
             wavs.append(wav_chunk)
         return wavs
 

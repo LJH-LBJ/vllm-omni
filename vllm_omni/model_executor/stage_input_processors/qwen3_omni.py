@@ -7,6 +7,7 @@ from typing import Any
 
 import torch
 from vllm.inputs import TextPrompt
+from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
 from vllm_omni.engine import OmniEngineCoreRequest
@@ -17,6 +18,8 @@ from vllm_omni.model_executor.stage_input_processors.tts_utils import (
     extract_speaker_from_prompt,
     extract_speaker_from_request,
 )
+
+logger = init_logger(__name__)
 
 
 def _compute_talker_prompt_ids_length(info, device: torch.device | str = "cuda") -> int:
@@ -104,6 +107,9 @@ def thinker2talker_async_chunk(
 
     request_id = request.external_req_id
     chunk_id = transfer_manager.put_req_chunk[request_id]
+    output_token_ids = request.output_token_ids
+    # Convert ConstantList to regular list for OmniSerializer serialization
+    output_token_ids = _ensure_list(output_token_ids)
     if chunk_id == 0:
         all_token_ids = request.all_token_ids  # prefill + decode
         prompt_token_ids = request.prompt_token_ids
@@ -111,6 +117,7 @@ def thinker2talker_async_chunk(
         all_token_ids = _ensure_list(all_token_ids)
         prompt_token_ids = _ensure_list(prompt_token_ids)
         talker_additional_info = {
+            "request_id": request_id,
             "thinker_prefill_embeddings": pooling_output.get("0").detach().cpu(),
             "thinker_hidden_states": pooling_output.get("24").detach().cpu(),
             "thinker_sequences": all_token_ids,
@@ -145,29 +152,44 @@ def thinker2talker_async_chunk(
                 dim=0,
             )
     else:
-        output_token_ids = request.output_token_ids
-        # Convert ConstantList to regular list for OmniSerializer serialization
-        output_token_ids = _ensure_list(output_token_ids)
-
         talker_additional_info = {
+            "request_id": request_id,
             "finished": torch.tensor(is_finished, dtype=torch.bool),
         }
-        speaker = extract_speaker_from_request(request)
-        if speaker is not None:
-            talker_additional_info["speaker"] = speaker
-        language = extract_language_from_request(request)
-        if language is not None:
-            talker_additional_info["language"] = language
+        embeds = pooling_output.get("0")
+        hidden_states = pooling_output.get("24")
+        chunk_total = int(embeds.shape[0]) if isinstance(embeds, torch.Tensor) else 0
+        num_decode_tokens = len(output_token_ids) if output_token_ids else 0
+        num_prefill_tokens = max(0, chunk_total - num_decode_tokens)
+
+        # When a step mixes last prefill + first decode, send prefill part so Stage-1
+        # can merge it into the buffer; otherwise the last prefill chunk is lost.
+        if num_prefill_tokens > 0 and isinstance(embeds, torch.Tensor) and isinstance(hidden_states, torch.Tensor):
+            talker_additional_info["thinker_prefill_embeddings"] = embeds[:num_prefill_tokens].detach().cpu()
+            talker_additional_info["thinker_hidden_states"] = hidden_states[:num_prefill_tokens].detach().cpu()
 
         if output_token_ids:
-            talker_additional_info["override_keys"] = ["thinker_decode_embeddings", "thinker_output_token_ids"]
-            talker_additional_info["thinker_decode_embeddings"] = pooling_output.get("0").detach().cpu()
+            talker_additional_info["override_keys"] = [
+                "thinker_decode_embeddings",
+                "thinker_output_token_ids",
+                "thinker_decode_hidden_states",
+            ]
+            # Only the decode rows go to thinker_decode_embeddings
+            if num_decode_tokens > 0 and isinstance(embeds, torch.Tensor):
+                talker_additional_info["thinker_decode_embeddings"] = embeds[num_prefill_tokens:].detach().cpu()
+                if isinstance(hidden_states, torch.Tensor):
+                    talker_additional_info["thinker_decode_hidden_states"] = (
+                        hidden_states[num_prefill_tokens:].detach().cpu()
+                    )
+            else:
+                talker_additional_info["thinker_decode_embeddings"] = embeds.detach().cpu()
+                if isinstance(hidden_states, torch.Tensor):
+                    talker_additional_info["thinker_decode_hidden_states"] = hidden_states.detach().cpu()
             talker_additional_info["thinker_output_token_ids"] = output_token_ids
-        else:
-            # When prefilling a chunked thinker, thinker_hidden_states needs to be updated.
-            talker_additional_info["thinker_prefill_embeddings"] = pooling_output.get("0").detach().cpu()
-            talker_additional_info["thinker_hidden_states"] = pooling_output.get("24").detach().cpu()
-
+        elif num_prefill_tokens > 0 and isinstance(embeds, torch.Tensor) and isinstance(hidden_states, torch.Tensor):
+            # Pure prefill continuation (no decode yet): whole chunk is prefill
+            talker_additional_info["thinker_prefill_embeddings"] = embeds.detach().cpu()
+            talker_additional_info["thinker_hidden_states"] = hidden_states.detach().cpu()
     return talker_additional_info
 
 
@@ -259,6 +281,7 @@ def talker2code2wav_async_chunk(
     chunk_size_config = int(cfg.get("codec_chunk_frames", 25))
     left_context_size_config = int(cfg.get("codec_left_context_frames", 25))
 
+    request_id = request.external_req_id
     code_predictor_codes = pooling_output["code_predictor_codes"]
 
     if code_predictor_codes is None:
@@ -282,7 +305,6 @@ def talker2code2wav_async_chunk(
     if sum(codec_codes) == 0:
         return None
 
-    request_id = request.external_req_id
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
     length = len(transfer_manager.code_prompt_token_ids[request_id])
     chunk_length = length % chunk_size_config

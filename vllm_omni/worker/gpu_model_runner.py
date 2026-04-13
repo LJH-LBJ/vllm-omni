@@ -1228,6 +1228,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             # Overlay custom prompt_embeds per request for the prompt portion;
             # collect additional_information (tensor/list) for prefill portion only
             decode_req_ids = []
+            preprocess_seg_lens = []
             for req_index, req_id in enumerate(self.input_batch.req_ids):
                 req_infos = self.model_intermediate_buffer.get(req_id, {})
 
@@ -1245,14 +1246,21 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
                 )
-                if inputs_embeds is None:
+                # Only allocate from req_embeds when we have content (correct embed dim).
+                # When this round is system-only for talker, req_embeds may be empty [0, D]
+                # with thinker dim D; the buffer uses talker dim, so do not overwrite.
+                if inputs_embeds is None and req_embeds.shape[0] > 0:
                     inputs_embeds = torch.empty(
                         (input_ids.shape[0], req_embeds.shape[-1]),
                         device=req_embeds.device,
                         dtype=req_embeds.dtype,
                     )
 
-                if self.has_talker_mtp and span_len == 1:
+                seg_len = min(span_len, req_embeds.shape[0])
+                preprocess_seg_lens.append(seg_len)
+
+                # Only run MTP decode when we have real content (span_len==1 and non-empty).
+                if self.has_talker_mtp and span_len == 1 and seg_len > 0:
                     last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
                     decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
                     self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
@@ -1264,11 +1272,23 @@ class OmniGPUModelRunner(GPUModelRunner):
                 # TODO(Peiqi): the merge stage could move out from the critical path
                 self._merge_additional_information_update(req_id, update_dict)
 
-                # update the inputs_embeds and input_ids
-                seg_len = min(span_len, req_embeds.shape[0])
-                inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
-                if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
-                    input_ids[s : s + seg_len] = req_input_ids
+                # Update inputs_embeds/input_ids only when this request produced content.
+                # When seg_len==0 (system-only chunk), skip assignment to avoid dtype/dim
+                # mismatch (req_embeds may be thinker-dim, buffer is talker-dim).
+                if seg_len > 0:
+                    inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
+                    if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
+                        input_ids[s : s + seg_len] = req_input_ids
+                else:
+                    # System-only chunk: fill buffer positions with safe values
+                    # so the model forward doesn't crash on uninitialized memory.
+                    if inputs_embeds is not None:
+                        inputs_embeds[s:e].zero_()
+                    input_ids[s:e].zero_()
+
+            self._preprocess_seg_lens = preprocess_seg_lens
+            # If this round had only system segments for talker, skip model forward.
+            self._talker_skip_forward = all(seg_len == 0 for seg_len in preprocess_seg_lens)
 
             # run talker mtp decode
             if self.has_talker_mtp:
