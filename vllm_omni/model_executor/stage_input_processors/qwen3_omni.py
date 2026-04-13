@@ -300,19 +300,10 @@ def talker2code2wav_async_chunk(
             logger.warning("code_predictor_codes is empty 1")
             return None
 
-    if isinstance(code_predictor_codes, torch.Tensor):
-        # TODO: high concurrency issue here, need to fix it
-        if not code_predictor_codes.any():
-            logger.warning("code_predictor_codes is empty 2")
-            return None
-    else:
-        code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
-        if not code_tensor.any():
-            return None
-
+    # TODO: high concurrency issue here, need to fix it
+    # Removed .any() and sum()==0 checks that incorrectly discarded legitimate
+    # all-zero codec frames (index 0 is a valid codebook entry).
     codec_codes = code_predictor_codes.to(torch.long).transpose(0, 1).cpu().to(torch.long).reshape(-1).tolist()
-    if sum(codec_codes) == 0:
-        return None
 
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
     length = len(transfer_manager.code_prompt_token_ids[request_id])
