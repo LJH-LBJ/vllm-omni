@@ -206,8 +206,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             self.thinker.make_empty_intermediate_tensors if self.model_stage == "thinker" else lambda: None
         )
 
-        self.chunk_segment_info = {}
-
     @classmethod
     async def buffer_realtime_audio(
         cls,
