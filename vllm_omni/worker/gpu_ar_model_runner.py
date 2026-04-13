@@ -192,6 +192,19 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 get_kv_transfer_group().handle_preemptions(kv_connector_metadata)
 
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
+
+        # --- DIAG: prev_map status BEFORE _update_states ---
+        if self._is_downstream_stage:
+            _diag_prev_map_pre = self.input_batch.prev_req_id_to_index
+            _diag_prev_sampled_pre = (
+                self.input_batch.prev_sampled_token_ids is not None
+            )
+            logger.info(
+                "[exec-start-diag] prev_map=%s has_prev_sampled=%s num_reqs=%d",
+                _diag_prev_map_pre, _diag_prev_sampled_pre,
+                self.input_batch.num_reqs,
+            )
+
         with (
             record_function_or_nullcontext("gpu_model_runner: preprocess"),
             self.synchronize_input_prep(),
@@ -652,6 +665,25 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 hidden_states,
                 scheduler_output.total_num_scheduled_tokens,
                 spec_decode_metadata,
+            )
+
+        # --- DIAG: prev_map status AFTER _bookkeeping_sync ---
+        if self._is_downstream_stage:
+            _num_reqs = self.input_batch.num_reqs
+            _diag_discard = self.discard_request_mask.np[:_num_reqs].tolist()
+            _diag_prev_map_post = self.input_batch.prev_req_id_to_index
+            _diag_has_prev_sampled = self.input_batch.prev_sampled_token_ids is not None
+            # Also log CachedRequestState.num_tokens and optimistic_seq_lens
+            _diag_num_tokens = [
+                self.requests[r].num_tokens
+                for r in self.input_batch.req_ids[:_num_reqs]
+            ]
+            _diag_opt_sl = self.optimistic_seq_lens_cpu[:_num_reqs].tolist()
+            logger.info(
+                "[bookkeep-diag] discard=%s prev_map=%s has_prev_sampled=%s "
+                "invalid=%s num_tokens=%s opt_sl=%s",
+                _diag_discard, _diag_prev_map_post, _diag_has_prev_sampled,
+                invalid_req_indices, _diag_num_tokens, _diag_opt_sl,
             )
 
         if propose_drafts_after_bookkeeping:
