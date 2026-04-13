@@ -1378,6 +1378,21 @@ class Qwen3OmniMoeForConditionalGeneration(
             if self.suppressed_tokens.device != logits.device:
                 self.suppressed_tokens = self.suppressed_tokens.to(logits.device)
             logits.masked_fill_(self.suppressed_tokens.unsqueeze(0), -1e9)
+            # Diagnostic: log top-5 logit values and hidden_states stats
+            if logits.shape[0] <= 4:
+                _top5 = torch.topk(logits[-1], 5)
+                _hs = hidden_states[-1] if hidden_states.ndim >= 2 else hidden_states
+                logger.info(
+                    "[talker-logits-diag] logits_shape=%s top5_ids=%s top5_vals=%s "
+                    "hs_mean=%.4f hs_std=%.4f hs_absmax=%.4f temp=%s",
+                    list(logits.shape),
+                    _top5.indices.tolist(),
+                    [f"{v:.2f}" for v in _top5.values.tolist()],
+                    float(hidden_states.float().mean()),
+                    float(hidden_states.float().std()),
+                    float(hidden_states.float().abs().max()),
+                    sampling_metadata.temperature.tolist() if sampling_metadata is not None and sampling_metadata.temperature is not None else None,
+                )
         return logits
 
     def sample(
