@@ -533,13 +533,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                 # Async-chunk prompt update for downstream stages.
                 prompt_len = len(req_state.prompt_token_ids)
                 curr_nts = int(self.input_batch.num_tokens_no_spec[req_index])
-                logger.info(
-                    "[update-states-diag] req=%s nct=%d nts=%d prompt_len=%d "
-                    "changed=%s cpu_at_nct=%d",
-                    req_id, num_computed_tokens, curr_nts, prompt_len,
-                    _async_chunk_prompt_changed,
-                    int(self.input_batch.token_ids_cpu[req_index, num_computed_tokens]),
-                )
                 if num_computed_tokens == 0:
                     # Generation mode (code2wav): write actual codec codes.
                     # num_computed_tokens==0 because the scheduler resets it each chunk;
@@ -1327,24 +1320,6 @@ class OmniGPUModelRunner(GPUModelRunner):
 
                 # call the custom process function
                 embed_slice = inputs_embeds[s:e] if inputs_embeds is not None else None
-                # --- DIAG: log input_ids slice before preprocess ---
-                if self._is_downstream_stage and sched_tokens == 1:
-                    _diag_ids = input_ids[s:e].detach().cpu().tolist()
-                    _diag_prev = (
-                        self.input_batch.prev_sampled_token_ids[:1, 0].cpu().tolist()
-                        if self.input_batch.prev_sampled_token_ids is not None
-                        else "None"
-                    )
-                    _diag_nct = int(self.input_batch.num_computed_tokens_cpu[req_index])
-                    _diag_nts = int(self.input_batch.num_tokens_no_spec[req_index])
-                    _diag_cpu_val = int(self.input_batch.token_ids_cpu[req_index, _diag_nct])
-                    _diag_prev_map = self.input_batch.prev_req_id_to_index
-                    logger.info(
-                        "[preprocess-diag] req=%s s=%d ids=%s prev_sampled=%s "
-                        "nct=%d nts=%d cpu_at_nct=%d prev_map=%s",
-                        req_id, s, _diag_ids, _diag_prev, _diag_nct, _diag_nts, _diag_cpu_val,
-                        _diag_prev_map,
-                    )
 
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
@@ -1414,14 +1389,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
             req_embeds, code_predictor_codes = self.talker_mtp(req_input_ids, req_embeds, last_talker_hidden, text_step)
-        # Diagnostic: log MTP input token and resulting codebook-0
-        if decode_batch_size > 0:
-            _mtp_ids = req_input_ids[:decode_batch_size].detach().cpu().tolist()
-            _cb0 = code_predictor_codes[:decode_batch_size, 0].detach().cpu().tolist()
-            logger.info(
-                "[talker-mtp-diag] input_ids=%s codebook0=%s codes_shape=%s",
-                _mtp_ids, _cb0, list(code_predictor_codes.shape),
-            )
         # code_predictor_codes stays on GPU here; _update_intermediate_buffer
         # keeps it device-resident when the key is in gpu_resident_buffer_keys.
         # D2H is deferred to sample_tokens where hidden_states.to("cpu") already

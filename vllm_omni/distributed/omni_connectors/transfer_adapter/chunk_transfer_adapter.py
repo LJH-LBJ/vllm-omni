@@ -643,6 +643,26 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     continue
                 if request.request_id in self.finished_requests:
                     continue
+                # AR decode-phase requests no longer need upstream chunks.
+                # Removing them from the queue would cause the base
+                # scheduler to miss them, leading to a remove/re-add
+                # cycle in _update_states that destroys
+                # prev_req_id_to_index and breaks async input_ids
+                # scatter (input_ids stuck at 0 → audio noise).
+                if (
+                    self.model_mode == "ar"
+                    and request.request_id
+                    not in self._chunked_prefill_reqs
+                ):
+                    num_comp = getattr(
+                        request, "num_computed_tokens", 0
+                    )
+                    num_prompt = len(
+                        getattr(request, "prompt_token_ids", None)
+                        or []
+                    )
+                    if num_comp >= num_prompt > 0:
+                        continue
                 # Requests that waiting for chunk
                 self.load_async(request)
                 request.status = RequestStatus.WAITING_FOR_CHUNK

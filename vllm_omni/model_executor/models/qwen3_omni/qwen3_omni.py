@@ -505,14 +505,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                 logger.warning_once("runtime_additional_information is deprecated, use model_intermediate_buffer")
             code_predictor_codes = [info.get("code_predictor_codes") for info in info_dicts]
             multimodal_outputs = {"code_predictor_codes": torch.cat(code_predictor_codes, dim=0)}
-            # Diagnostic: log code_predictor_codes details from buffer
-            _merged = multimodal_outputs["code_predictor_codes"]
-            if _merged.numel() > 0:
-                _cb0_vals = _merged[:, 0].tolist() if _merged.ndim >= 2 else _merged.tolist()
-                logger.info(
-                    "[talker-output-diag] shape=%s codebook0=%s dtype=%s device=%s",
-                    list(_merged.shape), _cb0_vals, _merged.dtype, _merged.device,
-                )
             span_len = multimodal_outputs["code_predictor_codes"].shape[0]
             talker_hidden = talker_hidden[:span_len]
             return OmniOutput(text_hidden_states=talker_hidden, multimodal_outputs=multimodal_outputs)
@@ -1144,20 +1136,10 @@ class Qwen3OmniMoeForConditionalGeneration(
         thinker_decode_embed = info_dict.get("thinker_decode_embeddings", None)
         start_index = info_dict.get("num_processed_tokens", 0)
         thinker_output_token_ids = info_dict.get("thinker_output_token_ids", [])
-        logger.info(
-            "[thinker2talker-decode] start_index=%d thinker_out_len=%d "
-            "cached_embeds=%s new_embed=%s finished_flag=%s",
-            start_index, len(thinker_output_token_ids),
-            cached_thinker_decode_embeds.shape if isinstance(cached_thinker_decode_embeds, torch.Tensor) else "None",
-            thinker_decode_embed.shape if isinstance(thinker_decode_embed, torch.Tensor) else "None",
-            info_dict.get("finished_flag"),
-        )
         if start_index >= len(thinker_output_token_ids) - 1:
             if info_dict.get("finished_flag"):
-                logger.info("[thinker2talker-decode] returning tts_pad_embed (already finished)")
                 return self.tts_pad_embed.to(device)
             update_dict["finished_flag"] = True
-            logger.info("[thinker2talker-decode] returning tts_eos_embed (first finish)")
             return self.tts_eos_embed.to(device)
 
         if cached_thinker_decode_embeds is not None and start_index < cached_thinker_decode_embeds.shape[0]:
@@ -1388,21 +1370,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             if self.suppressed_tokens.device != logits.device:
                 self.suppressed_tokens = self.suppressed_tokens.to(logits.device)
             logits.masked_fill_(self.suppressed_tokens.unsqueeze(0), -1e9)
-            # Diagnostic: log top-5 logit values and hidden_states stats
-            if logits.shape[0] <= 4:
-                _top5 = torch.topk(logits[-1], 5)
-                _hs = hidden_states[-1] if hidden_states.ndim >= 2 else hidden_states
-                logger.info(
-                    "[talker-logits-diag] logits_shape=%s top5_ids=%s top5_vals=%s "
-                    "hs_mean=%.4f hs_std=%.4f hs_absmax=%.4f temp=%s",
-                    list(logits.shape),
-                    _top5.indices.tolist(),
-                    [f"{v:.2f}" for v in _top5.values.tolist()],
-                    float(hidden_states.float().mean()),
-                    float(hidden_states.float().std()),
-                    float(hidden_states.float().abs().max()),
-                    sampling_metadata.temperature.tolist() if sampling_metadata is not None and sampling_metadata.temperature is not None else None,
-                )
         return logits
 
     def sample(
