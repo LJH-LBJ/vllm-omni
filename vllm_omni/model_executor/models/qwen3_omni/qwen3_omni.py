@@ -754,8 +754,15 @@ class Qwen3OmniMoeForConditionalGeneration(
     def talker_preprocess_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         # Containers to return per-request updates (e.g., code_predictor_hidden_per_request)
         update_dict: dict[str, dict] = {}
-        # TODO(Peiqi): add voice_type support
-        voice_type = self.voice_type
+
+        voice_type = info_dict.get("speaker")
+        if voice_type is not None and isinstance(voice_type, (list, tuple)) and len(voice_type) > 0:
+            voice_type = voice_type[0]
+        if not isinstance(voice_type, str) or not voice_type.strip():
+            # Fall back to model default; speaker is per-request.
+            voice_type = self.default_tts_text_spk_type
+        else:
+            voice_type = str(voice_type).lower().strip()
         request_id = info_dict.get("request_id")
         start_index = info_dict.get("num_processed_tokens", 0)
         end_index = start_index + input_embeds.shape[0]
