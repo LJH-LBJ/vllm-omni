@@ -238,6 +238,20 @@ class GPUARModelRunner(OmniGPUModelRunner):
             max_num_scheduled_tokens = int(num_scheduled_tokens_np.max())
             num_tokens_unpadded = scheduler_output.total_num_scheduled_tokens
 
+            # For downstream stages (e.g. talker), preprocess injects
+            # extra embedding positions into the KV cache, causing
+            # num_computed_tokens (nct) to outpace num_tokens_no_spec
+            # (nts).  This makes discard_request_mask=True, which
+            # breaks _bookkeeping_sync (tokens never recorded) and
+            # _prepare_input_ids (scatter skipped).  Align nts to nct
+            # so the bookkeeping pipeline works normally.
+            if self._is_downstream_stage:
+                for _i in range(num_reqs):
+                    _nts = int(self.input_batch.num_tokens_no_spec[_i])
+                    _nct = int(self.input_batch.num_computed_tokens_cpu[_i])
+                    if _nts < _nct:
+                        self.input_batch.num_tokens_no_spec[_i] = _nct
+
             logits_indices, spec_decode_metadata = self._prepare_inputs(
                 scheduler_output,
                 num_scheduled_tokens_np,
