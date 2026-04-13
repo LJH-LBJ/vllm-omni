@@ -643,12 +643,17 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     continue
                 if request.request_id in self.finished_requests:
                     continue
-                # AR decode-phase requests no longer need upstream chunks.
-                # Removing them from the queue would cause the base
-                # scheduler to miss them, leading to a remove/re-add
-                # cycle in _update_states that destroys
-                # prev_req_id_to_index and breaks async input_ids
-                # scatter (input_ids stuck at 0 → audio noise).
+                # AR decode-phase requests no longer need upstream chunks
+                # for scheduling purposes.  Removing them from the queue
+                # would cause the base scheduler to miss them, leading to
+                # a remove/re-add cycle in _update_states that destroys
+                # prev_req_id_to_index and breaks async input_ids scatter
+                # (input_ids stuck at 0 → audio noise).
+                # We gate on thinker_prefill_complete to avoid skipping
+                # requests that have consumed the *current* partial chunk
+                # but still need more prefill chunks from the thinker.
+                # load_async is still called so the recv loop continues
+                # polling for thinker decode embeddings.
                 if (
                     self.model_mode == "ar"
                     and request.request_id
@@ -662,7 +667,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         or []
                     )
                     if num_comp >= num_prompt > 0:
-                        continue
+                        info = getattr(
+                            request, "additional_information", None
+                        )
+                        if isinstance(info, dict) and info.get(
+                            "thinker_prefill_complete", False
+                        ):
+                            self.load_async(request)
+                            continue
                 # Requests that waiting for chunk
                 self.load_async(request)
                 request.status = RequestStatus.WAITING_FOR_CHUNK
