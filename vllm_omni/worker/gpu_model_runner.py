@@ -1369,12 +1369,15 @@ class OmniGPUModelRunner(GPUModelRunner):
                 # because num_computed_tokens (attention positions) and
                 # num_tokens_no_spec (real token slots) diverge after
                 # preprocess injects embeddings.  Overwrite with the
-                # actual previous sampled token from GPU cache. ---
+                # actual previous sampled token from GPU cache, and
+                # clear embed_slice so that preprocess recomputes the
+                # embedding from the corrected input_ids. ---
                 if (self._is_downstream_stage
                         and sched_tokens == 1
                         and self.input_batch.prev_sampled_token_ids is not None):
                     _prev_tok = self.input_batch.prev_sampled_token_ids[req_index, 0]
                     input_ids[s] = _prev_tok
+                    embed_slice = None  # force preprocess to re-embed
                     logger.info(
                         "[input-ids-fix] req=%s overwrite input_ids[%d] with %d",
                         req_id, s, int(_prev_tok),
