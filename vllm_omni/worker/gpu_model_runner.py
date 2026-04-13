@@ -502,6 +502,20 @@ class OmniGPUModelRunner(GPUModelRunner):
             if new_block_ids is not None:
                 self.input_batch.block_table.append_row(new_block_ids, req_index)
 
+            # For downstream AR stages (e.g. talker), the scheduler's
+            # num_computed_tokens tracks attention positions (including
+            # injected embeddings), while num_tokens_no_spec only tracks
+            # real token slots in token_ids_cpu.  These can diverge
+            # massively (e.g. nts=200 vs nct=1752) because preprocess
+            # replaces most token IDs with embeddings.
+            # _bookkeeping_sync writes sampled tokens at nts, but
+            # _prepare_inputs reads at nct.  Align nts to nct so the
+            # two stay in lock-step during decode.
+            if self._is_downstream_stage:
+                _cur_nts = int(self.input_batch.num_tokens_no_spec[req_index])
+                if _cur_nts < num_computed_tokens:
+                    self.input_batch.num_tokens_no_spec[req_index] = num_computed_tokens
+
             # Sync prompt_token_ids from scheduler for async-chunk
             # (downstream stages only; thinker prompt never changes).
             _sched_prompt_ids: dict | None = (
@@ -1338,10 +1352,12 @@ class OmniGPUModelRunner(GPUModelRunner):
                     _diag_nct = int(self.input_batch.num_computed_tokens_cpu[req_index])
                     _diag_nts = int(self.input_batch.num_tokens_no_spec[req_index])
                     _diag_cpu_val = int(self.input_batch.token_ids_cpu[req_index, _diag_nct])
+                    _diag_prev_map = self.input_batch.prev_req_id_to_index
                     logger.info(
                         "[preprocess-diag] req=%s s=%d ids=%s prev_sampled=%s "
-                        "nct=%d nts=%d cpu_at_nct=%d",
+                        "nct=%d nts=%d cpu_at_nct=%d prev_map=%s",
                         req_id, s, _diag_ids, _diag_prev, _diag_nct, _diag_nts, _diag_cpu_val,
+                        _diag_prev_map,
                     )
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
