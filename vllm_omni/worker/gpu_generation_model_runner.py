@@ -288,14 +288,19 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
                 defer_finalize=defer_kv_connector_finalize,
             ) as kv_connector_output,
         ):
-            outputs = self._run_generation_model(
-                input_ids=input_ids,
-                positions=positions,
-                intermediate_tensors=intermediate_tensors,
-                inputs_embeds=inputs_embeds,
-                model_kwargs=model_kwargs,
-                logits_indices=logits_indices,
-            )
+            # Skip talker forward when this round had only system segments (nothing to handle).
+            if getattr(self, "_talker_skip_forward", False):
+                outputs = torch.tensor([], device=self.device)
+                self._talker_skip_forward = False
+            else:
+                outputs = self._run_generation_model(
+                    input_ids=input_ids,
+                    positions=positions,
+                    intermediate_tensors=intermediate_tensors,
+                    inputs_embeds=inputs_embeds,
+                    model_kwargs=model_kwargs,
+                    logits_indices=logits_indices,
+                )
 
         _, multimodal_outputs = self.extract_multimodal_outputs(outputs)
         self.execute_model_state = ExecuteModelState(
@@ -310,6 +315,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: pass slot_mappings for upstream v1 API compatibility
+            actual_num_computed_tokens=self.input_batch.num_computed_tokens_cpu[:num_reqs],
         )
         self.kv_connector_output = kv_connector_output
 
@@ -356,6 +362,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: unpack slot_mappings for upstream v1 API compatibility
+            actual_num_computed_tokens,
         ) = self.execute_model_state
         self.execute_model_state = None
 
