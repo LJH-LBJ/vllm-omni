@@ -533,7 +533,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                 # Async-chunk prompt update for downstream stages.
                 prompt_len = len(req_state.prompt_token_ids)
                 curr_nts = int(self.input_batch.num_tokens_no_spec[req_index])
-                fill_start = min(num_computed_tokens, curr_nts)
                 if num_computed_tokens == 0:
                     # Generation mode (code2wav): write actual codec codes.
                     # num_computed_tokens==0 because the scheduler resets it each chunk;
@@ -543,11 +542,30 @@ class OmniGPUModelRunner(GPUModelRunner):
                     ] = req_state.prompt_token_ids
                 else:
                     # AR-mode: prompt grew incrementally with
-                    # placeholders — zero-fill the new region.
-                    self.input_batch.token_ids_cpu[
-                        req_index, fill_start:prompt_len
-                    ] = 0
-                self.input_batch.num_tokens_no_spec[req_index] = prompt_len
+                    # placeholders — zero-fill only the genuinely new
+                    # region beyond curr_nts so that sampled decode
+                    # tokens (at positions < curr_nts) are preserved.
+                    fill_start = max(curr_nts, num_computed_tokens)
+                    if fill_start < prompt_len:
+                        self.input_batch.token_ids_cpu[
+                            req_index, fill_start:prompt_len
+                        ] = 0
+                    # _bookkeeping_sync writes output tokens at
+                    # num_tokens_no_spec (end of grown prompt), but
+                    # _prepare_inputs reads at num_computed_tokens
+                    # (original prompt offset + decode step).
+                    # Restore all output tokens at their correct
+                    # decode positions so _prepare_inputs finds them.
+                    output_toks = req_state.output_token_ids
+                    if output_toks:
+                        decode_start = num_computed_tokens - len(output_toks)
+                        for k, tok in enumerate(output_toks):
+                            self.input_batch.token_ids_cpu[
+                                req_index, decode_start + k
+                            ] = tok
+                self.input_batch.num_tokens_no_spec[req_index] = max(
+                    prompt_len, curr_nts
+                )
 
             # Add spec_token_ids to token_ids_cpu.
             self.input_batch.update_req_spec_token_ids(req_state, scheduled_spec_tokens)
