@@ -514,6 +514,10 @@ class OmniGPUModelRunner(GPUModelRunner):
             if self._is_downstream_stage:
                 _cur_nts = int(self.input_batch.num_tokens_no_spec[req_index])
                 if _cur_nts < num_computed_tokens:
+                    logger.info(
+                        "[nts-align] req=%s nts %d -> %d (nct=%d)",
+                        req_id, _cur_nts, num_computed_tokens, num_computed_tokens,
+                    )
                     self.input_batch.num_tokens_no_spec[req_index] = num_computed_tokens
 
             # Sync prompt_token_ids from scheduler for async-chunk
@@ -1359,6 +1363,23 @@ class OmniGPUModelRunner(GPUModelRunner):
                         req_id, s, _diag_ids, _diag_prev, _diag_nct, _diag_nts, _diag_cpu_val,
                         _diag_prev_map,
                     )
+
+                # --- FIX: For downstream stages during decode, input_ids
+                # from _prepare_inputs reads token_ids_cpu[nct] which is 0
+                # because num_computed_tokens (attention positions) and
+                # num_tokens_no_spec (real token slots) diverge after
+                # preprocess injects embeddings.  Overwrite with the
+                # actual previous sampled token from GPU cache. ---
+                if (self._is_downstream_stage
+                        and sched_tokens == 1
+                        and self.input_batch.prev_sampled_token_ids is not None):
+                    _prev_tok = self.input_batch.prev_sampled_token_ids[req_index, 0]
+                    input_ids[s] = _prev_tok
+                    logger.info(
+                        "[input-ids-fix] req=%s overwrite input_ids[%d] with %d",
+                        req_id, s, int(_prev_tok),
+                    )
+
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
                 )
