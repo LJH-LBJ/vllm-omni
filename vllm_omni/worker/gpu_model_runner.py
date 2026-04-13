@@ -540,32 +540,28 @@ class OmniGPUModelRunner(GPUModelRunner):
                     self.input_batch.token_ids_cpu[
                         req_index, :prompt_len
                     ] = req_state.prompt_token_ids
+                    self.input_batch.num_tokens_no_spec[req_index] = max(
+                        prompt_len, curr_nts
+                    )
                 else:
-                    # AR-mode: prompt grew incrementally with
-                    # placeholders — zero-fill only the genuinely new
-                    # region beyond curr_nts so that sampled decode
-                    # tokens (at positions < curr_nts) are preserved.
+                    # AR-mode (talker): prompt grew but decode is ongoing.
+                    # Zero-fill the genuinely new region so that future
+                    # chunked-prefill reads clean placeholders.
+                    #
+                    # CRITICAL: do NOT inflate num_tokens_no_spec to
+                    # prompt_len. _bookkeeping_sync writes the sampled
+                    # token at num_tokens_no_spec and _prepare_inputs
+                    # reads at num_computed_tokens.  For last-rank AR
+                    # stages these two stay in lock-step (nts ==
+                    # num_computed + 1). Inflating nts to the end of
+                    # the grown prompt would break that invariant,
+                    # causing bookkeeping to write far from where
+                    # _prepare_inputs reads → input_ids == 0.
                     fill_start = max(curr_nts, num_computed_tokens)
                     if fill_start < prompt_len:
                         self.input_batch.token_ids_cpu[
                             req_index, fill_start:prompt_len
                         ] = 0
-                    # _bookkeeping_sync writes output tokens at
-                    # num_tokens_no_spec (end of grown prompt), but
-                    # _prepare_inputs reads at num_computed_tokens
-                    # (original prompt offset + decode step).
-                    # Restore all output tokens at their correct
-                    # decode positions so _prepare_inputs finds them.
-                    output_toks = req_state.output_token_ids
-                    if output_toks:
-                        decode_start = num_computed_tokens - len(output_toks)
-                        for k, tok in enumerate(output_toks):
-                            self.input_batch.token_ids_cpu[
-                                req_index, decode_start + k
-                            ] = tok
-                self.input_batch.num_tokens_no_spec[req_index] = max(
-                    prompt_len, curr_nts
-                )
 
             # Add spec_token_ids to token_ids_cpu.
             self.input_batch.update_req_spec_token_ids(req_state, scheduled_spec_tokens)
