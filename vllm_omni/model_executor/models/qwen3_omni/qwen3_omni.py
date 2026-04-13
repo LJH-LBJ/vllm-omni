@@ -906,6 +906,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict["tts_pad_embed_projected"] = pad_proj.detach()
         except Exception:
             pass
+        update_dict["prefill_consumed_text_tokens"] = 1
         if consumed_decode_for_assistant > 0:
             self._consume_decode_for_assistant(info_dict, update_dict, consumed_decode_for_assistant)
         else:
