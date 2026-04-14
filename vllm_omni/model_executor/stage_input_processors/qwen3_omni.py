@@ -301,8 +301,12 @@ def talker2code2wav_async_chunk(
             return None
 
     # TODO: high concurrency issue here, need to fix it
-    # Removed .any() and sum()==0 checks that incorrectly discarded legitimate
-    # all-zero codec frames (index 0 is a valid codebook entry).
+    # Talker prefill produces dummy all-zero codes with shape [span_len, 16]
+    # (span_len > 1). Only talker decode produces real codec codes with
+    # shape [1, 16]. Skip prefill dummy codes to avoid shape mismatch in
+    # chunk accumulation and prevent noise from placeholder zeros.
+    if code_predictor_codes.dim() >= 2 and code_predictor_codes.shape[0] != 1:
+        return None
     codec_codes = code_predictor_codes.to(torch.long).transpose(0, 1).cpu().to(torch.long).reshape(-1).tolist()
 
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
