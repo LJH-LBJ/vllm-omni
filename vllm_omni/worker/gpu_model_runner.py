@@ -1303,10 +1303,36 @@ class OmniGPUModelRunner(GPUModelRunner):
             ec_connector_output,
         )
 
+    # Toggle to True to force bsz=1 code predictor processing for
+    # precision diagnosis.  When True and multiple requests decode
+    # concurrently, each request is processed individually to avoid
+    # cuBLAS GEMM algorithm / RNG divergence from batching.
+    _SERIALIZE_CODE_PREDICTOR = True
+
     def _talker_mtp_forward(self, decode_req_ids: list[str], inputs_embeds: torch.Tensor) -> None:
         decode_batch_size = len(decode_req_ids)
         if decode_batch_size == 0:
             return
+
+        # --- Serialize path: process each request individually (bsz=1) ---
+        if self._SERIALIZE_CODE_PREDICTOR and decode_batch_size > 1:
+            out_key = getattr(self.model, "talker_mtp_output_key", "code_predictor_codes")
+            for idx, req_id in enumerate(decode_req_ids):
+                single_input_ids = self.talker_mtp_input_ids.gpu[idx : idx + 1]
+                single_embeds = self.talker_mtp_inputs_embeds.gpu[idx : idx + 1]
+                single_hidden = self.last_talker_hidden.gpu[idx : idx + 1]
+                single_text = self.text_step.gpu[idx : idx + 1]
+                with set_forward_context(None, self.vllm_config, cudagraph_runtime_mode=CUDAGraphMode.NONE):
+                    single_embeds_out, single_codes = self.talker_mtp(
+                        single_input_ids, single_embeds, single_hidden, single_text
+                    )
+                req_index = self.input_batch.req_ids.index(req_id)
+                start_offset = int(self.query_start_loc.cpu[req_index])
+                inputs_embeds[start_offset : start_offset + 1] = single_embeds_out
+                update_dict = {out_key: single_codes}
+                self._merge_additional_information_update(req_id, update_dict)
+            return
+
         _cudagraph_mode, batch_desc, _, _, _ = self._determine_batch_execution_and_padding(
             num_tokens=decode_batch_size,
             num_reqs=decode_batch_size,
