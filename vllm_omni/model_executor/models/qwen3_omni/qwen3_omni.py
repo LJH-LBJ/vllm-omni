@@ -710,7 +710,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
             update_dict["mtp_inputs"] = last_talker_hidden, text_step
 
-        if update_dict.get("defer_assistant_chunk", False):
+        if update_dict.get("defer_assistant_chunk", False) or update_dict.get("thinker_waiting", False):
             update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0)
         else:
             update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + effective_span_len
@@ -1212,10 +1212,30 @@ class Qwen3OmniMoeForConditionalGeneration(
         else:
             upstream_finished = bool(upstream_finished_obj)
         if start_index >= len(thinker_output_token_ids) - 1:
-            if info_dict.get("finished_flag"):
-                return self.tts_pad_embed.to(device)
-            update_dict["finished_flag"] = True
-            return self.tts_eos_embed.to(device)
+            if upstream_finished:
+                # Thinker is done — natural end of speech
+                if info_dict.get("finished_flag"):
+                    return self.tts_pad_embed.to(device)
+                update_dict["finished_flag"] = True
+                return self.tts_eos_embed.to(device)
+            # Thinker still running but talker consumed all available tokens.
+            # Do NOT set finished_flag; signal stall so num_processed_tokens
+            # is held — we will retry at the same start_index next step.
+            update_dict["thinker_waiting"] = True
+            # Cache incoming delta so it is not lost when the receive side
+            # replaces thinker_decode_embeddings with the next delta.
+            if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
+                _stall_embed = thinker_decode_embed.to(device)
+                if cached_thinker_decode_embeds is not None:
+                    _stall_embed = torch.cat([cached_thinker_decode_embeds.to(device), _stall_embed], dim=0)
+                update_dict["cached_thinker_decode_embeddings"] = _stall_embed
+                update_dict["thinker_decode_embeddings"] = None
+            logger.warning(
+                "Talker decode stall: start_index=%d >= len(thinker_output_token_ids)=%d - 1, "
+                "upstream_finished=%s, request_id=%s",
+                start_index, len(thinker_output_token_ids), upstream_finished, request_id,
+            )
+            return self.tts_pad_embed.to(device)
 
         if cached_thinker_decode_embeds is not None and start_index < cached_thinker_decode_embeds.shape[0]:
             cached_thinker_decode_embeds = cached_thinker_decode_embeds.to(device)
@@ -1230,6 +1250,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 thinker_embed = thinker_embed.to(device)
 
         update_dict["thinker_decode_embeddings"] = None
+        update_dict["thinker_waiting"] = False
         return self.talker.text_projection(thinker_embed).to(device)
 
     def talker_preprocess_decode(
