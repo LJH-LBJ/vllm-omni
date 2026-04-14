@@ -850,8 +850,30 @@ class Qwen3OmniMoeForConditionalGeneration(
         total_thinker_tokens = thinker_sequences.shape[0]
         current_chunk_size = input_ids.shape[0]
         chunk_offset = num_processed_thinker_tokens
-        remaining_thinker_tokens = max(total_thinker_tokens - chunk_offset, 0)
+        # Cap by actually available embeddings/hidden states to handle the case
+        # where the talker scheduler runs ahead of thinker data delivery under
+        # concurrent requests.
+        available_tokens = min(
+            total_thinker_tokens,
+            thinker_sequence_embeds.shape[0],
+            thinker_hidden_states.shape[0],
+        )
+        remaining_thinker_tokens = max(available_tokens - chunk_offset, 0)
         chunk_size = min(current_chunk_size, remaining_thinker_tokens)
+
+        # When the talker scheduler runs ahead of thinker data delivery (e.g.
+        # under concurrent requests), chunk_size can be 0 or smaller than the
+        # scheduled tokens.  Return empty embeddings so the model runner
+        # treats this as a system-only chunk (seg_len=0) and retries next step.
+        if chunk_size <= 0:
+            embed_dim = thinker_sequence_embeds.shape[-1]
+            update_dict["num_processed_thinker_tokens"] = chunk_offset
+            update_dict["defer_assistant_chunk"] = True
+            return (
+                torch.empty(0, dtype=input_ids.dtype, device=input_ids.device),
+                torch.empty(0, embed_dim, dtype=thinker_sequence_embeds.dtype, device=input_ids.device),
+                update_dict,
+            )
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
