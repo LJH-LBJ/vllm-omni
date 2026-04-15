@@ -177,7 +177,12 @@ def thinker2talker_async_chunk(
             ]
             # Only the decode rows go to thinker_decode_embeddings
             if num_decode_tokens > 0 and isinstance(embeds, torch.Tensor):
-                talker_additional_info["thinker_decode_embeddings"] = embeds[num_prefill_tokens:].detach().cpu()
+                decode_embeds = embeds[num_prefill_tokens:].detach().cpu()
+                talker_additional_info["thinker_decode_embeddings"] = decode_embeds
+                # Span metadata so _accumulate_payload merges (not replaces)
+                actual_rows = int(decode_embeds.shape[0])
+                talker_additional_info["thinker_decode_embeddings_token_end"] = num_decode_tokens
+                talker_additional_info["thinker_decode_embeddings_token_start"] = num_decode_tokens - actual_rows
                 if isinstance(hidden_states, torch.Tensor):
                     talker_additional_info["thinker_decode_hidden_states"] = (
                         hidden_states[num_prefill_tokens:].detach().cpu()
