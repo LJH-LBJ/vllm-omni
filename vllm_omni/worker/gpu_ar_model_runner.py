@@ -481,7 +481,15 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             except TypeError:
                 logits = self.model.compute_logits(sample_hidden_states)
             aux_hidden_states = None
-            multimodal_outputs = None
+            # Even though model forward was skipped, decode requests in
+            # the batch may have produced code_predictor_codes during MTP.
+            # Build multimodal_outputs so those codes reach pooler_output.
+            if hasattr(self.model, "make_omni_output"):
+                model_kwargs_extra = self._build_model_kwargs_extra()
+                omni_out = self.model.make_omni_output(hidden_states, **model_kwargs_extra)
+                _, multimodal_outputs = self.extract_multimodal_outputs(omni_out)
+            else:
+                multimodal_outputs = None
             kv_connector_output = None
         else:
             with (
