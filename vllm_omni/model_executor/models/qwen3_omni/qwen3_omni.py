@@ -882,16 +882,18 @@ class Qwen3OmniMoeForConditionalGeneration(
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
         thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + chunk_size]
-        cached_decode_for_assistant = self._decode_embed_cache.get(request_id)
+        # With span metadata the connector merges decode embeds across
+        # thinker steps, so thinker_decode_embeddings already contains ALL
+        # decode embeds in order.  Use it directly; fall back to the
+        # model-instance cache if the connector hasn't delivered yet.
         current_decode_for_assistant = info_dict.get("thinker_decode_embeddings", None)
         decode_assistant_fill = None
-        decode_parts = []
-        if isinstance(cached_decode_for_assistant, torch.Tensor) and cached_decode_for_assistant.numel() > 0:
-            decode_parts.append(cached_decode_for_assistant.to(talker_device, dtype=torch.bfloat16))
         if isinstance(current_decode_for_assistant, torch.Tensor) and current_decode_for_assistant.numel() > 0:
-            decode_parts.append(current_decode_for_assistant.to(talker_device, dtype=torch.bfloat16))
-        if decode_parts:
-            decode_assistant_fill = torch.cat(decode_parts, dim=0)
+            decode_assistant_fill = current_decode_for_assistant.to(talker_device, dtype=torch.bfloat16)
+        else:
+            cached_decode_for_assistant = self._decode_embed_cache.get(request_id)
+            if isinstance(cached_decode_for_assistant, torch.Tensor) and cached_decode_for_assistant.numel() > 0:
+                decode_assistant_fill = cached_decode_for_assistant.to(talker_device, dtype=torch.bfloat16)
         speaker_id = self._get_text_spk_token_id(voice_type)
         req_input_ids, req_embeds, trailing_text_hidden, defer_assistant_chunk, consumed_decode_for_assistant = (
             self._thinker_to_talker_prefill(
@@ -960,27 +962,17 @@ class Qwen3OmniMoeForConditionalGeneration(
         info_dict: dict[str, Any],
         update_dict: dict[str, Any],
     ) -> None:
-        """Append current thinker_decode_embeddings into model-instance cache.
+        """Snapshot the accumulated thinker_decode_embeddings into the
+        model-instance cache.
 
-        Uses the same dedup guard as the decode path: only append when the
-        thinker has genuinely produced more tokens than we have cached.
-        Without this, prefill chunks that run faster than the thinker can
-        duplicate the same embed → cache/token-id misalignment → bad audio.
+        With span metadata the connector merges decode embeds across steps,
+        so the tensor already contains ALL decode embeds in order.
+        We simply store the full tensor, replacing any previous cache entry.
         """
         request_id = info_dict.get("request_id")
         thinker_decode_embeds = info_dict.get("thinker_decode_embeddings", None)
         if isinstance(thinker_decode_embeds, torch.Tensor) and thinker_decode_embeds.numel() > 0:
-            thinker_output_token_ids = info_dict.get("thinker_output_token_ids", [])
-            total_decode = len(thinker_output_token_ids) if isinstance(thinker_output_token_ids, list) else 0
-            cached = self._decode_embed_cache.get(request_id)
-            cached_len = int(cached.shape[0]) if isinstance(cached, torch.Tensor) else 0
-            if total_decode > cached_len:
-                if isinstance(cached, torch.Tensor) and cached.numel() > 0:
-                    self._decode_embed_cache[request_id] = torch.cat(
-                        [cached, thinker_decode_embeds.detach()], dim=0
-                    )
-                else:
-                    self._decode_embed_cache[request_id] = thinker_decode_embeds.detach().clone()
+            self._decode_embed_cache[request_id] = thinker_decode_embeds.detach()
         update_dict["thinker_decode_embeddings"] = None
 
     def _consume_decode_for_assistant(
@@ -1218,23 +1210,15 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict["finished_flag"] = True
             return self.tts_eos_embed.to(device)
 
-        # Accumulate decode embeds in model-instance cache (bypasses buffer
-        # persistence issues).  Only append when thinker has genuinely produced
-        # more tokens than we have cached.
+        # With span metadata the connector merges decode embeds across
+        # thinker steps, so thinker_decode_embed is [total_decode, H].
+        # Snapshot it into the model-instance cache.
+        if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
+            self._decode_embed_cache[request_id] = thinker_decode_embed.to(device)
+
         cached = self._decode_embed_cache.get(request_id)
-        cached_len = int(cached.shape[0]) if isinstance(cached, torch.Tensor) else 0
-        total_decode = len(thinker_output_token_ids)
-
-        if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0 and total_decode > cached_len:
-            new_embed = thinker_decode_embed.to(device)
-            if isinstance(cached, torch.Tensor) and cached.numel() > 0:
-                cached = torch.cat([cached.to(device), new_embed], dim=0)
-            else:
-                cached = new_embed
-            self._decode_embed_cache[request_id] = cached
-
         if isinstance(cached, torch.Tensor) and start_index < cached.shape[0]:
-            thinker_embed = cached.to(device)[start_index]
+            thinker_embed = cached[start_index]
         else:
             # Thinker hasn't produced enough tokens yet; pad + wait.
             update_dict["num_processed_tokens"] = start_index
