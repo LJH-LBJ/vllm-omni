@@ -1203,11 +1203,9 @@ class Qwen3OmniMoeForConditionalGeneration(
             upstream_finished = bool(upstream_finished_obj)
         if start_index >= len(thinker_output_token_ids) - 1:
             if info_dict.get("finished_flag"):
-                update_dict["num_processed_tokens"] = start_index
                 self._decode_embed_cache.pop(request_id, None)
                 return self.tts_pad_embed.to(device)
             update_dict["finished_flag"] = True
-            update_dict["num_processed_tokens"] = start_index
             return self.tts_eos_embed.to(device)
 
         # Accumulate decode embeds in model-instance cache (bypasses buffer
