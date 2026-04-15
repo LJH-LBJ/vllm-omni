@@ -278,6 +278,8 @@ def talker2code2wav_async_chunk(
     """
     Pooling version.
     """
+    request_id = getattr(request, "external_req_id", None)
+
     if "code_predictor_codes" not in pooling_output:
         logger.info(f"[CODE2WAV_DIAG] req={request_id[-12:] if request_id else 'N/A'} DROP=no_key keys={list(pooling_output.keys())[:5]}")
         return None
@@ -286,8 +288,6 @@ def talker2code2wav_async_chunk(
     cfg = raw_cfg.get("extra", raw_cfg) if isinstance(raw_cfg, dict) else {}
     chunk_size_config = int(cfg.get("codec_chunk_frames", 25))
     left_context_size_config = int(cfg.get("codec_left_context_frames", 25))
-
-    request_id = getattr(request, "external_req_id", None)
 
     if not isinstance(pooling_output, dict) or "code_predictor_codes" not in pooling_output:
         return None
