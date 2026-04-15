@@ -1326,6 +1326,21 @@ class OmniGPUModelRunner(GPUModelRunner):
                     single_embeds_out, single_codes = self.talker_mtp(
                         single_input_ids, single_embeds, single_hidden, single_text
                     )
+                # --- Diagnostic: log input token and output codes ---
+                _diag_token = int(single_input_ids.reshape(-1)[0].item())
+                _diag_codes = single_codes.reshape(-1).tolist()
+                _diag_all_zero = not single_codes.any().item()
+                _diag_hidden_norm = float(single_hidden.float().norm().item())
+                _diag_text_norm = float(single_text.float().norm().item())
+                _diag_embeds_norm = float(single_embeds.float().norm().item())
+                if _diag_all_zero or idx == 0:
+                    logger.info(
+                        f"[MTP_DIAG] req={req_id[-12:]}, bsz={decode_batch_size}, "
+                        f"token={_diag_token}, codes={_diag_codes}, all_zero={_diag_all_zero}, "
+                        f"hidden_norm={_diag_hidden_norm:.2f}, text_norm={_diag_text_norm:.2f}, "
+                        f"embeds_norm={_diag_embeds_norm:.2f}"
+                    )
+                # --- End diagnostic ---
                 req_index = self.input_batch.req_ids.index(req_id)
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 inputs_embeds[start_offset : start_offset + 1] = single_embeds_out
@@ -1356,6 +1371,17 @@ class OmniGPUModelRunner(GPUModelRunner):
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
             req_embeds, code_predictor_codes = self.talker_mtp(req_input_ids, req_embeds, last_talker_hidden, text_step)
+        # --- Diagnostic: log for bsz=1 path ---
+        if decode_batch_size == 1:
+            _diag_token = int(req_input_ids.reshape(-1)[0].item())
+            _diag_codes = code_predictor_codes.reshape(-1).tolist()
+            _diag_all_zero = not code_predictor_codes.any().item()
+            if _diag_all_zero:
+                logger.info(
+                    f"[MTP_DIAG_SOLO] req={decode_req_ids[0][-12:]}, bsz=1, "
+                    f"token={_diag_token}, codes={_diag_codes}, all_zero=True"
+                )
+        # --- End diagnostic ---
         # code_predictor_codes stays on GPU here; _update_intermediate_buffer
         # keeps it device-resident when the key is in gpu_resident_buffer_keys.
         # D2H is deferred to sample_tokens where hidden_states.to("cpu") already
