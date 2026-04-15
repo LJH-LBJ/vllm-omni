@@ -501,31 +501,28 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
         elif self.model_stage == "talker":
             talker_hidden = model_outputs
-            # merge the code_predictor_codes from the info_dict list into a single tensor
-            multimodal_outputs: dict = None
-            # Here is the only place to use model_intermediate_buffer. After MTP in the
-            # preprocess function, the code_predictor_codes are stored in the info_dict list.
-            # We need to merge the tensors from different requests into a single tensor.
-            # In the future, we may allow user to custom an aggregated function.
+            # Collect per-request code_predictor_codes as a *list* so that
+            # downstream mm_cpu building uses the list branch (indexed by
+            # request index) instead of the tensor branch (which requires
+            # v.shape[0] == hidden_states.shape[0] and fails when CUDA
+            # graph padding changes the hidden_states size).
             info_dicts = kwargs.get("model_intermediate_buffer")
             if info_dicts is None:
                 info_dicts = kwargs.get("runtime_additional_information")
 
             if "runtime_additional_information" in kwargs and "model_intermediate_buffer" not in kwargs:
                 logger.warning_once("runtime_additional_information is deprecated, use model_intermediate_buffer")
-            code_predictor_codes = [info.get("code_predictor_codes") for info in info_dicts]
-            codes_cat = torch.cat(code_predictor_codes, dim=0)
-            # Pad codes to match talker_hidden length (may differ due to CUDA graph padding)
-            # so that downstream shape checks (v.shape[0] == hidden_states.shape[0]) pass.
-            if codes_cat.shape[0] < talker_hidden.shape[0]:
-                pad = torch.zeros(
-                    talker_hidden.shape[0] - codes_cat.shape[0],
-                    codes_cat.shape[1],
-                    dtype=codes_cat.dtype,
-                    device=codes_cat.device,
+            if info_dicts is None:
+                logger.warning("[MAKE_OMNI_DIAG] info_dicts is None — no codes available")
+                multimodal_outputs = {"code_predictor_codes": []}
+            else:
+                code_predictor_codes = [info.get("code_predictor_codes") for info in info_dicts]
+                _shapes = [c.shape if isinstance(c, torch.Tensor) else type(c).__name__ for c in code_predictor_codes]
+                logger.info(
+                    f"[MAKE_OMNI_DIAG] talker list len={len(code_predictor_codes)} "
+                    f"shapes={_shapes} hidden={talker_hidden.shape}"
                 )
-                codes_cat = torch.cat([codes_cat, pad], dim=0)
-            multimodal_outputs = {"code_predictor_codes": codes_cat}
+                multimodal_outputs = {"code_predictor_codes": code_predictor_codes}
             return OmniOutput(text_hidden_states=talker_hidden, multimodal_outputs=multimodal_outputs)
         elif self.model_stage == "code2wav":
             audio_tensors = model_outputs
