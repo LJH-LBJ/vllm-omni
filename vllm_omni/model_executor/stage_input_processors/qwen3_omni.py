@@ -170,8 +170,12 @@ def thinker2talker_async_chunk(
             talker_additional_info["thinker_hidden_states"] = hidden_states[:num_prefill_tokens].detach().cpu()
 
         if output_token_ids:
+            # NOTE: thinker_decode_embeddings is intentionally NOT in
+            # override_keys so that ChunkTransferAdapter._update_request_payload
+            # accumulates it via torch.cat instead of replacing.  This prevents
+            # intermediate decode embeds from being lost while the talker is
+            # still in prefill.
             talker_additional_info["override_keys"] = [
-                "thinker_decode_embeddings",
                 "thinker_output_token_ids",
                 "thinker_decode_hidden_states",
             ]
@@ -179,10 +183,6 @@ def thinker2talker_async_chunk(
             if num_decode_tokens > 0 and isinstance(embeds, torch.Tensor):
                 decode_embeds = embeds[num_prefill_tokens:].detach().cpu()
                 talker_additional_info["thinker_decode_embeddings"] = decode_embeds
-                # Span metadata so _accumulate_payload merges (not replaces)
-                actual_rows = int(decode_embeds.shape[0])
-                talker_additional_info["thinker_decode_embeddings_token_end"] = num_decode_tokens
-                talker_additional_info["thinker_decode_embeddings_token_start"] = num_decode_tokens - actual_rows
                 if isinstance(hidden_states, torch.Tensor):
                     talker_additional_info["thinker_decode_hidden_states"] = (
                         hidden_states[num_prefill_tokens:].detach().cpu()
