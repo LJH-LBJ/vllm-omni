@@ -960,17 +960,27 @@ class Qwen3OmniMoeForConditionalGeneration(
         info_dict: dict[str, Any],
         update_dict: dict[str, Any],
     ) -> None:
-        """Append current thinker_decode_embeddings into model-instance cache."""
+        """Append current thinker_decode_embeddings into model-instance cache.
+
+        Uses the same dedup guard as the decode path: only append when the
+        thinker has genuinely produced more tokens than we have cached.
+        Without this, prefill chunks that run faster than the thinker can
+        duplicate the same embed → cache/token-id misalignment → bad audio.
+        """
         request_id = info_dict.get("request_id")
         thinker_decode_embeds = info_dict.get("thinker_decode_embeddings", None)
         if isinstance(thinker_decode_embeds, torch.Tensor) and thinker_decode_embeds.numel() > 0:
+            thinker_output_token_ids = info_dict.get("thinker_output_token_ids", [])
+            total_decode = len(thinker_output_token_ids) if isinstance(thinker_output_token_ids, list) else 0
             cached = self._decode_embed_cache.get(request_id)
-            if isinstance(cached, torch.Tensor) and cached.numel() > 0:
-                self._decode_embed_cache[request_id] = torch.cat(
-                    [cached, thinker_decode_embeds.detach()], dim=0
-                )
-            else:
-                self._decode_embed_cache[request_id] = thinker_decode_embeds.detach().clone()
+            cached_len = int(cached.shape[0]) if isinstance(cached, torch.Tensor) else 0
+            if total_decode > cached_len:
+                if isinstance(cached, torch.Tensor) and cached.numel() > 0:
+                    self._decode_embed_cache[request_id] = torch.cat(
+                        [cached, thinker_decode_embeds.detach()], dim=0
+                    )
+                else:
+                    self._decode_embed_cache[request_id] = thinker_decode_embeds.detach().clone()
         update_dict["thinker_decode_embeddings"] = None
 
     def _consume_decode_for_assistant(
