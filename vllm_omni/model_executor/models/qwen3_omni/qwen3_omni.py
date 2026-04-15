@@ -1113,7 +1113,8 @@ class Qwen3OmniMoeForConditionalGeneration(
                 local_start = segment_start - chunk_start_index
                 local_end = segment_end - chunk_start_index
                 logger.info(
-                    "Processing chunk %s to %s of full sequence (total_thinker_tokens=%s)",
+                    "Processing request_id %s chunk %s to %s of full sequence (total_thinker_tokens=%s)",
+                    request_id,
                     segment_start,
                     segment_end,
                     total_thinker_tokens,
