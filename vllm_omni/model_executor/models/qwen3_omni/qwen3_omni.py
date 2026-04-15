@@ -514,7 +514,18 @@ class Qwen3OmniMoeForConditionalGeneration(
             if "runtime_additional_information" in kwargs and "model_intermediate_buffer" not in kwargs:
                 logger.warning_once("runtime_additional_information is deprecated, use model_intermediate_buffer")
             code_predictor_codes = [info.get("code_predictor_codes") for info in info_dicts]
-            multimodal_outputs = {"code_predictor_codes": torch.cat(code_predictor_codes, dim=0)}
+            codes_cat = torch.cat(code_predictor_codes, dim=0)
+            # Pad codes to match talker_hidden length (may differ due to CUDA graph padding)
+            # so that downstream shape checks (v.shape[0] == hidden_states.shape[0]) pass.
+            if codes_cat.shape[0] < talker_hidden.shape[0]:
+                pad = torch.zeros(
+                    talker_hidden.shape[0] - codes_cat.shape[0],
+                    codes_cat.shape[1],
+                    dtype=codes_cat.dtype,
+                    device=codes_cat.device,
+                )
+                codes_cat = torch.cat([codes_cat, pad], dim=0)
+            multimodal_outputs = {"code_predictor_codes": codes_cat}
             return OmniOutput(text_hidden_states=talker_hidden, multimodal_outputs=multimodal_outputs)
         elif self.model_stage == "code2wav":
             audio_tensors = model_outputs

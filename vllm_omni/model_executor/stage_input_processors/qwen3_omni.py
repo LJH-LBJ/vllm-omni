@@ -279,6 +279,7 @@ def talker2code2wav_async_chunk(
     Pooling version.
     """
     if "code_predictor_codes" not in pooling_output:
+        logger.info(f"[CODE2WAV_DIAG] req={request_id[-12:] if request_id else 'N/A'} DROP=no_key keys={list(pooling_output.keys())[:5]}")
         return None
     connector = getattr(transfer_manager, "connector", None)
     raw_cfg = getattr(connector, "config", {}) or {}
@@ -308,7 +309,7 @@ def talker2code2wav_async_chunk(
     if isinstance(code_predictor_codes, torch.Tensor):
         # TODO: high concurrency issue here, need to fix it
         if not code_predictor_codes.any():
-            logger.warning("code_predictor_codes is empty 2")
+            logger.warning(f"[CODE2WAV_DIAG] req={request_id[-12:] if request_id else 'N/A'} DROP=all_zero shape={code_predictor_codes.shape}")
             return None
     else:
         code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
@@ -317,6 +318,7 @@ def talker2code2wav_async_chunk(
 
     codec_codes = code_predictor_codes.to(torch.long).transpose(0, 1).cpu().to(torch.long).reshape(-1).tolist()
     if sum(codec_codes) == 0:
+        logger.info(f"[CODE2WAV_DIAG] req={request_id[-12:] if request_id else 'N/A'} DROP=sum_zero")
         return None
 
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
