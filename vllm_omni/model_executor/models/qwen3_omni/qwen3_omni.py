@@ -1220,7 +1220,18 @@ class Qwen3OmniMoeForConditionalGeneration(
             upstream_finished = bool(upstream_finished_obj.item()) if upstream_finished_obj.numel() == 1 else False
         else:
             upstream_finished = bool(upstream_finished_obj)
-        if start_index >= len(thinker_output_token_ids) - 1:
+        # Update cache first so we can check actual availability below.
+        if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
+            self._decode_embed_cache[request_id] = thinker_decode_embed.to(device)
+
+        cached = self._decode_embed_cache.get(request_id)
+        cache_len = cached.shape[0] if isinstance(cached, torch.Tensor) else 0
+
+        if start_index < cache_len:
+            # Embed is ready — use it directly without any waiting step.
+            thinker_embed = cached[start_index].to(device)
+        elif start_index >= len(thinker_output_token_ids):
+            # All known thinker tokens consumed.
             if info_dict.get("finished_flag"):
                 # EOS was already sent in a prior step.  Keep feeding tts_eos_embed
                 # every step until the talker model actually outputs codec_eos_token_id.
@@ -1229,24 +1240,14 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict["finished_flag"] = True
                 self._decode_embed_cache.pop(request_id, None)
                 return self.tts_eos_embed.to(device)
-            # Thinker still generating tokens — wait rather than fire premature EOS.
             if not upstream_finished:
+                # Thinker still generating — wait without advancing index.
                 update_dict["num_processed_tokens"] = start_index
                 return self.tts_pad_embed.to(device)
             update_dict["finished_flag"] = True
             return self.tts_eos_embed.to(device)
-
-        # With span metadata the connector merges decode embeds across
-        # thinker steps, so thinker_decode_embed is [total_decode, H].
-        # Snapshot it into the model-instance cache.
-        if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
-            self._decode_embed_cache[request_id] = thinker_decode_embed.to(device)
-
-        cached = self._decode_embed_cache.get(request_id)
-        if isinstance(cached, torch.Tensor) and start_index < cached.shape[0]:
-            thinker_embed = cached[start_index].to(device)
         else:
-            # Thinker hasn't produced enough tokens yet; pad + wait.
+            # Embed reported in thinker_output_token_ids but not yet in cache — wait.
             update_dict["num_processed_tokens"] = start_index
             return self.tts_pad_embed.to(device)
 
