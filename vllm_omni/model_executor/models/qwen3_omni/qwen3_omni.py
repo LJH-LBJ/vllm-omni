@@ -1230,8 +1230,14 @@ class Qwen3OmniMoeForConditionalGeneration(
                 self._decode_embed_cache.pop(request_id, None)
                 return self.tts_eos_embed.to(device)
             # Thinker still generating tokens — wait rather than fire premature EOS.
+            # Use the last real text embed (repeated) instead of tts_pad_embed so the
+            # talker model does not drift toward outputting codec_eos after several
+            # consecutive pad inputs.  If no real embed exists yet, fall back to pad.
             if not upstream_finished:
                 update_dict["num_processed_tokens"] = start_index
+                cached_wait = self._decode_embed_cache.get(request_id)
+                if isinstance(cached_wait, torch.Tensor) and start_index > 0 and start_index <= cached_wait.shape[0]:
+                    return self.talker.text_projection(cached_wait[start_index - 1]).to(device)
                 return self.tts_pad_embed.to(device)
             update_dict["finished_flag"] = True
             return self.tts_eos_embed.to(device)
@@ -1246,8 +1252,11 @@ class Qwen3OmniMoeForConditionalGeneration(
         if isinstance(cached, torch.Tensor) and start_index < cached.shape[0]:
             thinker_embed = cached[start_index]
         else:
-            # Thinker hasn't produced enough tokens yet; pad + wait.
+            # Thinker hasn't produced enough tokens yet; repeat last real embed (or
+            # fall back to pad) so the talker doesn't drift toward codec_eos.
             update_dict["num_processed_tokens"] = start_index
+            if isinstance(cached, torch.Tensor) and cached.shape[0] > 0:
+                return self.talker.text_projection(cached[-1]).to(device)
             return self.tts_pad_embed.to(device)
 
         update_dict["thinker_decode_embeddings"] = None
