@@ -347,10 +347,6 @@ class Orchestrator:
                     "stage_id": stage_id,
                     "engine_outputs": output,
                     "metrics": stage_metrics,
-                    # Signal generator to stop only when ALL final_output stages
-                    # are done (not just the last stage in the pipeline).
-                    # In async_chunk mode stage-0 (text) and stage-2 (audio) run
-                    # concurrently; stage-2 can finish first if audio is short.
                     "finished": finished and all_final_output_done,
                     "stage_submit_ts": submit_ts,
                 }
@@ -380,9 +376,6 @@ class Orchestrator:
             else:
                 await self._forward_to_next_stage(req_id, stage_id, output, req_state)
 
-        # Defer cleanup until ALL final_output=True stages have finished.
-        # Previously this only checked stage_id == final_stage_id (stage-2),
-        # which caused premature removal when stage-2 finished before stage-0.
         if finished and all_final_output_done:
             self._cleanup_companion_state(req_id)
             self.request_states.pop(req_id, None)
