@@ -865,11 +865,19 @@ class Qwen3OmniMoeForConditionalGeneration(
         # Cap by actually available embeddings/hidden states to handle the case
         # where the talker scheduler runs ahead of thinker data delivery under
         # concurrent requests.
-        available_tokens = min(
-            total_thinker_tokens,
+        prefill_available = min(
             thinker_sequence_embeds.shape[0],
             thinker_hidden_states.shape[0],
         )
+        if prefill_available > 0 and chunk_offset >= prefill_available:
+            # All thinker prefill embeddings have been consumed.  The remaining
+            # tokens belong to the assistant/decode segment and will be sourced
+            # from thinker_decode_embeddings inside _thinker_to_talker_prefill.
+            # Do NOT cap by prefill_available here – that would make chunk_size=0
+            # and spin forever at the prefill/decode boundary.
+            available_tokens = total_thinker_tokens
+        else:
+            available_tokens = min(total_thinker_tokens, prefill_available)
         remaining_thinker_tokens = max(available_tokens - chunk_offset, 0)
         chunk_size = min(current_chunk_size, remaining_thinker_tokens)
 
@@ -1214,7 +1222,16 @@ class Qwen3OmniMoeForConditionalGeneration(
             upstream_finished = bool(upstream_finished_obj)
         if start_index >= len(thinker_output_token_ids) - 1:
             if info_dict.get("finished_flag"):
+                # EOS was already sent in a prior step.  Keep feeding tts_eos_embed
+                # every step until the talker model actually outputs codec_eos_token_id.
+                # Do NOT return tts_pad_embed here – that creates an EOS/PAD ping-pong
+                # that prevents the talker from terminating.
+                update_dict["finished_flag"] = True
                 self._decode_embed_cache.pop(request_id, None)
+                return self.tts_eos_embed.to(device)
+            # Thinker still generating tokens — wait rather than fire premature EOS.
+            if not upstream_finished:
+                update_dict["num_processed_tokens"] = start_index
                 return self.tts_pad_embed.to(device)
             update_dict["finished_flag"] = True
             return self.tts_eos_embed.to(device)
