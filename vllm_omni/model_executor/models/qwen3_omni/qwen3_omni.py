@@ -1230,14 +1230,8 @@ class Qwen3OmniMoeForConditionalGeneration(
                 self._decode_embed_cache.pop(request_id, None)
                 return self.tts_eos_embed.to(device)
             # Thinker still generating tokens — wait rather than fire premature EOS.
-            # Use the last real text embed (repeated) instead of tts_pad_embed so the
-            # talker model does not drift toward outputting codec_eos after several
-            # consecutive pad inputs.  If no real embed exists yet, fall back to pad.
             if not upstream_finished:
                 update_dict["num_processed_tokens"] = start_index
-                cached_wait = self._decode_embed_cache.get(request_id)
-                if isinstance(cached_wait, torch.Tensor) and start_index > 0 and start_index <= cached_wait.shape[0]:
-                    return self.talker.text_projection(cached_wait[start_index - 1].to(device))
                 return self.tts_pad_embed.to(device)
             update_dict["finished_flag"] = True
             return self.tts_eos_embed.to(device)
@@ -1252,11 +1246,8 @@ class Qwen3OmniMoeForConditionalGeneration(
         if isinstance(cached, torch.Tensor) and start_index < cached.shape[0]:
             thinker_embed = cached[start_index].to(device)
         else:
-            # Thinker hasn't produced enough tokens yet; repeat last real embed (or
-            # fall back to pad) so the talker doesn't drift toward codec_eos.
+            # Thinker hasn't produced enough tokens yet; pad + wait.
             update_dict["num_processed_tokens"] = start_index
-            if isinstance(cached, torch.Tensor) and cached.shape[0] > 0:
-                return self.talker.text_projection(cached[-1].to(device))
             return self.tts_pad_embed.to(device)
 
         update_dict["thinker_decode_embeddings"] = None
@@ -1335,18 +1326,29 @@ class Qwen3OmniMoeForConditionalGeneration(
         self._assistant_decode_fill_consumed = 0
         if assistant_hidden.shape[0] < 4:
             need = 4 - assistant_hidden.shape[0]
-            fill_ready = (
+            has_any_fill = (
                 isinstance(decode_assistant_fill, torch.Tensor)
                 and decode_assistant_fill.ndim >= 2
-                and int(decode_assistant_fill.shape[0]) >= need
+                and int(decode_assistant_fill.shape[0]) > 0
             )
-            if not fill_ready:
+            if not has_any_fill:
+                # No decode fills available at all — must defer until thinker
+                # produces its first decode token.
                 return None, None, None
-            fill_hidden = self.talker.text_projection(decode_assistant_fill[:need].to(tts_pad_embed.device)).to(
-                assistant_hidden.dtype
-            )
+            # Use however many fills are available; repeat the last one to pad
+            # up to `need` rather than rolling back the entire prefill chunk.
+            # Repeated fills are far better than corrupt KV from a seg_len=0
+            # step (which can cause the talker to never emit codec_eos).
+            available = int(decode_assistant_fill.shape[0])
+            fill_t = decode_assistant_fill[: min(need, available)].to(tts_pad_embed.device)
+            fill_hidden = self.talker.text_projection(fill_t).to(assistant_hidden.dtype)
+            if available < need:
+                last_fill = fill_hidden[-1:]
+                fill_hidden = torch.cat(
+                    (fill_hidden, last_fill.expand(need - available, -1)), dim=0
+                )
             assistant_hidden = torch.cat((assistant_hidden, fill_hidden), dim=0)
-            self._assistant_decode_fill_consumed = int(need)
+            self._assistant_decode_fill_consumed = min(need, available)
 
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         assistant_text_hidden = torch.cat(
