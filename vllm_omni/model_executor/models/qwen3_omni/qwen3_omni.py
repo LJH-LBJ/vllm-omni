@@ -1343,10 +1343,15 @@ class Qwen3OmniMoeForConditionalGeneration(
             fill_t = decode_assistant_fill[: min(need, available)].to(tts_pad_embed.device)
             fill_hidden = self.talker.text_projection(fill_t).to(assistant_hidden.dtype)
             if available < need:
-                last_fill = fill_hidden[-1:]
-                fill_hidden = torch.cat(
-                    (fill_hidden, last_fill.expand(need - available, -1)), dim=0
-                )
+                # Pad-first: fill early missing slots with tts_pad_embed and
+                # keep real fills at the end.  assistant_hidden[3] is the
+                # "first text token" that seeds audio generation, so it must
+                # receive fill[0] (the real first decode embed) rather than a
+                # repeated pad.  Only the earlier preamble positions (0-2)
+                # receive pad, where the quality impact is negligible.
+                pad_count = need - available
+                pad_fill = tts_pad_embed.expand(pad_count, -1).to(fill_hidden.device)
+                fill_hidden = torch.cat((pad_fill, fill_hidden), dim=0)
             assistant_hidden = torch.cat((assistant_hidden, fill_hidden), dim=0)
             self._assistant_decode_fill_consumed = min(need, available)
 
