@@ -940,8 +940,15 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict["defer_assistant_chunk"] = True
             return req_input_ids, req_embeds, update_dict
 
-        # Trace progress for next chunk
-        update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
+        # Trace progress for next chunk.
+        # If assistant already consumed decode fills, it's fully processed — jump to
+        # total_thinker_tokens so prefill_exhausted=True next step and the assistant
+        # segment is never re-entered (which would spuriously increment
+        # prefill_consumed_text_tokens and corrupt the decode start_index).
+        if consumed_decode_for_assistant > 0:
+            update_dict["num_processed_thinker_tokens"] = total_thinker_tokens
+        else:
+            update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
         update_dict["assistant_prefill_pending"] = False
 
         # Queue trailing_text_hidden for decode (drop first for next steps),
