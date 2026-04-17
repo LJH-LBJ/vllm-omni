@@ -1378,25 +1378,23 @@ class Qwen3OmniMoeForConditionalGeneration(
                 # No decode fills available at all — must defer until thinker
                 # produces its first decode token.
                 return None, None, None
-            # Use however many fills are available; repeat the last one to pad
-            # up to `need` rather than rolling back the entire prefill chunk.
-            # Repeated fills are far better than corrupt KV from a seg_len=0
-            # step (which can cause the talker to never emit codec_eos).
+            # Fill positions [n, n+used) with fill[0:used], then zero-fill
+            # [n+used, 4).  Fills are placed left-to-right starting right after
+            # the existing prefill tokens — not back-filled to position 3.
+            # Unfilled positions get zeros (not tts_pad_embed) per spec.
             available = int(decode_assistant_fill.shape[0])
-            fill_t = decode_assistant_fill[: min(need, available)].to(tts_pad_embed.device)
+            used = min(need, available)
+            fill_t = decode_assistant_fill[0:used].to(tts_pad_embed.device)
             fill_hidden = self.talker.text_projection(fill_t).to(assistant_hidden.dtype)
-            if available < need:
-                # Pad-first: fill early missing slots with tts_pad_embed and
-                # keep real fills at the end.  assistant_hidden[3] is the
-                # "first text token" that seeds audio generation, so it must
-                # receive fill[0] (the real first decode embed) rather than a
-                # repeated pad.  Only the earlier preamble positions (0-2)
-                # receive pad, where the quality impact is negligible.
-                pad_count = need - available
-                pad_fill = tts_pad_embed.expand(pad_count, -1).to(fill_hidden.device)
-                fill_hidden = torch.cat((pad_fill, fill_hidden), dim=0)
+            if used < need:
+                zero_fill = torch.zeros(
+                    (need - used, fill_hidden.shape[-1]),
+                    device=fill_hidden.device,
+                    dtype=fill_hidden.dtype,
+                )
+                fill_hidden = torch.cat((fill_hidden, zero_fill), dim=0)
             assistant_hidden = torch.cat((assistant_hidden, fill_hidden), dim=0)
-            self._assistant_decode_fill_consumed = min(need, available)
+            self._assistant_decode_fill_consumed = used
 
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         assistant_text_hidden = torch.cat(
