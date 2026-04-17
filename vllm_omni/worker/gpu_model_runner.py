@@ -1462,7 +1462,23 @@ class OmniGPUModelRunner(GPUModelRunner):
             return
         req_state = self.requests.get(req_id)
         if req_state is None:
-            return
+            # req_id has been removed from self.requests (e.g. scheduler finished
+            # it one step ahead) but the model runner may still be processing it
+            # in this step.  Do NOT silently drop the update — write it to
+            # model_intermediate_buffer so that the pooler / postprocess can pick
+            # up the correct codes (e.g. code_predictor_codes) for this step.
+            if req_id in self.model_intermediate_buffer:
+                logger.warning(
+                    "[OMNI] _update_intermediate_buffer: req_id=%s not in self.requests "
+                    "but still in model_intermediate_buffer — updating buffer anyway. "
+                    "keys=%s",
+                    req_id,
+                    list(upd.keys()),
+                )
+            else:
+                # req_id is completely gone — skip update to avoid re-creating a
+                # stale entry that will never be cleaned up.
+                return
         # Check if the model declares keys that should stay on GPU
         gpu_keys: set[str] = set()
         if hasattr(self, "model") and hasattr(self.model, "gpu_resident_buffer_keys"):
@@ -1480,8 +1496,9 @@ class OmniGPUModelRunner(GPUModelRunner):
                 ]
             else:
                 existing[k] = v
-        # Backward compatible: mirror to old setattr location
-        setattr(req_state, "additional_information_cpu", existing)
+        # Backward compatible: mirror to old setattr location only when req_state exists
+        if req_state is not None:
+            setattr(req_state, "additional_information_cpu", existing)
 
     def _merge_additional_information_update(self, req_id, upd):
         logger.warning_once("_merge_additional_information_update is deprecated, use _update_intermediate_buffer")
