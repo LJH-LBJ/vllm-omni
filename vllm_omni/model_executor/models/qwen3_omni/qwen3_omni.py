@@ -931,7 +931,11 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         if defer_assistant_chunk:
             self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
-            update_dict["num_processed_thinker_tokens"] = chunk_offset
+            # Advance past any user-segment tokens already embedded in this
+            # chunk so we don't re-process them on every retry.  req_embeds
+            # contains exactly those user rows (returned by the updated defer
+            # path in _thinker_to_talker_prefill).
+            update_dict["num_processed_thinker_tokens"] = chunk_offset + int(req_embeds.shape[0])
             update_dict["assistant_prefill_pending"] = True
             update_dict["defer_assistant_chunk"] = True
             return req_input_ids, req_embeds, update_dict
@@ -1194,8 +1198,19 @@ class Qwen3OmniMoeForConditionalGeneration(
         # len(input_ids) < system prompt len
         if defer_assistant_chunk:
             embed_dim = thinker_embed.shape[-1]
-            talker_input_embed = torch.empty(0, embed_dim, dtype=thinker_embed.dtype, device=input_ids.device)
-            talker_input_id = torch.empty(0, dtype=thinker_result_ids.dtype, device=input_ids.device)
+            # Return any user-segment embeddings already built so that
+            # talker_preprocess_prefill can advance num_processed_thinker_tokens
+            # past the user part and avoid re-processing it on every retry.
+            if talker_input_embeds:
+                talker_input_embed = torch.cat(
+                    [embed.to(input_ids.device) for embed in talker_input_embeds], dim=0
+                )
+                talker_input_id = torch.cat(
+                    [ids.to(input_ids.device) for ids in talker_input_ids], dim=0
+                )
+            else:
+                talker_input_embed = torch.empty(0, embed_dim, dtype=thinker_embed.dtype, device=input_ids.device)
+                talker_input_id = torch.empty(0, dtype=thinker_result_ids.dtype, device=input_ids.device)
             return talker_input_id, talker_input_embed, trailing_text_hidden, True, 0
 
         if len(talker_input_embeds) == 0 or len(talker_input_ids) == 0:
