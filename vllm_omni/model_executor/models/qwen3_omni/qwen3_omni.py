@@ -1147,6 +1147,17 @@ class Qwen3OmniMoeForConditionalGeneration(
                     talker_input_ids.append(thinker_result_ids[local_start:local_end])
                 # Take assistant output (for now)
                 elif (segment_role_token == self.config.assistant_token_id).item() and i == len(im_start_indexes) - 2:
+                    # If the current chunk has fewer than 3 structural prefill tokens
+                    # (<|im_start|>, role, \n) but more prefill tokens are still being
+                    # delivered by the thinker, defer so the next step can include all
+                    # 3 tokens in one chunk.  This avoids consuming decode fills
+                    # prematurely and keeps start_index=1 (instead of 2 or 3).
+                    _assistant_prefill_in_chunk = local_end - local_start
+                    _assistant_full_prefill_len = segment_end_index_full - segment_start_index_full
+                    _min_structural = min(3, _assistant_full_prefill_len)
+                    if _assistant_prefill_in_chunk < _min_structural and segment_end < segment_end_index_full:
+                        defer_assistant_chunk = True
+                        break
                     # Extract the overlapping part from chunk tensors using local coordinates
                     talker_assistant_embeds, talker_assistant_ids, trailing_text_hidden = (
                         self._get_talker_assistant_parts(
