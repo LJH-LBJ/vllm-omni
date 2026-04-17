@@ -1159,7 +1159,16 @@ class Qwen3OmniMoeForConditionalGeneration(
                     _assistant_prefill_in_chunk = local_end - local_start
                     _assistant_full_prefill_len = segment_end_index_full - segment_start_index_full
                     _min_structural = min(3, _assistant_full_prefill_len)
-                    if _assistant_prefill_in_chunk < _min_structural and segment_end < segment_end_index_full:
+                    # Only defer when decode fills are NOT yet available.
+                    # If decode_assistant_fill already exists, _get_talker_assistant_parts
+                    # can fill the missing structural/text tokens from the decode buffer,
+                    # so there is no need to keep waiting for more prefill embeddings.
+                    _has_decode_fill = (
+                        isinstance(decode_assistant_fill, torch.Tensor)
+                        and decode_assistant_fill.ndim >= 2
+                        and int(decode_assistant_fill.shape[0]) > 0
+                    )
+                    if _assistant_prefill_in_chunk < _min_structural and segment_end < segment_end_index_full and not _has_decode_fill:
                         defer_assistant_chunk = True
                         break
                     # Extract the overlapping part from chunk tensors using local coordinates
