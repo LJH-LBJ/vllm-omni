@@ -255,7 +255,13 @@ class OmniGPUModelRunner(GPUModelRunner):
         # Remove finished requests from the cached states.
         for req_id in scheduler_output.finished_req_ids:
             self.requests.pop(req_id, None)
-            self.model_intermediate_buffer.pop(req_id, None)
+            _buf = self.model_intermediate_buffer.pop(req_id, None)
+            if _buf:
+                logger.info(
+                    "[OMNI] _update_states: cleared model_intermediate_buffer for req=%s keys=%s",
+                    req_id,
+                    list(_buf.keys()),
+                )
             self.num_prompt_logprobs.pop(req_id, None)
         if hasattr(self, "late_interaction_runner"):
             self.late_interaction_runner.on_requests_finished(scheduler_output.finished_req_ids)
@@ -1298,6 +1304,15 @@ class OmniGPUModelRunner(GPUModelRunner):
                 preprocess_seg_lens.append(seg_len)
 
                 # Only run MTP decode when we have real content (span_len==1 and non-empty).
+                if self.has_talker_mtp and span_len == 1 and seg_len == 0:
+                    logger.info(
+                        "[MTP_SKIP] req=%s seg_len=0, skipped from decode_req_ids. "
+                        "req_in_requests=%s, req_infos_empty=%s, embeds_shape=%s",
+                        req_id,
+                        req_state is not None,
+                        not bool(self.model_intermediate_buffer.get(req_id)),
+                        req_embeds.shape,
+                    )
                 if self.has_talker_mtp and span_len == 1 and seg_len > 0:
                     last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
                     decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
@@ -1429,7 +1444,15 @@ class OmniGPUModelRunner(GPUModelRunner):
             req_index = self.input_batch.req_ids.index(req_id)
             start_offset = int(self.query_start_loc.cpu[req_index])
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
-            update_dict = {out_key: code_predictor_codes[idx : idx + 1]}
+            _codes_slice = code_predictor_codes[idx : idx + 1]
+            if not _codes_slice.any().item():
+                logger.info(
+                    "[MTP_ZERO] req=%s idx=%d/%d all_zero=True",
+                    req_id,
+                    idx,
+                    decode_batch_size,
+                )
+            update_dict = {out_key: _codes_slice}
             self._merge_additional_information_update(req_id, update_dict)
 
     def _model_forward(
