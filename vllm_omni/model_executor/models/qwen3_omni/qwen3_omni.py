@@ -928,10 +928,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             decode_assistant_fill=decode_assistant_fill,
         )
         )
-        # If _get_talker_assistant_parts consumed any decode fills (structural or text),
-        # thinker_prefill_embeddings.shape[0] < total_thinker_tokens.  Jump to the end
-        # to prevent re-entering the prefill path and overwriting prefill_consumed_text_tokens.
-        used_decode_fills = int(getattr(self, "_assistant_decode_fills_taken", 0))
 
         if defer_assistant_chunk:
             self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
@@ -944,11 +940,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict["defer_assistant_chunk"] = True
             return req_input_ids, req_embeds, update_dict
 
-        # Trace progress for next chunk.
-        if used_decode_fills > 0:
-            update_dict["num_processed_thinker_tokens"] = total_thinker_tokens
-        else:
-            update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
+        # Trace progress for next chunk
+        update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
         update_dict["assistant_prefill_pending"] = False
 
         # Queue trailing_text_hidden for decode (drop first for next steps),
@@ -979,7 +972,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict["tts_pad_embed_projected"] = pad_proj.detach()
         except Exception:
             pass
-        update_dict["prefill_consumed_text_tokens"] = 1
+        update_dict["prefill_consumed_text_tokens"] = max(1, consumed_decode_for_assistant)
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
 
         return req_input_ids, req_embeds, update_dict
@@ -1198,6 +1191,11 @@ class Qwen3OmniMoeForConditionalGeneration(
                     logger.info(f"trailing_text_hidden {trailing_text_hidden}")
                     talker_input_embeds.append(talker_assistant_embeds)
                     talker_input_ids.append(talker_assistant_ids)
+                    if isinstance(decode_assistant_fill, torch.Tensor):
+                        consumed_decode_for_assistant = max(
+                            0,
+                            int(getattr(self, "_assistant_decode_fill_consumed", 0)),
+                        )
                 # History assistant output (ignore for now)
                 elif (segment_role_token == self.config.assistant_token_id).item() and i != len(im_start_indexes) - 2:
                     continue
@@ -1361,10 +1359,9 @@ class Qwen3OmniMoeForConditionalGeneration(
         assistant_hidden = self.talker.text_projection(thinker_embed[im_start_index:segment_end_index]).to(
             tts_pad_embed.device
         )  # [t, d]
-        self._assistant_decode_fills_taken = 0
+        self._assistant_decode_fill_consumed = 0
         if assistant_hidden.shape[0] < 4:
-            n_prefill = int(assistant_hidden.shape[0])  # structural tokens available from prefill
-            need = 4 - n_prefill
+            need = 4 - assistant_hidden.shape[0]
             has_any_fill = (
                 isinstance(decode_assistant_fill, torch.Tensor)
                 and decode_assistant_fill.ndim >= 2
@@ -1374,19 +1371,25 @@ class Qwen3OmniMoeForConditionalGeneration(
                 # No decode fills available at all — must defer until thinker
                 # produces its first decode token.
                 return None, None, None
+            # Use however many fills are available; repeat the last one to pad
+            # up to `need` rather than rolling back the entire prefill chunk.
+            # Repeated fills are far better than corrupt KV from a seg_len=0
+            # step (which can cause the talker to never emit codec_eos).
             available = int(decode_assistant_fill.shape[0])
-            total_consumed = min(need, available)
-            fill_t = decode_assistant_fill[:total_consumed].to(tts_pad_embed.device)
+            fill_t = decode_assistant_fill[: min(need, available)].to(tts_pad_embed.device)
             fill_hidden = self.talker.text_projection(fill_t).to(assistant_hidden.dtype)
             if available < need:
-                # Fill structural positions first, then pad any remaining slots.
-                # This keeps real decode embeds at the earliest available positions
-                # so that assistant_hidden[:3] = [im_start, role, \n] is correct.
+                # Pad-first: fill early missing slots with tts_pad_embed and
+                # keep real fills at the end.  assistant_hidden[3] is the
+                # "first text token" that seeds audio generation, so it must
+                # receive fill[0] (the real first decode embed) rather than a
+                # repeated pad.  Only the earlier preamble positions (0-2)
+                # receive pad, where the quality impact is negligible.
                 pad_count = need - available
                 pad_fill = tts_pad_embed.expand(pad_count, -1).to(fill_hidden.device)
-                fill_hidden = torch.cat((fill_hidden, pad_fill), dim=0)
+                fill_hidden = torch.cat((pad_fill, fill_hidden), dim=0)
             assistant_hidden = torch.cat((assistant_hidden, fill_hidden), dim=0)
-            self._assistant_decode_fills_taken = total_consumed
+            self._assistant_decode_fill_consumed = min(need, available)
 
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         assistant_text_hidden = torch.cat(
