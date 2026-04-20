@@ -1289,7 +1289,17 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict["finished_flag"] = True
             return self.tts_eos_embed.to(device)
         else:
-            # Embed reported in thinker_output_token_ids but not yet in cache — wait.
+            # Embed reported in thinker_output_token_ids but not yet in cache.
+            # This happens normally when the thinker is still generating and the
+            # embed hasn't arrived yet — we wait.
+            # However, when upstream_finished=True, the missing embed is for the
+            # LAST decode token: its embedding requires processing one more token
+            # (which will never happen), so it will never arrive.  Treat it as
+            # done and send tts_eos_embed to terminate the talker cleanly.
+            if upstream_finished:
+                update_dict["finished_flag"] = True
+                self._decode_embed_cache.pop(request_id, None)
+                return self.tts_eos_embed.to(device)
             update_dict["num_processed_tokens"] = start_index
             return self.tts_pad_embed.to(device)
 

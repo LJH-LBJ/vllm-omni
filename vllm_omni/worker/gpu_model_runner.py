@@ -1007,6 +1007,15 @@ class OmniGPUModelRunner(GPUModelRunner):
                     q = info["thinker_reply_part_per_request"]
                     if hasattr(q, "shape"):
                         logger.debug(f"[OMNI] req={req_id} has thinker_reply_part_per_request queue shape: {q.shape}")
+                # [DIAG] log left_context_size for async_chunk stages (e.g. code2wav)
+                if "left_context_size" in info and getattr(
+                    getattr(self, "vllm_config", None), "model_config", None
+                ) and getattr(self.vllm_config.model_config, "async_chunk", False):
+                    logger.info(
+                        "[GATHER_LCS] req=%s left_context_size=%s",
+                        req_id[-16:],
+                        info["left_context_size"],
+                    )
             else:
                 per_req_runtime_info.append({})
         return per_req_runtime_info
@@ -1119,6 +1128,22 @@ class OmniGPUModelRunner(GPUModelRunner):
             cached_infos = getattr(scheduler_output.scheduled_cached_reqs, "additional_information", {})
             if isinstance(cached_infos, dict):
                 for req_id, req_infos in cached_infos.items():
+                    # [DIAG] log left_context_size being written for async_chunk stages
+                    if isinstance(req_infos, dict) and "left_context_size" in req_infos and getattr(
+                        getattr(self, "vllm_config", None), "model_config", None
+                    ) and getattr(self.vllm_config.model_config, "async_chunk", False):
+                        logger.info(
+                            "[UPDATE_LCS] cached req=%s left_context_size=%s",
+                            req_id[-16:],
+                            req_infos["left_context_size"],
+                        )
+                    elif getattr(getattr(self, "vllm_config", None), "model_config", None) and \
+                            getattr(self.vllm_config.model_config, "async_chunk", False):
+                        logger.info(
+                            "[UPDATE_LCS] cached req=%s req_infos=%s (no left_context_size)",
+                            req_id[-16:],
+                            type(req_infos).__name__,
+                        )
                     self._update_intermediate_buffer(req_id, req_infos)
 
     def _maybe_attach_mimo_audio_req_infos(
@@ -1303,8 +1328,23 @@ class OmniGPUModelRunner(GPUModelRunner):
                 seg_len = min(span_len, req_embeds.shape[0])
                 preprocess_seg_lens.append(seg_len)
 
-                # Only run MTP decode when we have real content (span_len==1 and non-empty).
-                if self.has_talker_mtp and span_len == 1 and seg_len == 0:
+                # Run MTP when talker_preprocess entered decode mode (signalled by
+                # "mtp_inputs" in update_dict) and actually produced content.
+                # Using "mtp_inputs" instead of "span_len==1" is critical: at the
+                # prefill→decode transition step span_len can be 2 (scheduler
+                # assigned an extra slot), but talker_preprocess still runs the
+                # decode path and populates mtp_inputs.  Gating on span_len==1
+                # would silently skip MTP for that step, leaving code_predictor_codes
+                # all-zero and blocking code2wav indefinitely.
+                if self.has_talker_mtp and "mtp_inputs" in update_dict and seg_len > 0:
+                    last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
+                    decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
+                    self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
+                    self.talker_mtp_inputs_embeds.gpu[decode_slice].copy_(req_embeds)
+                    self.last_talker_hidden.gpu[decode_slice].copy_(last_talker_hidden)
+                    self.text_step.gpu[decode_slice].copy_(text_step)
+                    decode_req_ids.append(req_id)
+                elif self.has_talker_mtp and "mtp_inputs" in update_dict and seg_len == 0:
                     logger.info(
                         "[MTP_SKIP] req=%s seg_len=0, skipped from decode_req_ids. "
                         "req_in_requests=%s, req_infos_empty=%s, embeds_shape=%s",
@@ -1313,14 +1353,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                         not bool(self.model_intermediate_buffer.get(req_id)),
                         req_embeds.shape,
                     )
-                if self.has_talker_mtp and span_len == 1 and seg_len > 0:
-                    last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
-                    decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
-                    self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
-                    self.talker_mtp_inputs_embeds.gpu[decode_slice].copy_(req_embeds)
-                    self.last_talker_hidden.gpu[decode_slice].copy_(last_talker_hidden)
-                    self.text_step.gpu[decode_slice].copy_(text_step)
-                    decode_req_ids.append(req_id)
 
                 # TODO(Peiqi): the merge stage could move out from the critical path
                 self._merge_additional_information_update(req_id, update_dict)
@@ -1445,13 +1477,27 @@ class OmniGPUModelRunner(GPUModelRunner):
             start_offset = int(self.query_start_loc.cpu[req_index])
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
             _codes_slice = code_predictor_codes[idx : idx + 1]
-            if not _codes_slice.any().item():
+            _all_zero = not _codes_slice.any().item()
+            _diag_codes = _codes_slice.reshape(-1).tolist()
+            if _all_zero:
                 logger.info(
                     "[MTP_ZERO] req=%s idx=%d/%d all_zero=True",
                     req_id,
                     idx,
                     decode_batch_size,
                 )
+            # Log codes for every request to diagnose repetition
+            _prev_codes_tensor = self.model_intermediate_buffer.get(req_id, {}).get(out_key)
+            _prev_codes = _prev_codes_tensor.reshape(-1).tolist() if isinstance(_prev_codes_tensor, torch.Tensor) else None
+            _same_as_prev = (_diag_codes == _prev_codes) if _prev_codes is not None else False
+            logger.info(
+                "[MTP_BATCH] req=%s idx=%d/%d codes=%s same_as_prev=%s",
+                req_id[-16:],
+                idx,
+                decode_batch_size,
+                _diag_codes,
+                _same_as_prev,
+            )
             update_dict = {out_key: _codes_slice}
             self._merge_additional_information_update(req_id, update_dict)
 

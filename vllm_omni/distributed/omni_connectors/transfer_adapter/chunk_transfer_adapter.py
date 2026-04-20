@@ -170,6 +170,15 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     info[key] = value
                 request.additional_information = info
                 request.num_computed_tokens = 0
+                # [DIAG] log left_context_size received from connector payload
+                lcs_diag = info.get("left_context_size", "<missing>")
+                logger.info(
+                    "[POLL_LCS] req=%s chunk=%d left_context_size=%s has_codes=%s",
+                    req_id[-16:],
+                    self.get_req_chunk.get(req_id, -1),
+                    lcs_diag,
+                    bool(new_ids),
+                )
 
                 # Empty chunk with more data expected: keep polling.
                 if not new_ids and not payload_data.get("finished"):
