@@ -1477,27 +1477,13 @@ class OmniGPUModelRunner(GPUModelRunner):
             start_offset = int(self.query_start_loc.cpu[req_index])
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
             _codes_slice = code_predictor_codes[idx : idx + 1]
-            _all_zero = not _codes_slice.any().item()
-            _diag_codes = _codes_slice.reshape(-1).tolist()
-            if _all_zero:
+            if not _codes_slice.any().item():
                 logger.info(
                     "[MTP_ZERO] req=%s idx=%d/%d all_zero=True",
                     req_id,
                     idx,
                     decode_batch_size,
                 )
-            # Log codes for every request to diagnose repetition
-            _prev_codes_tensor = self.model_intermediate_buffer.get(req_id, {}).get(out_key)
-            _prev_codes = _prev_codes_tensor.reshape(-1).tolist() if isinstance(_prev_codes_tensor, torch.Tensor) else None
-            _same_as_prev = (_diag_codes == _prev_codes) if _prev_codes is not None else False
-            logger.info(
-                "[MTP_BATCH] req=%s idx=%d/%d codes=%s same_as_prev=%s",
-                req_id[-16:],
-                idx,
-                decode_batch_size,
-                _diag_codes,
-                _same_as_prev,
-            )
             update_dict = {out_key: _codes_slice}
             self._merge_additional_information_update(req_id, update_dict)
 
