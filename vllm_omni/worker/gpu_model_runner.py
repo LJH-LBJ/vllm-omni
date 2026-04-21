@@ -1115,11 +1115,12 @@ class OmniGPUModelRunner(GPUModelRunner):
     def _update_additional_information(self, scheduler_output: "SchedulerOutput") -> None:
         for new_req in scheduler_output.scheduled_new_reqs:
             payload_info = getattr(new_req, "additional_information", None)
-            if isinstance(payload_info, dict):
+            info_dict = deserialize_additional_information(payload_info)
+            if info_dict:
                 logger.warning_once(
                     "additional_information on request data is deprecated, use model_intermediate_buffer"
                 )
-                self._update_intermediate_buffer(new_req.req_id, payload_info)
+                self._update_intermediate_buffer(new_req.req_id, info_dict)
 
         if hasattr(scheduler_output.scheduled_cached_reqs, "additional_information"):
             logger.warning_once(
@@ -1128,14 +1129,15 @@ class OmniGPUModelRunner(GPUModelRunner):
             cached_infos = getattr(scheduler_output.scheduled_cached_reqs, "additional_information", {})
             if isinstance(cached_infos, dict):
                 for req_id, req_infos in cached_infos.items():
+                    info_dict = deserialize_additional_information(req_infos)
                     # [DIAG] log left_context_size being written for async_chunk stages
-                    if isinstance(req_infos, dict) and "left_context_size" in req_infos and getattr(
+                    if "left_context_size" in info_dict and getattr(
                         getattr(self, "vllm_config", None), "model_config", None
                     ) and getattr(self.vllm_config.model_config, "async_chunk", False):
                         logger.info(
                             "[UPDATE_LCS] cached req=%s left_context_size=%s",
                             req_id[-16:],
-                            req_infos["left_context_size"],
+                            info_dict["left_context_size"],
                         )
                     elif getattr(getattr(self, "vllm_config", None), "model_config", None) and \
                             getattr(self.vllm_config.model_config, "async_chunk", False):
@@ -1144,7 +1146,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                             req_id[-16:],
                             type(req_infos).__name__,
                         )
-                    self._update_intermediate_buffer(req_id, req_infos)
+                    self._update_intermediate_buffer(req_id, info_dict)
 
     def _maybe_attach_mimo_audio_req_infos(
         self,
