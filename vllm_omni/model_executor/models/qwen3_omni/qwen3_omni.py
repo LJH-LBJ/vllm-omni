@@ -980,7 +980,11 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict["tts_pad_embed_projected"] = pad_proj.detach()
         except Exception:
             pass
-        update_dict["prefill_consumed_text_tokens"] = max(1, consumed_decode_for_assistant)
+        update_dict["prefill_consumed_text_tokens"] = consumed_decode_for_assistant
+        logger.info(
+            "[PREFILL_CONSUMED] req=%s consumed=%s",
+            info_dict.get("request_id"), consumed_decode_for_assistant,
+        )
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
 
         return req_input_ids, req_embeds, update_dict
@@ -1262,6 +1266,13 @@ class Qwen3OmniMoeForConditionalGeneration(
         cached = self._decode_embed_cache.get(request_id)
         cache_len = cached.shape[0] if isinstance(cached, torch.Tensor) else 0
 
+        logger.info(
+            "[DECODE_TO_TALKER] req=%s start_index=%s cache_len=%s decode_len=%s "
+            "token_ids_len=%s upstream_finished=%s",
+            request_id, start_index, cache_len, decode_len,
+            len(thinker_output_token_ids), upstream_finished,
+        )
+
         if start_index < cache_len:
             # Embed is ready — use it directly without any waiting step.
             thinker_embed = cached[start_index].to(device)
@@ -1411,6 +1422,12 @@ class Qwen3OmniMoeForConditionalGeneration(
                 and decode_assistant_fill.ndim >= 2
                 and int(decode_assistant_fill.shape[0]) >= 1
             )
+            logger.info(
+                "[ASSISTANT_PARTS] req=%s shape==3 has_decode=%s decode_fill_len=%s",
+                request_id,
+                has_decode,
+                int(decode_assistant_fill.shape[0]) if isinstance(decode_assistant_fill, torch.Tensor) else 0,
+            )
             if has_decode:
                 first_text_embed = self.talker.text_projection(
                     decode_assistant_fill[0:1].to(tts_pad_embed.device)
@@ -1418,6 +1435,9 @@ class Qwen3OmniMoeForConditionalGeneration(
                 assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
                 self._assistant_decode_fill_consumed = 1
             else:
+                # decode[0] not yet arrived; zero-pad first_text slot.
+                # consumed=0: decode phase will start from cache[0]=embed(first_text)
+                # so the first real text token is not skipped.
                 zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
                 assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
                 self._assistant_decode_fill_consumed = 0
