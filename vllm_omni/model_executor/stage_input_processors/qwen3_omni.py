@@ -272,9 +272,13 @@ def thinker2talker_async_chunk(
                 transfer_manager._pending_assistant.pop(request_id)
                 flushed = dict(pending)
                 flushed["finished"] = torch.tensor(finished, dtype=torch.bool)
-                flushed["thinker_decode_embeddings"] = embeds[0:1].detach().cpu()
+                # Pass ALL available decode embeds so _get_talker_assistant_parts can fill
+                # assistant_hidden[3:4] (first_text) and put any extras into trailing_text_hidden.
+                # At flush time (first pure-decode step) embeds.shape[0] == 1, so this is
+                # equivalent to embeds[0:1], but the intent is clearer.
+                flushed["thinker_decode_embeddings"] = embeds.detach().cpu()
                 if isinstance(hidden_states, torch.Tensor):
-                    flushed["thinker_decode_hidden_states"] = hidden_states[0:1].detach().cpu()
+                    flushed["thinker_decode_hidden_states"] = hidden_states.detach().cpu()
                 flushed["override_keys"] = [
                     "thinker_output_token_ids",
                     "thinker_decode_hidden_states",
