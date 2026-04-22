@@ -1164,18 +1164,10 @@ class Qwen3OmniMoeForConditionalGeneration(
                     # 3 tokens in one chunk.  This avoids consuming decode fills
                     # prematurely and keeps start_index=1 (instead of 2 or 3).
                     _assistant_prefill_in_chunk = local_end - local_start
-                    _assistant_full_prefill_len = segment_end_index_full - segment_start_index_full
-                    _min_structural = min(3, _assistant_full_prefill_len)
-                    # Only defer when decode fills are NOT yet available.
-                    # If decode_assistant_fill already exists, _get_talker_assistant_parts
-                    # can fill the missing structural/text tokens from the decode buffer,
-                    # so there is no need to keep waiting for more prefill embeddings.
-                    _has_decode_fill = (
-                        isinstance(decode_assistant_fill, torch.Tensor)
-                        and decode_assistant_fill.ndim >= 2
-                        and int(decode_assistant_fill.shape[0]) > 0
-                    )
-                    if _assistant_prefill_in_chunk < _min_structural and segment_end < segment_end_index_full and not _has_decode_fill:
+                    # Defer only when we have fewer than 2 prefill tokens and more are
+                    # still coming. <|im_start|> and assistant must both come from
+                    # prefill; \n and first_text are handled in _get_talker_assistant_parts.
+                    if _assistant_prefill_in_chunk < 2 and segment_end < segment_end_index_full:
                         defer_assistant_chunk = True
                         break
                     # Extract the overlapping part from chunk tensors using local coordinates
@@ -1377,35 +1369,43 @@ class Qwen3OmniMoeForConditionalGeneration(
             tts_pad_embed.device
         )  # [t, d]
         self._assistant_decode_fill_consumed = 0
-        if assistant_hidden.shape[0] < 4:
-            need = 4 - assistant_hidden.shape[0]
-            has_any_fill = (
+        hidden_dim = assistant_hidden.shape[-1] if assistant_hidden.shape[0] > 0 else tts_pad_embed.shape[-1]
+
+        if assistant_hidden.shape[0] < 2:
+            # Need at least <|im_start|> and assistant from prefill — defer
+            return None, None, None
+
+        if assistant_hidden.shape[0] == 2:
+            # Have <|im_start|> and assistant; \n must come from decode[0]
+            has_decode = (
                 isinstance(decode_assistant_fill, torch.Tensor)
                 and decode_assistant_fill.ndim >= 2
-                and int(decode_assistant_fill.shape[0]) > 0
+                and int(decode_assistant_fill.shape[0]) >= 1
             )
-            if not has_any_fill:
-                # No decode fills available at all — must defer until thinker
-                # produces its first decode token.
-                return None, None, None
-            # Fill positions [n, n+used) with fill[0:used], then zero-fill
-            # [n+used, 4).  Fills are placed left-to-right starting right after
-            # the existing prefill tokens — not back-filled to position 3.
-            # Unfilled positions get zeros (not tts_pad_embed) per spec.
-            available = int(decode_assistant_fill.shape[0])
-            used = min(need, available)
-            fill_t = decode_assistant_fill[0:used].to(tts_pad_embed.device)
-            fill_hidden = self.talker.text_projection(fill_t).to(assistant_hidden.dtype)
-            if used < need:
-                zero_fill = torch.zeros(
-                    (need - used, fill_hidden.shape[-1]),
-                    device=fill_hidden.device,
-                    dtype=fill_hidden.dtype,
-                )
-                fill_hidden = torch.cat((fill_hidden, zero_fill), dim=0)
-            assistant_hidden = torch.cat((assistant_hidden, fill_hidden), dim=0)
-            self._assistant_decode_fill_consumed = used
+            if not has_decode:
+                return None, None, None  # defer until \n decode token arrives
+            newline_embed = self.talker.text_projection(
+                decode_assistant_fill[0:1].to(tts_pad_embed.device)
+            ).to(assistant_hidden.dtype)
+            assistant_hidden = torch.cat([assistant_hidden, newline_embed], dim=0)
+            self._assistant_decode_fill_consumed = 1
+            # first_text: use decode[1] if available, else zero-pad
+            if int(decode_assistant_fill.shape[0]) >= 2:
+                first_text_embed = self.talker.text_projection(
+                    decode_assistant_fill[1:2].to(tts_pad_embed.device)
+                ).to(assistant_hidden.dtype)
+                assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
+                self._assistant_decode_fill_consumed = 2
+            else:
+                zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
+                assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
 
+        elif assistant_hidden.shape[0] == 3:
+            # Have <|im_start|>, assistant, \n from prefill; zero-pad first_text
+            zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
+            assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
+
+        # assistant_hidden.shape[0] >= 4 — ready to assemble
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         assistant_text_hidden = torch.cat(
             (
