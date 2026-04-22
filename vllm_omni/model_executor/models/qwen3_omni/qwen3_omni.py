@@ -1435,14 +1435,16 @@ class Qwen3OmniMoeForConditionalGeneration(
                 assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
                 self._assistant_decode_fill_consumed = 1
             else:
-                # decode[0] not yet arrived; zero-pad first_text slot.
-                # consumed=0: decode phase will start from cache[0]=embed(first_text)
-                # so the first real text token is not skipped.
+                # This should NOT happen if the connector guarantees complete bootstrap.
+                # Log a warning instead of silently zero-padding.
+                logger.warning(
+                    "[_get_talker_assistant_parts] req=%s: decode_assistant_fill missing "
+                    "on shape==3 path — connector bug? Falling back to zero-pad.",
+                    request_id,
+                )
                 zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
                 assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
                 self._assistant_decode_fill_consumed = 0
-
-        # assistant_hidden.shape[0] >= 4 — ready to assemble
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         assistant_text_hidden = torch.cat(
             (
