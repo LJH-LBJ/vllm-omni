@@ -941,11 +941,12 @@ class Qwen3OmniMoeForConditionalGeneration(
             return req_input_ids, req_embeds, update_dict
 
         # Trace progress for next chunk.
-        # If assistant already consumed decode fills, it's fully processed — jump to
-        # total_thinker_tokens so prefill_exhausted=True next step and the assistant
-        # segment is never re-entered (which would spuriously increment
-        # prefill_consumed_text_tokens and corrupt the decode start_index).
-        if consumed_decode_for_assistant > 0:
+        # If the assistant segment was fully processed (trailing_text_hidden is set),
+        # jump to total_thinker_tokens so prefill_exhausted=True next step and the
+        # assistant segment is never re-entered.  This covers both the decode-fill
+        # path (shape==2) and the zero-pad path (shape==3), where
+        # consumed_decode_for_assistant may be 0 yet the assistant is complete.
+        if isinstance(trailing_text_hidden, torch.Tensor):
             update_dict["num_processed_thinker_tokens"] = total_thinker_tokens
         else:
             update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
@@ -1401,9 +1402,22 @@ class Qwen3OmniMoeForConditionalGeneration(
                 assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
 
         elif assistant_hidden.shape[0] == 3:
-            # Have <|im_start|>, assistant, \n from prefill; zero-pad first_text
-            zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
-            assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
+            # Have <|im_start|>, assistant, \n from prefill;
+            # use decode[0] for first_text if available, else zero-pad
+            has_decode = (
+                isinstance(decode_assistant_fill, torch.Tensor)
+                and decode_assistant_fill.ndim >= 2
+                and int(decode_assistant_fill.shape[0]) >= 1
+            )
+            if has_decode:
+                first_text_embed = self.talker.text_projection(
+                    decode_assistant_fill[0:1].to(tts_pad_embed.device)
+                ).to(assistant_hidden.dtype)
+                assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
+                self._assistant_decode_fill_consumed = 1
+            else:
+                zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
+                assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
 
         # assistant_hidden.shape[0] >= 4 — ready to assemble
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
