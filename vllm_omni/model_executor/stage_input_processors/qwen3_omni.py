@@ -92,6 +92,55 @@ def _validate_stage_inputs(stage_list, engine_input_source):
 # =========================
 
 
+def _find_assistant_boundary(prompt_token_ids: list[int]) -> int:
+    """Return the index of the last <|im_start|> token that starts an assistant role segment.
+
+    Returns -1 if no assistant segment found.
+    """
+    IM_START = 151644
+    ASSISTANT = 77091
+    for i in range(len(prompt_token_ids) - 1, -1, -1):
+        if prompt_token_ids[i] == IM_START:
+            if i + 1 < len(prompt_token_ids) and prompt_token_ids[i + 1] == ASSISTANT:
+                return i
+            break  # Last <|im_start|> is not assistant role — stop
+    return -1
+
+
+def _assistant_parts_complete(
+    prompt_token_ids: list[int],
+    output_token_ids: list[int],
+    has_decode_embed: bool = False,
+) -> bool:
+    """Return True only when ALL of the following hold:
+    1. prompt ends with <|im_start|> assistant \\n (>=3 tokens after last im_start)
+    2. at least one output token ID is available
+    3. has_decode_embed == True (embedding for output_token_ids[0] is ready)
+    """
+    last_im = _find_assistant_boundary(prompt_token_ids)
+    if last_im == -1:
+        return True  # No assistant segment — nothing to wait for
+    assistant_tokens_in_prompt = len(prompt_token_ids) - last_im
+    if assistant_tokens_in_prompt < 3:
+        return False  # \n not yet in prefill
+    return len(output_token_ids) > 0 and has_decode_embed
+
+
+def _merge_prefill_payloads(old: dict, new: dict) -> dict:
+    """Merge two chunk_id==0 payloads by concatenating prefill embeddings."""
+    merged = {**new}
+    merged["thinker_prefill_embeddings"] = torch.cat(
+        (old["thinker_prefill_embeddings"], new["thinker_prefill_embeddings"]), dim=0
+    )
+    merged["thinker_hidden_states"] = torch.cat(
+        (old["thinker_hidden_states"], new["thinker_hidden_states"]), dim=0
+    )
+    for k in ("tts_bos_embed", "tts_eos_embed", "tts_pad_embed", "speaker", "language"):
+        if k in old and k not in new:
+            merged[k] = old[k]
+    return merged
+
+
 def thinker2talker_async_chunk(
     transfer_manager: Any,
     pooling_output: dict[str, Any],
@@ -104,8 +153,19 @@ def thinker2talker_async_chunk(
     2. Split hidden states into: prompt embeddings + generated embeddings
     3. Package for talker with additional information
     """
+    # Lazily initialise per-request pending dicts on the transfer_manager
+    if not hasattr(transfer_manager, "_pending_assistant"):
+        transfer_manager._pending_assistant = {}
+    if not hasattr(transfer_manager, "_ready_pre_payload"):
+        transfer_manager._ready_pre_payload = {}
 
     request_id = request.external_req_id
+
+    # Highest priority: return the pre-assistant part that was split off in the
+    # previous chunk_id==0 call (when the boundary fell inside the batch).
+    if request_id in transfer_manager._ready_pre_payload:
+        return transfer_manager._ready_pre_payload.pop(request_id)
+
     finished = is_finished
     chunk_id = transfer_manager.put_req_chunk[request_id]
     output_token_ids = request.output_token_ids
@@ -117,10 +177,15 @@ def thinker2talker_async_chunk(
         # Convert ConstantList to regular list for OmniSerializer serialization
         all_token_ids = _ensure_list(all_token_ids)
         prompt_token_ids = _ensure_list(prompt_token_ids)
+
+        embeds_cpu = pooling_output.get("0").detach().cpu()
+        hidden_cpu = pooling_output.get("24").detach().cpu()
+        batch_size = embeds_cpu.shape[0]
+        full_prompt_len = len(prompt_token_ids)
+        current_batch_start = full_prompt_len - batch_size
+
         talker_additional_info = {
             "request_id": request_id,
-            "thinker_prefill_embeddings": pooling_output.get("0").detach().cpu(),
-            "thinker_hidden_states": pooling_output.get("24").detach().cpu(),
             "thinker_sequences": all_token_ids,
             "thinker_input_ids": prompt_token_ids,
             # Provide thinker-side TTS token embeddings for talker projection
@@ -135,28 +200,49 @@ def thinker2talker_async_chunk(
         language = extract_language_from_request(request)
         if language is not None:
             talker_additional_info["language"] = language
-        if transfer_manager.request_payload.get(request_id) is None:
-            if not finished:
-                transfer_manager.request_payload[request_id] = talker_additional_info
-                return None
-        else:
-            save_payload = transfer_manager.request_payload.pop(request_id)
-            talker_additional_info["thinker_prefill_embeddings"] = torch.cat(
-                (
-                    save_payload.get("thinker_prefill_embeddings"),
-                    talker_additional_info.get("thinker_prefill_embeddings"),
-                ),
-                dim=0,
-            )
-            talker_additional_info["thinker_hidden_states"] = torch.cat(
-                (save_payload.get("thinker_hidden_states"), talker_additional_info.get("thinker_hidden_states")),
-                dim=0,
-            )
+
+        # === Decide based on assistant boundary position ===
+        last_im = _find_assistant_boundary(prompt_token_ids)
+
+        if last_im == -1:
+            # No assistant segment in this batch — send immediately.
+            talker_additional_info["thinker_prefill_embeddings"] = embeds_cpu
+            talker_additional_info["thinker_hidden_states"] = hidden_cpu
+            return talker_additional_info
+
+        assistant_complete = (full_prompt_len - last_im) >= 3  # im_start + assistant + \n (unused — kept for clarity)
+        local_im = last_im - current_batch_start  # offset of boundary within this batch
+
+        # Retrieve any previously accumulated pending payload for this request
+        pending = transfer_manager._pending_assistant.pop(request_id, None)
+
+        if local_im > 0:
+            # Boundary is inside the current batch: the tokens before it can be
+            # sent immediately; the tokens from the boundary onward must wait.
+            pre_payload = dict(talker_additional_info)
+            pre_payload["thinker_prefill_embeddings"] = embeds_cpu[:local_im]
+            pre_payload["thinker_hidden_states"] = hidden_cpu[:local_im]
+            pre_payload["finished"] = torch.tensor(False, dtype=torch.bool)
+            transfer_manager._ready_pre_payload[request_id] = pre_payload
+
+            asst_payload = dict(talker_additional_info)
+            asst_payload["thinker_prefill_embeddings"] = embeds_cpu[local_im:]
+            asst_payload["thinker_hidden_states"] = hidden_cpu[local_im:]
+            if pending is not None:
+                asst_payload = _merge_prefill_payloads(pending, asst_payload)
+            transfer_manager._pending_assistant[request_id] = asst_payload
+            return None
+
+        # local_im <= 0: entire batch is within the assistant region
+        cur_payload = dict(talker_additional_info)
+        cur_payload["thinker_prefill_embeddings"] = embeds_cpu
+        cur_payload["thinker_hidden_states"] = hidden_cpu
+        if pending is not None:
+            cur_payload = _merge_prefill_payloads(pending, cur_payload)
+        # Whether complete or not, keep accumulating — wait for decode embed
+        transfer_manager._pending_assistant[request_id] = cur_payload
+        return None
     else:
-        talker_additional_info = {
-            "request_id": request_id,
-            "finished": torch.tensor(finished, dtype=torch.bool),
-        }
         embeds = pooling_output.get("0")
         hidden_states = pooling_output.get("24")
         chunk_total = int(embeds.shape[0]) if isinstance(embeds, torch.Tensor) else 0
@@ -169,6 +255,41 @@ def thinker2talker_async_chunk(
         # input in this batch.  ALL embeddings in this batch are therefore prefill embeddings.
         num_prefill_tokens = max(0, chunk_total - num_decode_tokens)
         is_transition_or_pure_prefill = num_prefill_tokens > 0
+        is_pure_decode = not is_transition_or_pure_prefill
+
+        # Check if there is a pending assistant bootstrap to flush.
+        # Only flush on a pure-decode step when the decode embed is available.
+        pending = transfer_manager._pending_assistant.get(request_id)
+        if pending is not None:
+            prompt_token_ids_now = _ensure_list(request.prompt_token_ids)
+            has_decode_embed = (
+                is_pure_decode
+                and isinstance(embeds, torch.Tensor)
+                and embeds.numel() > 0
+            )
+            if _assistant_parts_complete(prompt_token_ids_now, output_token_ids, has_decode_embed):
+                # Bootstrap complete — flush the pending payload with first_text embed.
+                transfer_manager._pending_assistant.pop(request_id)
+                flushed = dict(pending)
+                flushed["finished"] = torch.tensor(finished, dtype=torch.bool)
+                flushed["thinker_decode_embeddings"] = embeds[0:1].detach().cpu()
+                if isinstance(hidden_states, torch.Tensor):
+                    flushed["thinker_decode_hidden_states"] = hidden_states[0:1].detach().cpu()
+                flushed["override_keys"] = [
+                    "thinker_output_token_ids",
+                    "thinker_decode_hidden_states",
+                ]
+                flushed["thinker_output_token_ids"] = output_token_ids
+                return flushed
+            else:
+                # Not yet complete — keep waiting.
+                pending["finished"] = torch.tensor(finished, dtype=torch.bool)
+                return None
+
+        talker_additional_info = {
+            "request_id": request_id,
+            "finished": torch.tensor(finished, dtype=torch.bool),
+        }
 
         if is_transition_or_pure_prefill and isinstance(embeds, torch.Tensor) and isinstance(hidden_states, torch.Tensor):
             # ALL tokens in this batch are prefill inputs.
