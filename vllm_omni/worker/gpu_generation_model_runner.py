@@ -315,7 +315,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: pass slot_mappings for upstream v1 API compatibility
-            actual_num_computed_tokens=self.input_batch.num_computed_tokens_cpu[:num_reqs],
         )
         self.kv_connector_output = kv_connector_output
 
@@ -362,7 +361,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: unpack slot_mappings for upstream v1 API compatibility
-            actual_num_computed_tokens,
         ) = self.execute_model_state
         self.execute_model_state = None
 
