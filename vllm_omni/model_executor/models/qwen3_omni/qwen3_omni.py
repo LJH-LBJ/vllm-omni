@@ -1383,68 +1383,48 @@ class Qwen3OmniMoeForConditionalGeneration(
         self._assistant_decode_fill_consumed = 0
         hidden_dim = assistant_hidden.shape[-1] if assistant_hidden.shape[0] > 0 else tts_pad_embed.shape[-1]
 
-        if assistant_hidden.shape[0] < 2:
-            # Need at least <|im_start|> and assistant from prefill — defer
-            return None, None, None
-
-        if assistant_hidden.shape[0] == 2:
-            # Have <|im_start|> and assistant; \n must come from decode[0]
-            has_decode = (
-                isinstance(decode_assistant_fill, torch.Tensor)
-                and decode_assistant_fill.ndim >= 2
-                and int(decode_assistant_fill.shape[0]) >= 1
+        if assistant_hidden.shape[0] < 3:
+            # The connector should guarantee >= 3 prefill tokens (im_start + assistant + \n).
+            # If this fires, it is a connector bug.
+            logger.warning(
+                "[_get_talker_assistant_parts] req=%s: assistant_hidden.shape=%s < 3 — "
+                "connector bug? Falling back to zero-pad.",
+                request_id, list(assistant_hidden.shape),
             )
-            if not has_decode:
-                return None, None, None  # defer until \n decode token arrives
-            newline_embed = self.talker.text_projection(
+            pad_count = 3 - assistant_hidden.shape[0]
+            zero_pad = torch.zeros((pad_count, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
+            assistant_hidden = torch.cat([assistant_hidden, zero_pad], dim=0)
+
+        # assistant_hidden.shape[0] >= 3: im_start + assistant + \n from prefill.
+        # The connector guarantees decode_assistant_fill[0] = embed(first_text).
+        has_decode = (
+            isinstance(decode_assistant_fill, torch.Tensor)
+            and decode_assistant_fill.ndim >= 2
+            and int(decode_assistant_fill.shape[0]) >= 1
+        )
+        logger.info(
+            "[ASSISTANT_PARTS] req=%s prefill_len=%s has_decode=%s decode_fill_len=%s",
+            request_id,
+            assistant_hidden.shape[0],
+            has_decode,
+            int(decode_assistant_fill.shape[0]) if isinstance(decode_assistant_fill, torch.Tensor) else 0,
+        )
+        if has_decode:
+            first_text_embed = self.talker.text_projection(
                 decode_assistant_fill[0:1].to(tts_pad_embed.device)
             ).to(assistant_hidden.dtype)
-            assistant_hidden = torch.cat([assistant_hidden, newline_embed], dim=0)
+            assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
             self._assistant_decode_fill_consumed = 1
-            # first_text: use decode[1] if available, else zero-pad
-            if int(decode_assistant_fill.shape[0]) >= 2:
-                first_text_embed = self.talker.text_projection(
-                    decode_assistant_fill[1:2].to(tts_pad_embed.device)
-                ).to(assistant_hidden.dtype)
-                assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
-                self._assistant_decode_fill_consumed = 2
-            else:
-                zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
-                assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
-
-        elif assistant_hidden.shape[0] == 3:
-            # Have <|im_start|>, assistant, \n from prefill.
-            # After the source fix in thinker2talker_async_chunk, decode[0] is now
-            # embed(first_text) — the first pure-decode step's input embedding.
-            # Use it directly for the first_text slot.
-            has_decode = (
-                isinstance(decode_assistant_fill, torch.Tensor)
-                and decode_assistant_fill.ndim >= 2
-                and int(decode_assistant_fill.shape[0]) >= 1
-            )
-            logger.info(
-                "[ASSISTANT_PARTS] req=%s shape==3 has_decode=%s decode_fill_len=%s",
+        else:
+            # This should NOT happen if the connector guarantees complete bootstrap.
+            logger.warning(
+                "[_get_talker_assistant_parts] req=%s: decode_assistant_fill missing — "
+                "connector bug? Falling back to zero-pad for first_text slot.",
                 request_id,
-                has_decode,
-                int(decode_assistant_fill.shape[0]) if isinstance(decode_assistant_fill, torch.Tensor) else 0,
             )
-            if has_decode:
-                first_text_embed = self.talker.text_projection(
-                    decode_assistant_fill[0:1].to(tts_pad_embed.device)
-                ).to(assistant_hidden.dtype)
-                assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
-                self._assistant_decode_fill_consumed = 1
-            else:
-                # This should NOT happen if the connector guarantees complete bootstrap.
-                # Log a warning instead of silently zero-padding.
-                logger.warning(
-                    "[_get_talker_assistant_parts] req=%s: decode_assistant_fill missing "
-                    "on shape==3 path — connector bug? Falling back to zero-pad.",
-                    request_id,
-                )
-                zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
-                assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
-                self._assistant_decode_fill_consumed = 0
+            zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
+            assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
+            self._assistant_decode_fill_consumed = 0
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         assistant_text_hidden = torch.cat(
             (
