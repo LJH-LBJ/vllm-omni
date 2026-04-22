@@ -1402,22 +1402,26 @@ class Qwen3OmniMoeForConditionalGeneration(
                 assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
 
         elif assistant_hidden.shape[0] == 3:
-            # Have <|im_start|>, assistant, \n from prefill;
-            # use decode[0] for first_text if available, else zero-pad
-            has_decode = (
+            # Have <|im_start|>, assistant, \n from prefill.
+            # decode[0] = \n (already covered by prefill[2]; skip it).
+            # decode[1] = first_text (first real generated token).
+            has_first_text = (
                 isinstance(decode_assistant_fill, torch.Tensor)
                 and decode_assistant_fill.ndim >= 2
-                and int(decode_assistant_fill.shape[0]) >= 1
+                and int(decode_assistant_fill.shape[0]) >= 2
             )
-            if has_decode:
+            if has_first_text:
                 first_text_embed = self.talker.text_projection(
-                    decode_assistant_fill[0:1].to(tts_pad_embed.device)
+                    decode_assistant_fill[1:2].to(tts_pad_embed.device)
                 ).to(assistant_hidden.dtype)
                 assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
-                self._assistant_decode_fill_consumed = 1
+                self._assistant_decode_fill_consumed = 2
             else:
+                # decode[1] not yet arrived; zero-pad and mark consumed=1 so that
+                # decode phase starts from decode[1] (skipping the duplicate \n at decode[0]).
                 zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
                 assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
+                self._assistant_decode_fill_consumed = 1
 
         # assistant_hidden.shape[0] >= 4 — ready to assemble
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
