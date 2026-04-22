@@ -60,7 +60,7 @@ class ExecuteModelState(NamedTuple):
     multimodal_outputs: Any
     # slot_mappings for attention/drafter (aligned with upstream v1 API)
     slot_mappings: dict[str, torch.Tensor] | list[dict[str, torch.Tensor]] | None = None
-    actual_num_computed_tokens: dict[str, int] | None = None
+
 
 
 class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
@@ -473,30 +473,7 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                 num_output_tokens = [int(x) for x in (getattr(cached, "num_output_tokens", []) or [])]
                 num_computed_tokens = [int(x) for x in (getattr(cached, "num_computed_tokens", []) or [])]
 
-            # Qwen3-Omni Talker preprocess strips system tokens, so the actual token count
-            # per request can be less than what the scheduler scheduled.
-            # Adjust logits_indices to point to the last *valid* token.
-            if getattr(self.model, "model_stage", None) == "talker":
-                seg_lens = getattr(self, "_preprocess_seg_lens", None)
-                if seg_lens:
-                    adjusted = []
-                    actual_num_computed_tokens = {}
-                    for i in range(num_reqs):
-                        req_id = self.input_batch.req_ids[i]
-                        start = int(self.query_start_loc.cpu[i])
-                        actual = seg_lens[i]
-                        actual_num_computed_tokens[req_id] = actual
-                        adjusted.append(start + max(actual, 1) - 1)
-                    logits_indices = torch.tensor(
-                        adjusted,
-                        dtype=logits_indices.dtype,
-                        device=logits_indices.device,
-                    )
-                    self._omni_actual_num_computed_tokens = actual_num_computed_tokens
-                else:
-                    self._omni_actual_num_computed_tokens = None
-            else:
-                self._omni_actual_num_computed_tokens = None
+
 
         # Let the model adjust inputs before forward (e.g. restore input_ids
         # for multimodal position detection, fix decode position offsets).
@@ -676,7 +653,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: pass slot_mappings for drafter
-            getattr(self, "_omni_actual_num_computed_tokens", None),
         )
         self.kv_connector_output = kv_connector_output
 
@@ -779,7 +755,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             cudagraph_stats,
             multimodal_outputs,
             slot_mappings,  # OMNI: unpack slot_mappings for drafter
-            actual_num_computed_tokens,
         ) = self.execute_model_state
         self.execute_model_state = None
         seq_len = hidden_states.shape[0]
@@ -993,7 +968,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                 cudagraph_stats=cudagraph_stats,
             )
             output.kv_extracted_req_ids = kv_extracted_req_ids
-            output.actual_num_computed_tokens = actual_num_computed_tokens
 
         if not self.use_async_scheduling:
             return output
