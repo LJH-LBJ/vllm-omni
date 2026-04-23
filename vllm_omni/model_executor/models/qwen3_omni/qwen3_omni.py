@@ -691,8 +691,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             prefill_total_tokens = 0
         prefill_exhausted = prefill_total_tokens > 0 and num_processed_thinker_tokens >= prefill_total_tokens
         update_dict = {}
-        force_prefill_for_assistant = bool(info_dict.get("assistant_prefill_pending", False))
-        use_prefill = (span_len > 1 or force_prefill_for_assistant) and not prefill_exhausted
+        use_prefill = span_len > 1 and not prefill_exhausted
         effective_span_len = span_len
         if use_prefill:
             input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, **info_dict)
@@ -722,9 +721,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
             update_dict["mtp_inputs"] = last_talker_hidden, text_step
 
-        if update_dict.get("defer_assistant_chunk", False):
-            update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0)
-        elif "num_processed_tokens" not in update_dict:
+        if "num_processed_tokens" not in update_dict:
             update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + effective_span_len
         return input_ids, input_embeds, update_dict
 
@@ -862,38 +859,8 @@ class Qwen3OmniMoeForConditionalGeneration(
         total_thinker_tokens = thinker_sequences.shape[0]
         current_chunk_size = input_ids.shape[0]
         chunk_offset = num_processed_thinker_tokens
-        # Cap by actually available embeddings/hidden states to handle the case
-        # where the talker scheduler runs ahead of thinker data delivery under
-        # concurrent requests.
-        prefill_available = min(
-            thinker_sequence_embeds.shape[0],
-            thinker_hidden_states.shape[0],
-        )
-        if prefill_available > 0 and chunk_offset >= prefill_available:
-            # All thinker prefill embeddings have been consumed.  The remaining
-            # tokens belong to the assistant/decode segment and will be sourced
-            # from thinker_decode_embeddings inside _thinker_to_talker_prefill.
-            # Do NOT cap by prefill_available here – that would make chunk_size=0
-            # and spin forever at the prefill/decode boundary.
-            available_tokens = total_thinker_tokens
-        else:
-            available_tokens = min(total_thinker_tokens, prefill_available)
-        remaining_thinker_tokens = max(available_tokens - chunk_offset, 0)
+        remaining_thinker_tokens = max(total_thinker_tokens - chunk_offset, 0)
         chunk_size = min(current_chunk_size, remaining_thinker_tokens)
-
-        # When the talker scheduler runs ahead of thinker data delivery (e.g.
-        # under concurrent requests), chunk_size can be 0 or smaller than the
-        # scheduled tokens.  Return empty embeddings so the model runner
-        # treats this as a system-only chunk (seg_len=0) and retries next step.
-        if chunk_size <= 0:
-            embed_dim = thinker_sequence_embeds.shape[-1]
-            update_dict["num_processed_thinker_tokens"] = chunk_offset
-            update_dict["defer_assistant_chunk"] = True
-            return (
-                torch.empty(0, dtype=input_ids.dtype, device=input_ids.device),
-                torch.empty(0, embed_dim, dtype=thinker_sequence_embeds.dtype, device=input_ids.device),
-                update_dict,
-            )
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
@@ -911,7 +878,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             if isinstance(cached_decode_for_assistant, torch.Tensor) and cached_decode_for_assistant.numel() > 0:
                 decode_assistant_fill = cached_decode_for_assistant.to(talker_device, dtype=torch.bfloat16)
         speaker_id = self._get_text_spk_token_id(voice_type)
-        req_input_ids, req_embeds, trailing_text_hidden, defer_assistant_chunk, consumed_decode_for_assistant = (
+        req_input_ids, req_embeds, trailing_text_hidden, consumed_decode_for_assistant = (
             self._thinker_to_talker_prefill(
             thinker_embed=thinker_sequence_embed_chunk.to(talker_device),
             thinker_hidden=thinker_hidden_chunk.to(talker_device),
@@ -929,17 +896,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         )
         )
 
-        if defer_assistant_chunk:
-            self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
-            # Advance past any user-segment tokens already embedded in this
-            # chunk so we don't re-process them on every retry.  req_embeds
-            # contains exactly those user rows (returned by the updated defer
-            # path in _thinker_to_talker_prefill).
-            update_dict["num_processed_thinker_tokens"] = chunk_offset + int(req_embeds.shape[0])
-            update_dict["assistant_prefill_pending"] = True
-            update_dict["defer_assistant_chunk"] = True
-            return req_input_ids, req_embeds, update_dict
-
         # Trace progress for next chunk.
         # If the assistant segment was fully processed (trailing_text_hidden is set),
         # jump to total_thinker_tokens so prefill_exhausted=True next step and the
@@ -950,7 +906,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict["num_processed_thinker_tokens"] = total_thinker_tokens
         else:
             update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
-        update_dict["assistant_prefill_pending"] = False
 
         # Queue trailing_text_hidden for decode (drop first for next steps),
         try:
@@ -1065,7 +1020,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_offset: int = 0,
         request_id: str | None = None,
         decode_assistant_fill: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, bool, int]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None, int]:
         """
         Project thinker outputs to talker inputs during prefill stage.
 
@@ -1093,7 +1048,6 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         talker_input_embeds = []  # [1 t d]
         talker_input_ids = []
-        defer_assistant_chunk = False
         consumed_decode_for_assistant = 0
 
         # calculate the start and end index of the current chunk
@@ -1163,18 +1117,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                     talker_input_ids.append(thinker_result_ids[local_start:local_end])
                 # Take assistant output (for now)
                 elif (segment_role_token == self.config.assistant_token_id).item() and i == len(im_start_indexes) - 2:
-                    # If the current chunk has fewer than 3 structural prefill tokens
-                    # (<|im_start|>, role, \n) but more prefill tokens are still being
-                    # delivered by the thinker, defer so the next step can include all
-                    # 3 tokens in one chunk.  This avoids consuming decode fills
-                    # prematurely and keeps start_index=1 (instead of 2 or 3).
-                    _assistant_prefill_in_chunk = local_end - local_start
-                    # Defer only when we have fewer than 2 prefill tokens and more are
-                    # still coming. <|im_start|> and assistant must both come from
-                    # prefill; \n and first_text are handled in _get_talker_assistant_parts.
-                    if _assistant_prefill_in_chunk < 2 and segment_end < segment_end_index_full:
-                        defer_assistant_chunk = True
-                        break
                     # Extract the overlapping part from chunk tensors using local coordinates
                     talker_assistant_embeds, talker_assistant_ids, trailing_text_hidden = (
                         self._get_talker_assistant_parts(
@@ -1189,9 +1131,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                             decode_assistant_fill=decode_assistant_fill,
                         )
                     )
-                    if talker_assistant_embeds is None or talker_assistant_ids is None:
-                        defer_assistant_chunk = True
-                        break
                     logger.info(f"trailing_text_hidden {trailing_text_hidden}")
                     talker_input_embeds.append(talker_assistant_embeds)
                     talker_input_ids.append(talker_assistant_ids)
@@ -1205,37 +1144,17 @@ class Qwen3OmniMoeForConditionalGeneration(
                     continue
                 else:
                     raise AssertionError("Expect role id after <|im_start|> (assistant, user, system)")
-            if defer_assistant_chunk:
-                break
-
-        # len(input_ids) < system prompt len
-        if defer_assistant_chunk:
-            embed_dim = thinker_embed.shape[-1]
-            # Return any user-segment embeddings already built so that
-            # talker_preprocess_prefill can advance num_processed_thinker_tokens
-            # past the user part and avoid re-processing it on every retry.
-            if talker_input_embeds:
-                talker_input_embed = torch.cat(
-                    [embed.to(input_ids.device) for embed in talker_input_embeds], dim=0
-                )
-                talker_input_id = torch.cat(
-                    [ids.to(input_ids.device) for ids in talker_input_ids], dim=0
-                )
-            else:
-                talker_input_embed = torch.empty(0, embed_dim, dtype=thinker_embed.dtype, device=input_ids.device)
-                talker_input_id = torch.empty(0, dtype=thinker_result_ids.dtype, device=input_ids.device)
-            return talker_input_id, talker_input_embed, trailing_text_hidden, True, 0
 
         if len(talker_input_embeds) == 0 or len(talker_input_ids) == 0:
             embed_dim = thinker_embed.shape[-1]
             talker_input_embed = torch.empty(0, embed_dim, dtype=thinker_embed.dtype, device=input_ids.device)
             talker_input_id = torch.empty(0, dtype=thinker_result_ids.dtype, device=input_ids.device)
-            return talker_input_id, talker_input_embed, trailing_text_hidden, False, 0
+            return talker_input_id, talker_input_embed, trailing_text_hidden, 0
 
         talker_input_embed = torch.cat([embed.to(input_ids.device) for embed in talker_input_embeds], dim=0)
         talker_input_id = torch.cat([embed.to(input_ids.device) for embed in talker_input_ids], dim=0)
 
-        return talker_input_id, talker_input_embed, trailing_text_hidden, False, consumed_decode_for_assistant
+        return talker_input_id, talker_input_embed, trailing_text_hidden, consumed_decode_for_assistant
 
     def _thinker_decode_to_talker_decode(
         self,
