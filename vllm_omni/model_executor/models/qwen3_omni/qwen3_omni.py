@@ -859,7 +859,16 @@ class Qwen3OmniMoeForConditionalGeneration(
         total_thinker_tokens = thinker_sequences.shape[0]
         current_chunk_size = input_ids.shape[0]
         chunk_offset = num_processed_thinker_tokens
-        remaining_thinker_tokens = max(total_thinker_tokens - chunk_offset, 0)
+        # Cap by actual number of embeddings/hidden-states delivered so far.
+        # thinker_sequences may include all token IDs (101) while only a subset
+        # of embeddings has been computed and transmitted (e.g. 61).  Using the
+        # token count alone would create a length mismatch between
+        # thinker_sequences_chunk and thinker_sequence_embed_chunk.
+        embed_available = min(
+            thinker_sequence_embeds.shape[0],
+            thinker_hidden_states.shape[0],
+        )
+        remaining_thinker_tokens = max(min(total_thinker_tokens, embed_available) - chunk_offset, 0)
         chunk_size = min(current_chunk_size, remaining_thinker_tokens)
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
@@ -1099,11 +1108,12 @@ class Qwen3OmniMoeForConditionalGeneration(
                 local_start = segment_start - chunk_start_index
                 local_end = segment_end - chunk_start_index
                 logger.info(
-                    "Processing request_id %s chunk %s to %s of full sequence (total_thinker_tokens=%s)",
+                    "Processing request_id %s chunk %s to %s of full sequence (total_thinker_tokens=%s) thinker_result_ids = %s",
                     request_id,
                     segment_start,
                     segment_end,
                     total_thinker_tokens,
+                    thinker_result_ids[local_start:local_end].tolist(),
                 )
 
                 # Talker should ignore thinker system prompt
@@ -1274,6 +1284,13 @@ class Qwen3OmniMoeForConditionalGeneration(
         )
 
         user_mm_mask = multimodal_mask[im_start_index:segment_end_index]
+        logger.info(
+            f"im_start_index={im_start_index}, "
+            f"segment_end_index={segment_end_index}, "
+            f"thinker_hidden.shape={tuple(thinker_hidden.shape)}, "
+            f"thinker_hidden_slice.shape={tuple(thinker_hidden[im_start_index:segment_end_index].shape)}, "
+            f"user_mm_mask.shape={tuple(user_mm_mask.shape)}"
+        )
         # Multimodal data exists
         if user_mm_mask.any():
             user_thinker_hidden_mm = thinker_hidden[im_start_index:segment_end_index][user_mm_mask]
