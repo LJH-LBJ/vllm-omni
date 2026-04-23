@@ -121,6 +121,7 @@ class OmniConnectorModelRunnerMixin:
         self._send_side_request_payload: dict[str, dict[str, Any]] = {}
         self._pending_assistant: dict[str, dict[str, Any]] = {}
         self._ready_pre_payload: dict[str, dict[str, Any]] = {}
+        self._prefill_offset: dict[str, int] = {}
         self._code_prompt_token_ids: dict[str, list[list[int]]] = defaultdict(list)
         self._request_ids_mapping: dict[str, str] = {}
 
@@ -224,7 +225,7 @@ class OmniConnectorModelRunnerMixin:
                 self._code_prompt_token_ids.pop(send_req_id, None)
                 self._pending_assistant.pop(send_req_id, None)
                 self._ready_pre_payload.pop(send_req_id, None)
-            self._kv_pending_transfers.pop(req_id, None)
+                self._prefill_offset.pop(send_req_id, None)
             self._kv_active_transfers.discard(req_id)
             self._kv_completed_transfers.discard(req_id)
             self._kv_triggered_requests.discard(req_id)
@@ -245,9 +246,11 @@ class OmniConnectorModelRunnerMixin:
             self._send_side_request_payload.pop(ext_id, None)
             self._pending_assistant.pop(ext_id, None)
             self._ready_pre_payload.pop(ext_id, None)
+            self._prefill_offset.pop(ext_id, None)
         self._send_side_request_payload.pop(req_id, None)
         self._pending_assistant.pop(req_id, None)
         self._ready_pre_payload.pop(req_id, None)
+        self._prefill_offset.pop(req_id, None)
 
     def _cleanup_recv_delivery_state(self, req_id: str) -> None:
         """Clear recv-side delivery-cycle state."""
@@ -1766,6 +1769,7 @@ class OmniConnectorModelRunnerMixin:
                 self._code_prompt_token_ids.pop(cleanup_req_id, None)
                 self._pending_assistant.pop(cleanup_req_id, None)
                 self._ready_pre_payload.pop(cleanup_req_id, None)
+                self._prefill_offset.pop(cleanup_req_id, None)
 
     # ------------------------------------------------------------------ #
     #  Payload accumulation  (ported from OmniChunkTransferAdapter)

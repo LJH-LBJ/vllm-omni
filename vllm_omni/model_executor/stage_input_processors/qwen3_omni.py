@@ -173,56 +173,51 @@ def thinker2talker_async_chunk(
         _ensure_list(request.prompt_token_ids) if request.prompt_token_ids is not None else "N/A",
     )
     # ------------------------------------------------------------------ #
-    # Flush any pre-assistant payload buffered from a previous split.
+    # Ensure per-request state dicts exist
     # ------------------------------------------------------------------ #
-    if not hasattr(transfer_manager, '_ready_pre_payload'):
-        transfer_manager._ready_pre_payload = {}
-    if request_id in transfer_manager._ready_pre_payload:
-        return transfer_manager._ready_pre_payload.pop(request_id)
+    if not hasattr(transfer_manager, '_pending_assistant'):
+        transfer_manager._pending_assistant = {}
+    if not hasattr(transfer_manager, '_prefill_offset'):
+        transfer_manager._prefill_offset = {}
 
     # ------------------------------------------------------------------ #
-    # Phase 1: Prefill batch – no decode token sampled yet
+    # Determine if this step carries prefill embeddings.
+    #
+    # Prefill embeds are present in two cases:
+    #   (a) Pure prefill: output_token_ids is empty
+    #   (b) Transition step: output_token_ids has 1 token but embeds > 1
+    #       (the model processed the last prefill chunk AND sampled tok0)
+    #
+    # In both cases we must absorb the prefill embeds using the correct
+    # batch offset tracked by _prefill_offset (NOT len(prompt) - batch_size,
+    # because prompt_token_ids is always the full prompt).
     # ------------------------------------------------------------------ #
-    if not output_token_ids and not is_finished:
+    embeds_tensor = pooling_output.get("0")
+    embeds_count = embeds_tensor.shape[0] if isinstance(embeds_tensor, torch.Tensor) else 0
+
+    has_prefill_embeds = (
+        not is_finished
+        and embeds_count > 0
+        and (not output_token_ids or (len(output_token_ids) == 1 and embeds_count > 1))
+    )
+
+    if has_prefill_embeds:
         prompt_token_ids = _ensure_list(request.prompt_token_ids)
         all_token_ids = _ensure_list(request.all_token_ids)
-        embeds_cpu = pooling_output.get("0").detach().cpu()
+        embeds_cpu = embeds_tensor.detach().cpu()
         hidden_cpu = pooling_output.get("24").detach().cpu()
         batch_size = embeds_cpu.shape[0]
-        full_prompt_len = len(prompt_token_ids)
-        current_batch_start = full_prompt_len - batch_size
+        current_batch_start = transfer_manager._prefill_offset.get(request_id, 0)
+        transfer_manager._prefill_offset[request_id] = current_batch_start + batch_size
 
         last_im = _find_assistant_boundary(prompt_token_ids)
-
-        if last_im == -1:
-            # No assistant segment in prompt so far: send immediately.
-            info = {
-                "thinker_prefill_embeddings": embeds_cpu,
-                "thinker_hidden_states": hidden_cpu,
-                "thinker_sequences": all_token_ids,
-                "thinker_input_ids": prompt_token_ids,
-                "tts_bos_embed": pooling_output.get("tts_bos_embed").detach().cpu(),
-                "tts_eos_embed": pooling_output.get("tts_eos_embed").detach().cpu(),
-                "tts_pad_embed": pooling_output.get("tts_pad_embed").detach().cpu(),
-                "finished": torch.tensor(False, dtype=torch.bool),
-            }
-            speaker = extract_speaker_from_request(request)
-            if speaker is not None:
-                info["speaker"] = speaker
-            language = extract_language_from_request(request)
-            if language is not None:
-                info["language"] = language
-            return info
-
-        # --- Assistant boundary exists: only buffer assistant part ---
-        local_im = last_im - current_batch_start
 
         base_info = {
             "thinker_sequences": all_token_ids,
             "thinker_input_ids": prompt_token_ids,
-            "tts_bos_embed": pooling_output.get("tts_bos_embed").detach().cpu(),
-            "tts_eos_embed": pooling_output.get("tts_eos_embed").detach().cpu(),
-            "tts_pad_embed": pooling_output.get("tts_pad_embed").detach().cpu(),
+            "tts_bos_embed": pooling_output.get("tts_bos_embed", torch.tensor([])).detach().cpu(),
+            "tts_eos_embed": pooling_output.get("tts_eos_embed", torch.tensor([])).detach().cpu(),
+            "tts_pad_embed": pooling_output.get("tts_pad_embed", torch.tensor([])).detach().cpu(),
         }
         speaker = extract_speaker_from_request(request)
         if speaker is not None:
@@ -231,51 +226,57 @@ def thinker2talker_async_chunk(
         if language is not None:
             base_info["language"] = language
 
-        if not hasattr(transfer_manager, '_pending_assistant'):
-            transfer_manager._pending_assistant = {}
+        if last_im == -1 or last_im >= current_batch_start + batch_size:
+            # Assistant boundary not in this batch (either doesn't exist or
+            # is beyond the end of this batch).  Send immediately.
+            info = dict(base_info)
+            info["thinker_prefill_embeddings"] = embeds_cpu
+            info["thinker_hidden_states"] = hidden_cpu
+            info["finished"] = torch.tensor(False, dtype=torch.bool)
+            return info
+
+        # Assistant boundary is within or before this batch.
+        local_im = last_im - current_batch_start
         pending = transfer_manager._pending_assistant.pop(request_id, None)
 
         if local_im > 0:
-            # Boundary inside this batch: split
-            pre_payload = dict(base_info)
-            pre_payload["thinker_prefill_embeddings"] = embeds_cpu[:local_im]
-            pre_payload["thinker_hidden_states"] = hidden_cpu[:local_im]
-            pre_payload["finished"] = torch.tensor(False, dtype=torch.bool)
-            transfer_manager._ready_pre_payload[request_id] = pre_payload
-
+            # Boundary inside this batch: split.
+            # Post-boundary part (assistant header) → _pending_assistant.
             asst_payload = dict(base_info)
             asst_payload["thinker_prefill_embeddings"] = embeds_cpu[local_im:]
             asst_payload["thinker_hidden_states"] = hidden_cpu[local_im:]
             if pending is not None:
                 asst_payload = _merge_prefill_payloads(pending, asst_payload)
             transfer_manager._pending_assistant[request_id] = asst_payload
-            return None
 
-        # local_im <= 0: entire batch is in assistant range
-        cur_payload = dict(base_info)
-        cur_payload["thinker_prefill_embeddings"] = embeds_cpu
-        cur_payload["thinker_hidden_states"] = hidden_cpu
-        if pending is not None:
-            cur_payload = _merge_prefill_payloads(pending, cur_payload)
-        transfer_manager._pending_assistant[request_id] = cur_payload
-        return None
+            # Pre-boundary part (system/user) → return immediately.
+            info = dict(base_info)
+            info["thinker_prefill_embeddings"] = embeds_cpu[:local_im]
+            info["thinker_hidden_states"] = hidden_cpu[:local_im]
+            info["finished"] = torch.tensor(False, dtype=torch.bool)
+            return info
+        else:
+            # local_im <= 0: entire batch is in assistant range.
+            cur_payload = dict(base_info)
+            cur_payload["thinker_prefill_embeddings"] = embeds_cpu
+            cur_payload["thinker_hidden_states"] = hidden_cpu
+            if pending is not None:
+                cur_payload = _merge_prefill_payloads(pending, cur_payload)
+            transfer_manager._pending_assistant[request_id] = cur_payload
+            return None
 
     # ------------------------------------------------------------------ #
     # Phase 2: Flush pending assistant bootstrap when decode embed arrives
     # ------------------------------------------------------------------ #
-    if not hasattr(transfer_manager, '_pending_assistant'):
-        transfer_manager._pending_assistant = {}
     pending = transfer_manager._pending_assistant.get(request_id)
 
     if pending is not None:
         prompt_token_ids_now = _ensure_list(request.prompt_token_ids)
         embeds = pooling_output.get("0")
-        embeds_count = embeds.shape[0] if isinstance(embeds, torch.Tensor) else 0
-        has_decode_embed = (
-            bool(output_token_ids)
-            and embeds_count > 0
-            and embeds_count == len(output_token_ids)
-        )
+        # len >= 2 means we are past the transition step:
+        #   transition: output_token_ids=[tok0] (len=1), embeds=last prefill chunk
+        #   first pure-decode: output_token_ids=[tok0,tok1] (len=2), embeds=tok0's embed
+        has_decode_embed = len(output_token_ids) >= 2
 
         if not _assistant_parts_complete(prompt_token_ids_now, output_token_ids, has_decode_embed):
             pending["finished"] = torch.tensor(is_finished, dtype=torch.bool)
@@ -284,6 +285,7 @@ def thinker2talker_async_chunk(
         all_token_ids = _ensure_list(request.all_token_ids)
         prompt_token_ids = _ensure_list(request.prompt_token_ids)
         saved = transfer_manager._pending_assistant.pop(request_id)
+        transfer_manager._prefill_offset.pop(request_id, None)
         info = {
             "thinker_prefill_embeddings": saved["thinker_prefill_embeddings"],
             "thinker_hidden_states": saved["thinker_hidden_states"],
