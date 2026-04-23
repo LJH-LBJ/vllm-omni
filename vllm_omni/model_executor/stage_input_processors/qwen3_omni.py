@@ -153,18 +153,11 @@ def thinker2talker_async_chunk(
     2. Split hidden states into: prompt embeddings + generated embeddings
     3. Package for talker with additional information
     """
-    # Lazily initialise per-request pending dicts on the transfer_manager
+    # Lazily initialise per-request pending dict on the transfer_manager
     if not hasattr(transfer_manager, "_pending_assistant"):
         transfer_manager._pending_assistant = {}
-    if not hasattr(transfer_manager, "_ready_pre_payload"):
-        transfer_manager._ready_pre_payload = {}
 
     request_id = request.external_req_id
-
-    # Highest priority: return the pre-assistant part that was split off in the
-    # previous chunk_id==0 call (when the boundary fell inside the batch).
-    if request_id in transfer_manager._ready_pre_payload:
-        return transfer_manager._ready_pre_payload.pop(request_id)
 
     finished = is_finished
     chunk_id = transfer_manager.put_req_chunk[request_id]
@@ -223,7 +216,6 @@ def thinker2talker_async_chunk(
             pre_payload["thinker_prefill_embeddings"] = embeds_cpu[:local_im]
             pre_payload["thinker_hidden_states"] = hidden_cpu[:local_im]
             pre_payload["finished"] = torch.tensor(False, dtype=torch.bool)
-            transfer_manager._ready_pre_payload[request_id] = pre_payload
 
             asst_payload = dict(talker_additional_info)
             asst_payload["thinker_prefill_embeddings"] = embeds_cpu[local_im:]
@@ -231,7 +223,9 @@ def thinker2talker_async_chunk(
             if pending is not None:
                 asst_payload = _merge_prefill_payloads(pending, asst_payload)
             transfer_manager._pending_assistant[request_id] = asst_payload
-            return None
+            # Return the pre-boundary portion immediately so the talker can
+            # start processing it without waiting for the assistant bootstrap.
+            return pre_payload
 
         # local_im <= 0: entire batch is within the assistant region
         cur_payload = dict(talker_additional_info)
@@ -280,6 +274,8 @@ def thinker2talker_async_chunk(
                 if isinstance(hidden_states, torch.Tensor):
                     flushed["thinker_decode_hidden_states"] = hidden_states.detach().cpu()
                 flushed["override_keys"] = [
+                    "thinker_sequences",
+                    "thinker_input_ids",
                     "thinker_output_token_ids",
                     "thinker_decode_hidden_states",
                 ]
