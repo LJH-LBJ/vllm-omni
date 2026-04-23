@@ -691,10 +691,14 @@ class Qwen3OmniMoeForConditionalGeneration(
             prefill_total_tokens = 0
         prefill_exhausted = prefill_total_tokens > 0 and num_processed_thinker_tokens >= prefill_total_tokens
         update_dict = {}
-        use_prefill = span_len > 1 and not prefill_exhausted
         effective_span_len = span_len
-        if use_prefill:
+        if not prefill_exhausted:
             input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, **info_dict)
+            # Empty tensors mean we're waiting for decode embed — skip forward entirely.
+            if input_embeds.shape[0] == 0:
+                if "num_processed_tokens" not in update_dict:
+                    update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0)
+                return input_ids, input_embeds, update_dict
             code_predictor_codes = torch.zeros(
                 (input_embeds.shape[0], self.talker.num_code_groups),
                 device=self._module_device(self.talker),
@@ -868,16 +872,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             thinker_sequence_embeds.shape[0],
             thinker_hidden_states.shape[0],
         )
-        remaining_thinker_tokens = max(min(total_thinker_tokens, embed_available) - chunk_offset, 0)
-        chunk_size = min(current_chunk_size, remaining_thinker_tokens)
-
-        thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
-        thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
-        thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + chunk_size]
-        # With span metadata the connector merges decode embeds across
-        # thinker steps, so thinker_decode_embeddings already contains ALL
-        # decode embeds in order.  Use it directly; fall back to the
-        # model-instance cache if the connector hasn't delivered yet.
+        # Resolve decode embed first — it determines whether we can process the
+        # assistant bootstrap section (positions embed_available..total_thinker_tokens).
         current_decode_for_assistant = info_dict.get("thinker_decode_embeddings", None)
         decode_assistant_fill = None
         if isinstance(current_decode_for_assistant, torch.Tensor) and current_decode_for_assistant.numel() > 0:
@@ -886,6 +882,27 @@ class Qwen3OmniMoeForConditionalGeneration(
             cached_decode_for_assistant = self._decode_embed_cache.get(request_id)
             if isinstance(cached_decode_for_assistant, torch.Tensor) and cached_decode_for_assistant.numel() > 0:
                 decode_assistant_fill = cached_decode_for_assistant.to(talker_device, dtype=torch.bfloat16)
+        # When all prefill embeds are consumed but the decode embed has arrived,
+        # expand the available window to total_thinker_tokens so we can process
+        # the assistant bootstrap section using decode_assistant_fill.
+        has_decode_embed = decode_assistant_fill is not None
+        available_cap = total_thinker_tokens if (chunk_offset >= embed_available and has_decode_embed) else embed_available
+        remaining_thinker_tokens = max(min(total_thinker_tokens, available_cap) - chunk_offset, 0)
+        chunk_size = min(current_chunk_size, remaining_thinker_tokens)
+
+        # Embeddings for this section haven't arrived yet — wait for next step.
+        if chunk_size <= 0:
+            update_dict["num_processed_thinker_tokens"] = chunk_offset
+            embed_dim = thinker_sequence_embeds.shape[-1]
+            return (
+                torch.empty(0, dtype=input_ids.dtype, device=talker_device),
+                torch.empty(0, embed_dim, dtype=thinker_sequence_embeds.dtype, device=talker_device),
+                update_dict,
+            )
+
+        thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
+        thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
+        thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + chunk_size]
         speaker_id = self._get_text_spk_token_id(voice_type)
         req_input_ids, req_embeds, trailing_text_hidden, consumed_decode_for_assistant = (
             self._thinker_to_talker_prefill(
