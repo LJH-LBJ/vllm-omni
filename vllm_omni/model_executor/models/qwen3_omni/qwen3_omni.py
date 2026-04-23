@@ -912,7 +912,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             multimodal_mask=None,
             input_ids=ids_chatml.to(talker_device),
             thinker_result_ids=thinker_sequences_chunk.to(talker_device),
-            total_thinker_tokens=embed_available,
+            total_thinker_tokens=total_thinker_tokens,
             speaker_id=speaker_id,
             tts_bos_thinker=tts_bos_thinker,
             tts_eos_thinker=tts_eos_thinker,
@@ -923,14 +923,8 @@ class Qwen3OmniMoeForConditionalGeneration(
         )
         )
 
-        # Trace progress for next chunk.
-        # If the assistant segment was fully processed (trailing_text_hidden is set),
-        # jump to total_thinker_tokens (including decode tokens) so
-        # prefill_exhausted=True next step and the assistant segment is never re-entered.
-        if isinstance(trailing_text_hidden, torch.Tensor):
-            update_dict["num_processed_thinker_tokens"] = total_thinker_tokens
-        else:
-            update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
+        # Trace progress for next chunk
+        update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
 
         # Queue trailing_text_hidden for decode (drop first for next steps),
         try:
@@ -962,8 +956,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             pass
         update_dict["prefill_consumed_text_tokens"] = consumed_decode_for_assistant
         logger.info(
-            "[PREFILL_CONSUMED] req=%s consumed=%s",
-            info_dict.get("request_id"), consumed_decode_for_assistant,
+            "[PREFILL_CONSUMED] req=%s consumed_decode_for_assistant=%s chunk_size=%s chunk_offset=%s",
+            info_dict.get("request_id"), consumed_decode_for_assistant, chunk_size, chunk_offset
         )
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
 
