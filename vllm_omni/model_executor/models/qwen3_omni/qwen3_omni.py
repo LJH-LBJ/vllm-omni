@@ -698,6 +698,11 @@ class Qwen3OmniMoeForConditionalGeneration(
             if input_embeds.shape[0] == 0:
                 if "num_processed_tokens" not in update_dict:
                     update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0)
+                update_dict["code_predictor_codes"] = torch.zeros(
+                    (0, self.talker.num_code_groups),
+                    device=self._module_device(self.talker),
+                    dtype=torch.long,
+                )
                 return input_ids, input_embeds, update_dict
             code_predictor_codes = torch.zeros(
                 (input_embeds.shape[0], self.talker.num_code_groups),
