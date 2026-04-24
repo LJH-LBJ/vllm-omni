@@ -467,14 +467,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                 ec_connector_output,
             ) = self._preprocess(scheduler_output, num_tokens_padded, intermediate_tensors)
 
-            if getattr(self.model, "model_stage", None) == "talker":
-                cached = getattr(scheduler_output, "scheduled_cached_reqs", None)
-                req_ids = list(getattr(cached, "req_ids", []) or [])
-                num_output_tokens = [int(x) for x in (getattr(cached, "num_output_tokens", []) or [])]
-                num_computed_tokens = [int(x) for x in (getattr(cached, "num_computed_tokens", []) or [])]
-
-
-
         # Let the model adjust inputs before forward (e.g. restore input_ids
         # for multimodal position detection, fix decode position offsets).
         if hasattr(self.model, "prepare_runner_inputs"):
@@ -502,104 +494,101 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         # (wait_for_save + clear metadata) until after draft model runs.
         defer_kv_connector_finalize = self.speculative_config is not None
 
-        # Skip talker forward when this round had only system segments.
-        if getattr(self, "_talker_skip_forward", False):
-            self._talker_skip_forward = False
-            hidden_states = torch.zeros(
-                num_tokens_padded,
-                self.hidden_size,
-                dtype=self.dtype,
-                device=self.device,
+        with (
+            nullcontext(),
+            set_forward_context(
+                attn_metadata,
+                self.vllm_config,
+                num_tokens=num_tokens_padded,
+                num_tokens_across_dp=num_tokens_across_dp,
+                cudagraph_runtime_mode=cudagraph_mode,
+                batch_descriptor=batch_desc,
+                ubatch_slices=ubatch_slices_padded,
+                slot_mapping=slot_mappings,  # OMNI: required for KV cache operations
+            ),
+            record_function_or_nullcontext("gpu_model_runner: forward"),
+            self.maybe_get_kv_connector_output(
+                scheduler_output,
+                defer_finalize=defer_kv_connector_finalize,
+            ) as kv_connector_output,
+        ):
+            model_output = self._model_forward(
+                input_ids=input_ids,
+                positions=positions,
+                intermediate_tensors=intermediate_tensors,
+                inputs_embeds=inputs_embeds,
+                **model_kwargs,
+                sampling_metadata=self.input_batch.sampling_metadata,
+                logits_index=logits_indices,
+                sampler=self.sampler,
             )
-            sample_hidden_states = hidden_states[logits_indices]
-            try:
-                logits = self.model.compute_logits(
-                    sample_hidden_states,
-                    sampling_metadata=self.input_batch.sampling_metadata,
-                )
-            except TypeError:
-                logits = self.model.compute_logits(sample_hidden_states)
-            aux_hidden_states = None
-            # Even though model forward was skipped, decode requests in
-            # the batch may have produced code_predictor_codes during MTP.
-            # Build multimodal_outputs so those codes reach pooler_output.
-            if hasattr(self.model, "make_omni_output"):
-                model_kwargs_extra = self._build_model_kwargs_extra()
-                omni_out = self.model.make_omni_output(hidden_states, **model_kwargs_extra)
-                _, multimodal_outputs = self.extract_multimodal_outputs(omni_out)
+
+            # [Omni] Map pending ropes metadata to req_ids.
+            if hasattr(self.model, "flush_pending_metadata"):
+                self.model.flush_pending_metadata(list(req_ids))
+
+        with record_function_or_nullcontext("gpu_model_runner: postprocess"):
+            if self.use_aux_hidden_state_outputs:
+                # True when EAGLE 3 is used.
+                hidden_states, aux_hidden_states = model_output
             else:
-                multimodal_outputs = None
-            kv_connector_output = None
-        else:
-            with (
-                set_forward_context(
-                    attn_metadata,
-                    self.vllm_config,
-                    num_tokens=num_tokens_padded,
-                    num_tokens_across_dp=num_tokens_across_dp,
-                    cudagraph_runtime_mode=cudagraph_mode,
-                    batch_descriptor=batch_desc,
-                    ubatch_slices=ubatch_slices_padded,
-                    slot_mapping=slot_mappings,  # OMNI: required for KV cache operations
-                ),
-                record_function_or_nullcontext("gpu_model_runner: forward"),
-                self.maybe_get_kv_connector_output(
-                    scheduler_output, defer_finalize=defer_kv_connector_finalize
-                ) as kv_connector_output,
-            ):
-                model_output = self._model_forward(
-                    input_ids=input_ids,
-                    positions=positions,
-                    intermediate_tensors=intermediate_tensors,
-                    inputs_embeds=inputs_embeds,
-                    **model_kwargs,
-                    sampling_metadata=self.input_batch.sampling_metadata,
-                    logits_index=logits_indices,
-                    sampler=self.sampler,
-                )
+                # Common case.
+                hidden_states = model_output
+                aux_hidden_states = None
 
-                # [Omni] Map pending ropes metadata to req_ids.
-                if hasattr(self.model, "flush_pending_metadata"):
-                    self.model.flush_pending_metadata(list(req_ids))
+            hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
 
-            with record_function_or_nullcontext("gpu_model_runner: postprocess"):
-                if self.use_aux_hidden_state_outputs:
-                    # True when EAGLE 3 is used.
-                    hidden_states, aux_hidden_states = model_output
+            # Cache hidden states & multimodal outputs if we've enabled hidden state
+            # prefix caching unless this isn't the last pipeline parallelism rank.
+            self._maybe_update_prefix_cache(
+                hidden_states=hidden_states,
+                multimodal_outputs=multimodal_outputs,
+                num_tokens_unpadded=num_tokens_unpadded,
+                num_tokens_padded=num_tokens_padded,
+            )
+
+            if not self.broadcast_pp_output:
+                # Common case.
+                if not get_pp_group().is_last_rank:
+                    # Return the intermediate tensors.
+                    assert isinstance(hidden_states, IntermediateTensors)
+                    hidden_states.kv_connector_output = kv_connector_output
+                    self.kv_connector_output = kv_connector_output
+                    return hidden_states
+
+                if self.is_pooling_model:
+                    # Return the pooling output.
+                    return self._pool(
+                        hidden_states,
+                        num_scheduled_tokens,
+                        num_scheduled_tokens_np,
+                        kv_connector_output,
+                    )
+
+                sample_hidden_states = hidden_states[logits_indices]
+                # Try with sampling_metadata first; fall back to without for models that don't support it
+                try:
+                    logits = self.model.compute_logits(
+                        sample_hidden_states, sampling_metadata=self.input_batch.sampling_metadata
+                    )
+                except TypeError:
+                    logits = self.model.compute_logits(sample_hidden_states)
+            else:
+                # Rare case.
+                assert not self.is_pooling_model
+
+                sample_hidden_states = hidden_states[logits_indices]
+                if not get_pp_group().is_last_rank:
+                    all_gather_tensors = {
+                        "residual": not is_residual_scattered_for_sp(self.vllm_config, num_tokens_padded)
+                    }
+                    get_pp_group().send_tensor_dict(
+                        hidden_states.tensors,
+                        all_gather_group=get_tp_group(),
+                        all_gather_tensors=all_gather_tensors,
+                    )
+                    logits = None
                 else:
-                    # Common case.
-                    hidden_states = model_output
-                    aux_hidden_states = None
-
-                hidden_states, multimodal_outputs = self.extract_multimodal_outputs(model_output)
-
-                # Cache hidden states & multimodal outputs if we've enabled hidden state
-                # prefix caching unless this isn't the last pipeline parallelism rank.
-                self._maybe_update_prefix_cache(
-                    hidden_states=hidden_states,
-                    multimodal_outputs=multimodal_outputs,
-                    num_tokens_unpadded=num_tokens_unpadded,
-                    num_tokens_padded=num_tokens_padded,
-                )
-
-                if not self.broadcast_pp_output:
-                    # Common case.
-                    if not get_pp_group().is_last_rank:
-                        # Return the intermediate tensors.
-                        assert isinstance(hidden_states, IntermediateTensors)
-                        hidden_states.kv_connector_output = kv_connector_output
-                        self.kv_connector_output = kv_connector_output
-                        return hidden_states
-
-                    if self.is_pooling_model:
-                        # Return the pooling output.
-                        return self._pool(
-                            hidden_states,
-                            num_scheduled_tokens,
-                            num_scheduled_tokens_np,
-                            kv_connector_output,
-                        )
-                    sample_hidden_states = hidden_states[logits_indices]
                     # Try with sampling_metadata first; fall back to without for models that don't support it
                     try:
                         logits = self.model.compute_logits(
@@ -607,29 +596,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                         )
                     except TypeError:
                         logits = self.model.compute_logits(sample_hidden_states)
-                else:
-                    # Rare case.
-                    assert not self.is_pooling_model
-
-                    sample_hidden_states = hidden_states[logits_indices]
-                    if not get_pp_group().is_last_rank:
-                        all_gather_tensors = {
-                            "residual": not is_residual_scattered_for_sp(self.vllm_config, num_tokens_padded)
-                        }
-                        get_pp_group().send_tensor_dict(
-                            hidden_states.tensors,
-                            all_gather_group=get_tp_group(),
-                            all_gather_tensors=all_gather_tensors,
-                        )
-                        logits = None
-                    else:
-                        # Try with sampling_metadata first; fall back to without for models that don't support it
-                        try:
-                            logits = self.model.compute_logits(
-                                sample_hidden_states, sampling_metadata=self.input_batch.sampling_metadata
-                            )
-                        except TypeError:
-                            logits = self.model.compute_logits(sample_hidden_states)
 
                 model_output_broadcast_data: dict[str, Any] = {}
                 if logits is not None:
