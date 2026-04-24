@@ -119,9 +119,6 @@ class OmniConnectorModelRunnerMixin:
         # Send-side async accumulation / staging buffer. Receive-side payload
         # ownership lives in ``_local_stage_payload_cache``.
         self._send_side_request_payload: dict[str, dict[str, Any]] = {}
-        self._pending_assistant: dict[str, dict[str, Any]] = {}
-        self._ready_pre_payload: dict[str, dict[str, Any]] = {}
-        self._prefill_offset: dict[str, int] = {}
         self._code_prompt_token_ids: dict[str, list[list[int]]] = defaultdict(list)
         self._request_ids_mapping: dict[str, str] = {}
 
@@ -223,9 +220,6 @@ class OmniConnectorModelRunnerMixin:
                 self._put_req_chunk.pop(send_req_id, None)
                 self._send_side_request_payload.pop(send_req_id, None)
                 self._code_prompt_token_ids.pop(send_req_id, None)
-                self._pending_assistant.pop(send_req_id, None)
-                self._ready_pre_payload.pop(send_req_id, None)
-                self._prefill_offset.pop(send_req_id, None)
             self._kv_active_transfers.discard(req_id)
             self._kv_completed_transfers.discard(req_id)
             self._kv_triggered_requests.discard(req_id)
@@ -244,13 +238,7 @@ class OmniConnectorModelRunnerMixin:
     def _drop_send_side_payload_state(self, req_id: str, ext_id: str | None) -> None:
         if ext_id is not None:
             self._send_side_request_payload.pop(ext_id, None)
-            self._pending_assistant.pop(ext_id, None)
-            self._ready_pre_payload.pop(ext_id, None)
-            self._prefill_offset.pop(ext_id, None)
         self._send_side_request_payload.pop(req_id, None)
-        self._pending_assistant.pop(req_id, None)
-        self._ready_pre_payload.pop(req_id, None)
-        self._prefill_offset.pop(req_id, None)
 
     def _cleanup_recv_delivery_state(self, req_id: str) -> None:
         """Clear recv-side delivery-cycle state."""
@@ -1767,9 +1755,6 @@ class OmniConnectorModelRunnerMixin:
                 self._put_req_chunk.pop(cleanup_req_id, None)
                 self._send_side_request_payload.pop(cleanup_req_id, None)
                 self._code_prompt_token_ids.pop(cleanup_req_id, None)
-                self._pending_assistant.pop(cleanup_req_id, None)
-                self._ready_pre_payload.pop(cleanup_req_id, None)
-                self._prefill_offset.pop(cleanup_req_id, None)
 
     # ------------------------------------------------------------------ #
     #  Payload accumulation  (ported from OmniChunkTransferAdapter)
