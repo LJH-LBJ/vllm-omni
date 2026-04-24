@@ -112,7 +112,10 @@ class OrchestratorRequestState:
     mm_features: list | None = None
 
     streaming: StreamingInputState = field(default_factory=lambda: StreamingInputState())
-
+    
+    # Tracks which final_output=True stages have sent their finished output.
+    # Cleanup and generator termination are deferred until all of them are done.
+    final_output_stages_done: set = field(default_factory=set)
 
 @dataclass
 class StreamingInputState:
@@ -124,11 +127,6 @@ class StreamingInputState:
     new_prompt_len_snapshot: int | None = None
     # Model/bridge-specific runtime states (e.g., thinker->talker)
     bridge_states: dict[str, Any] = field(default_factory=dict)
-
-    # Tracks which final_output=True stages have sent their finished output.
-    # Cleanup and generator termination are deferred until all of them are done.
-    final_output_stages_done: set = field(default_factory=set)
-
 
 class Orchestrator:
     """Runs inside a background thread's asyncio event loop.
