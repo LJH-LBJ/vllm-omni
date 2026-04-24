@@ -288,19 +288,14 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
                 defer_finalize=defer_kv_connector_finalize,
             ) as kv_connector_output,
         ):
-            # Skip talker forward when this round had only system segments (nothing to handle).
-            if getattr(self, "_talker_skip_forward", False):
-                outputs = torch.tensor([], device=self.device)
-                self._talker_skip_forward = False
-            else:
-                outputs = self._run_generation_model(
-                    input_ids=input_ids,
-                    positions=positions,
-                    intermediate_tensors=intermediate_tensors,
-                    inputs_embeds=inputs_embeds,
-                    model_kwargs=model_kwargs,
-                    logits_indices=logits_indices,
-                )
+            outputs = self._run_generation_model(
+                input_ids=input_ids,
+                positions=positions,
+                intermediate_tensors=intermediate_tensors,
+                inputs_embeds=inputs_embeds,
+                model_kwargs=model_kwargs,
+                logits_indices=logits_indices,
+            )
 
         _, multimodal_outputs = self.extract_multimodal_outputs(outputs)
         self.execute_model_state = ExecuteModelState(

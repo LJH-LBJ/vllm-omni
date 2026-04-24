@@ -255,13 +255,7 @@ class OmniGPUModelRunner(GPUModelRunner):
         # Remove finished requests from the cached states.
         for req_id in scheduler_output.finished_req_ids:
             self.requests.pop(req_id, None)
-            _buf = self.model_intermediate_buffer.pop(req_id, None)
-            if _buf:
-                logger.info(
-                    "[OMNI] _update_states: cleared model_intermediate_buffer for req=%s keys=%s",
-                    req_id,
-                    list(_buf.keys()),
-                )
+            self.model_intermediate_buffer.pop(req_id, None)
             self.num_prompt_logprobs.pop(req_id, None)
         if hasattr(self, "late_interaction_runner"):
             self.late_interaction_runner.on_requests_finished(scheduler_output.finished_req_ids)
@@ -1007,15 +1001,6 @@ class OmniGPUModelRunner(GPUModelRunner):
                     q = info["thinker_reply_part_per_request"]
                     if hasattr(q, "shape"):
                         logger.debug(f"[OMNI] req={req_id} has thinker_reply_part_per_request queue shape: {q.shape}")
-                # [DIAG] log left_context_size for async_chunk stages (e.g. code2wav)
-                if "left_context_size" in info and getattr(
-                    getattr(self, "vllm_config", None), "model_config", None
-                ) and getattr(self.vllm_config.model_config, "async_chunk", False):
-                    logger.info(
-                        "[GATHER_LCS] req=%s left_context_size=%s",
-                        req_id[-16:],
-                        info["left_context_size"],
-                    )
             else:
                 per_req_runtime_info.append({})
         return per_req_runtime_info
@@ -1115,12 +1100,11 @@ class OmniGPUModelRunner(GPUModelRunner):
     def _update_additional_information(self, scheduler_output: "SchedulerOutput") -> None:
         for new_req in scheduler_output.scheduled_new_reqs:
             payload_info = getattr(new_req, "additional_information", None)
-            info_dict = deserialize_additional_information(payload_info)
-            if info_dict:
+            if isinstance(payload_info, dict):
                 logger.warning_once(
                     "additional_information on request data is deprecated, use model_intermediate_buffer"
                 )
-                self._update_intermediate_buffer(new_req.req_id, info_dict)
+                self._update_intermediate_buffer(new_req.req_id, payload_info)
 
         if hasattr(scheduler_output.scheduled_cached_reqs, "additional_information"):
             logger.warning_once(
@@ -1129,24 +1113,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             cached_infos = getattr(scheduler_output.scheduled_cached_reqs, "additional_information", {})
             if isinstance(cached_infos, dict):
                 for req_id, req_infos in cached_infos.items():
-                    info_dict = deserialize_additional_information(req_infos)
-                    # [DIAG] log left_context_size being written for async_chunk stages
-                    if "left_context_size" in info_dict and getattr(
-                        getattr(self, "vllm_config", None), "model_config", None
-                    ) and getattr(self.vllm_config.model_config, "async_chunk", False):
-                        logger.info(
-                            "[UPDATE_LCS] cached req=%s left_context_size=%s",
-                            req_id[-16:],
-                            info_dict["left_context_size"],
-                        )
-                    elif getattr(getattr(self, "vllm_config", None), "model_config", None) and \
-                            getattr(self.vllm_config.model_config, "async_chunk", False):
-                        logger.info(
-                            "[UPDATE_LCS] cached req=%s req_infos=%s (no left_context_size)",
-                            req_id[-16:],
-                            type(req_infos).__name__,
-                        )
-                    self._update_intermediate_buffer(req_id, info_dict)
+                    self._update_intermediate_buffer(req_id, req_infos)
 
     def _maybe_attach_mimo_audio_req_infos(
         self,
@@ -1298,7 +1265,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             # Overlay custom prompt_embeds per request for the prompt portion;
             # collect additional_information (tensor/list) for prefill portion only
             decode_req_ids = []
-            preprocess_seg_lens = []
             for req_index, req_id in enumerate(self.input_batch.req_ids):
                 req_infos = self.model_intermediate_buffer.get(req_id, {})
 
@@ -1317,28 +1283,14 @@ class OmniGPUModelRunner(GPUModelRunner):
                 req_input_ids, req_embeds, update_dict = self.model.preprocess(
                     input_ids=input_ids[s:e], input_embeds=embed_slice, **req_infos
                 )
-                # Only allocate from req_embeds when we have content (correct embed dim).
-                # When this round is system-only for talker, req_embeds may be empty [0, D]
-                # with thinker dim D; the buffer uses talker dim, so do not overwrite.
-                if inputs_embeds is None and req_embeds.shape[0] > 0:
+                if inputs_embeds is None:
                     inputs_embeds = torch.empty(
                         (input_ids.shape[0], req_embeds.shape[-1]),
                         device=req_embeds.device,
                         dtype=req_embeds.dtype,
                     )
 
-                seg_len = min(span_len, req_embeds.shape[0])
-                preprocess_seg_lens.append(seg_len)
-
-                # Run MTP when talker_preprocess entered decode mode (signalled by
-                # "mtp_inputs" in update_dict) and actually produced content.
-                # Using "mtp_inputs" instead of "span_len==1" is critical: at the
-                # prefill→decode transition step span_len can be 2 (scheduler
-                # assigned an extra slot), but talker_preprocess still runs the
-                # decode path and populates mtp_inputs.  Gating on span_len==1
-                # would silently skip MTP for that step, leaving code_predictor_codes
-                # all-zero and blocking code2wav indefinitely.
-                if self.has_talker_mtp and "mtp_inputs" in update_dict and seg_len > 0:
+                if self.has_talker_mtp and span_len == 1:
                     last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
                     decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
                     self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
@@ -1346,36 +1298,15 @@ class OmniGPUModelRunner(GPUModelRunner):
                     self.last_talker_hidden.gpu[decode_slice].copy_(last_talker_hidden)
                     self.text_step.gpu[decode_slice].copy_(text_step)
                     decode_req_ids.append(req_id)
-                elif self.has_talker_mtp and "mtp_inputs" in update_dict and seg_len == 0:
-                    logger.info(
-                        "[MTP_SKIP] req=%s seg_len=0, skipped from decode_req_ids. "
-                        "req_in_requests=%s, req_infos_empty=%s, embeds_shape=%s",
-                        req_id,
-                        req_state is not None,
-                        not bool(self.model_intermediate_buffer.get(req_id)),
-                        req_embeds.shape,
-                    )
 
                 # TODO(Peiqi): the merge stage could move out from the critical path
                 self._merge_additional_information_update(req_id, update_dict)
 
-                # Update inputs_embeds/input_ids only when this request produced content.
-                # When seg_len==0 (system-only chunk), skip assignment to avoid dtype/dim
-                # mismatch (req_embeds may be thinker-dim, buffer is talker-dim).
-                if seg_len > 0:
-                    inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
-                    if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
-                        input_ids[s : s + seg_len] = req_input_ids
-                else:
-                    # System-only chunk: fill buffer positions with safe values
-                    # so the model forward doesn't crash on uninitialized memory.
-                    if inputs_embeds is not None:
-                        inputs_embeds[s:e].zero_()
-                    input_ids[s:e].zero_()
-
-            self._preprocess_seg_lens = preprocess_seg_lens
-            # If this round had only system segments for talker, skip model forward.
-            self._talker_skip_forward = all(seg_len == 0 for seg_len in preprocess_seg_lens)
+                # update the inputs_embeds and input_ids
+                seg_len = min(span_len, req_embeds.shape[0])
+                inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
+                if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
+                    input_ids[s : s + seg_len] = req_input_ids
 
             # run talker mtp decode
             if self.has_talker_mtp:
@@ -1390,49 +1321,9 @@ class OmniGPUModelRunner(GPUModelRunner):
             ec_connector_output,
         )
 
-    # Toggle to True to force bsz=1 code predictor processing for
-    # precision diagnosis.  When True and multiple requests decode
-    # concurrently, each request is processed individually to avoid
-    # cuBLAS GEMM algorithm / RNG divergence from batching.
-    _SERIALIZE_CODE_PREDICTOR = True
-
     def _talker_mtp_forward(self, decode_req_ids: list[str], inputs_embeds: torch.Tensor) -> None:
         decode_batch_size = len(decode_req_ids)
         if decode_batch_size == 0:
-            return
-
-        # --- Serialize path: process each request individually (bsz=1) ---
-        if self._SERIALIZE_CODE_PREDICTOR and decode_batch_size > 1:
-            out_key = getattr(self.model, "talker_mtp_output_key", "code_predictor_codes")
-            for idx, req_id in enumerate(decode_req_ids):
-                single_input_ids = self.talker_mtp_input_ids.gpu[idx : idx + 1]
-                single_embeds = self.talker_mtp_inputs_embeds.gpu[idx : idx + 1]
-                single_hidden = self.last_talker_hidden.gpu[idx : idx + 1]
-                single_text = self.text_step.gpu[idx : idx + 1]
-                with set_forward_context(None, self.vllm_config, cudagraph_runtime_mode=CUDAGraphMode.NONE):
-                    single_embeds_out, single_codes = self.talker_mtp(
-                        single_input_ids, single_embeds, single_hidden, single_text
-                    )
-                # --- Diagnostic: log input token and output codes ---
-                _diag_token = int(single_input_ids.reshape(-1)[0].item())
-                _diag_codes = single_codes.reshape(-1).tolist()
-                _diag_all_zero = not single_codes.any().item()
-                _diag_hidden_norm = float(single_hidden.float().norm().item())
-                _diag_text_norm = float(single_text.float().norm().item())
-                _diag_embeds_norm = float(single_embeds.float().norm().item())
-                if _diag_all_zero or idx == 0:
-                    logger.info(
-                        f"[MTP_DIAG] req={req_id[-12:]}, bsz={decode_batch_size}, "
-                        f"token={_diag_token}, codes={_diag_codes}, all_zero={_diag_all_zero}, "
-                        f"hidden_norm={_diag_hidden_norm:.2f}, text_norm={_diag_text_norm:.2f}, "
-                        f"embeds_norm={_diag_embeds_norm:.2f}"
-                    )
-                # --- End diagnostic ---
-                req_index = self.input_batch.req_ids.index(req_id)
-                start_offset = int(self.query_start_loc.cpu[req_index])
-                inputs_embeds[start_offset : start_offset + 1] = single_embeds_out
-                update_dict = {out_key: single_codes}
-                self._merge_additional_information_update(req_id, update_dict)
             return
 
         _cudagraph_mode, batch_desc, _, _, _ = self._determine_batch_execution_and_padding(
@@ -1458,17 +1349,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             None, self.vllm_config, cudagraph_runtime_mode=_cudagraph_mode, batch_descriptor=batch_desc
         ):
             req_embeds, code_predictor_codes = self.talker_mtp(req_input_ids, req_embeds, last_talker_hidden, text_step)
-        # --- Diagnostic: log for bsz=1 path ---
-        if decode_batch_size == 1:
-            _diag_token = int(req_input_ids.reshape(-1)[0].item())
-            _diag_codes = code_predictor_codes.reshape(-1).tolist()
-            _diag_all_zero = not code_predictor_codes.any().item()
-            if _diag_all_zero:
-                logger.info(
-                    f"[MTP_DIAG_SOLO] req={decode_req_ids[0][-12:]}, bsz=1, "
-                    f"token={_diag_token}, codes={_diag_codes}, all_zero=True"
-                )
-        # --- End diagnostic ---
         # code_predictor_codes stays on GPU here; _update_intermediate_buffer
         # keeps it device-resident when the key is in gpu_resident_buffer_keys.
         # D2H is deferred to sample_tokens where hidden_states.to("cpu") already
@@ -1478,15 +1358,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             req_index = self.input_batch.req_ids.index(req_id)
             start_offset = int(self.query_start_loc.cpu[req_index])
             inputs_embeds[start_offset : start_offset + 1] = req_embeds[idx : idx + 1]
-            _codes_slice = code_predictor_codes[idx : idx + 1]
-            if not _codes_slice.any().item():
-                logger.info(
-                    "[MTP_ZERO] req=%s idx=%d/%d all_zero=True",
-                    req_id,
-                    idx,
-                    decode_batch_size,
-                )
-            update_dict = {out_key: _codes_slice}
+            update_dict = {out_key: code_predictor_codes[idx : idx + 1]}
             self._merge_additional_information_update(req_id, update_dict)
 
     def _model_forward(
@@ -1519,23 +1391,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             return
         req_state = self.requests.get(req_id)
         if req_state is None:
-            # req_id has been removed from self.requests (e.g. scheduler finished
-            # it one step ahead) but the model runner may still be processing it
-            # in this step.  Do NOT silently drop the update — write it to
-            # model_intermediate_buffer so that the pooler / postprocess can pick
-            # up the correct codes (e.g. code_predictor_codes) for this step.
-            if req_id in self.model_intermediate_buffer:
-                logger.warning(
-                    "[OMNI] _update_intermediate_buffer: req_id=%s not in self.requests "
-                    "but still in model_intermediate_buffer — updating buffer anyway. "
-                    "keys=%s",
-                    req_id,
-                    list(upd.keys()),
-                )
-            else:
-                # req_id is completely gone — skip update to avoid re-creating a
-                # stale entry that will never be cleaned up.
-                return
+            return
         # Check if the model declares keys that should stay on GPU
         gpu_keys: set[str] = set()
         if hasattr(self, "model") and hasattr(self.model, "gpu_resident_buffer_keys"):
@@ -1553,9 +1409,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                 ]
             else:
                 existing[k] = v
-        # Backward compatible: mirror to old setattr location only when req_state exists
-        if req_state is not None:
-            setattr(req_state, "additional_information_cpu", existing)
+        # Backward compatible: mirror to old setattr location
+        setattr(req_state, "additional_information_cpu", existing)
 
     def _merge_additional_information_update(self, req_id, upd):
         logger.warning_once("_merge_additional_information_update is deprecated, use _update_intermediate_buffer")
