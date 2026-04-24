@@ -296,6 +296,9 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.put_req_chunk.pop(external_req_id, None)
         self.request_payload.pop(external_req_id, None)
         self.code_prompt_token_ids.pop(external_req_id, None)
+        prefill_part_state = getattr(self, "_prefill_part_state", None)
+        if isinstance(prefill_part_state, dict):
+            prefill_part_state.pop(external_req_id, None)
 
         cached_ic = getattr(self, "_cached_ic", None)
         if cached_ic is not None:
