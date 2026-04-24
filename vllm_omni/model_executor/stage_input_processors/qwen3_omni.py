@@ -401,6 +401,7 @@ def talker2code2wav_async_chunk(
         .reshape(-1)
         .tolist()
     )
+
     info = {
         "code_predictor_codes": codes,
         "left_context_size": left_context_size,
