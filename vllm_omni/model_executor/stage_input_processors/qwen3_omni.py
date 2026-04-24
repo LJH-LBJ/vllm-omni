@@ -198,7 +198,13 @@ def thinker2talker_async_chunk(
     has_prefill_embeds = (
         not is_finished
         and embeds_count > 0
-        and (not output_token_ids or (len(output_token_ids) == 1 and embeds_count > 1))
+        and (
+            not output_token_ids
+            or (
+                len(output_token_ids) == 1
+                and transfer_manager._prefill_offset.get(request_id, 0) < len(_ensure_list(request.prompt_token_ids))
+            )
+        )
     )
 
     if has_prefill_embeds:
