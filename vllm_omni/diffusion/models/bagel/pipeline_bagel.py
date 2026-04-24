@@ -12,6 +12,7 @@ from collections.abc import Iterable
 from copy import deepcopy
 from dataclasses import dataclass
 from math import isqrt
+from typing import ClassVar
 
 import numpy as np
 import torch
@@ -26,6 +27,7 @@ from vllm.transformers_utils.configs.bagel import BagelConfig
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm_omni.diffusion.models.interface import SupportsModuleOffload
 from vllm_omni.diffusion.profiler.diffusion_pipeline_profiler import DiffusionPipelineProfilerMixin
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.model_executor.model_loader.weight_utils import download_weights_from_hf_specific
@@ -148,11 +150,24 @@ class SiglipNaViTWrapper(nn.Module):
         return outputs.last_hidden_state.squeeze(0)
 
 
-class BagelPipeline(nn.Module, DiffusionPipelineProfilerMixin):
+class BagelPipeline(nn.Module, SupportsModuleOffload, DiffusionPipelineProfilerMixin):
     """Bagel generation pipeline (MoT) packaged for vllm-omni diffusion engine.
 
     This pipeline is self-contained and uses the ported Bagel core files.
     """
+
+    _dit_modules: ClassVar[list[str]] = ["language_model.model"]
+    _encoder_modules: ClassVar[list[str]] = []
+    _vae_modules: ClassVar[list[str]] = ["vae"]
+    _resident_modules: ClassVar[list[str]] = [
+        "bagel.time_embedder",
+        "bagel.vae2llm",
+        "bagel.llm2vae",
+        "bagel.latent_pos_embed",
+        "bagel.vit_model",
+        "bagel.connector",
+        "bagel.vit_pos_embed",
+    ]
 
     def __init__(self, *, od_config: OmniDiffusionConfig, prefix: str = ""):
         super().__init__()
@@ -397,11 +412,26 @@ class BagelPipeline(nn.Module, DiffusionPipelineProfilerMixin):
                     cfg_text_context["ropes"] = cfg_text_metadata["ropes"]
                 else:
                     cfg_text_context["ropes"] = [cfg_text_seq_len]
+            else:
+                # No cfg_text companion received.  For text2img this is the
+                # expected path: original BAGEL uses an empty KV cache (0
+                # tokens) as the text-unconditional branch.  Keep the default
+                # empty NaiveCache in cfg_text_context and preserve the
+                # original cfg_text_scale so CFG still applies.
+                pass
 
-            if cfg_img_kv is None and cfg_text_kv is not None:
-                cfg_img_kv = injected_kv
-
-            if cfg_img_kv is not None:
+            if cfg_img_kv is None:
+                # text2img multi-stage: cfg_img reuses gen KV (positive prompt,
+                # no image), mirroring forward_cache_update_text on cfg_img_context
+                # in the single-stage path.
+                cfg_img_seq_len = injected_kv.key_cache[0].shape[0]
+                cfg_img_context["past_key_values"] = injected_kv
+                cfg_img_context["kv_lens"] = [cfg_img_seq_len]
+                if req.sampling_params.kv_metadata and "ropes" in req.sampling_params.kv_metadata:
+                    cfg_img_context["ropes"] = req.sampling_params.kv_metadata["ropes"]
+                else:
+                    cfg_img_context["ropes"] = [cfg_img_seq_len]
+            else:
                 cfg_img_seq_len = cfg_img_kv.key_cache[0].shape[0]
                 cfg_img_context["past_key_values"] = cfg_img_kv
                 cfg_img_context["kv_lens"] = [cfg_img_seq_len]
@@ -409,15 +439,6 @@ class BagelPipeline(nn.Module, DiffusionPipelineProfilerMixin):
                     cfg_img_context["ropes"] = cfg_img_metadata["ropes"]
                 else:
                     cfg_img_context["ropes"] = [cfg_img_seq_len]
-
-            if not cfg_parallel_contract:
-                logger.warning("CFG is disabled: only single KV cache available")
-                gen_params = BagelGenParams(
-                    num_timesteps=gen_params.num_timesteps,
-                    timestep_shift=gen_params.timestep_shift,
-                    cfg_text_scale=1.0,
-                    cfg_img_scale=1.0,
-                )
 
         else:
             image_input = (
