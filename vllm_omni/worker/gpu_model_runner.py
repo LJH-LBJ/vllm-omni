@@ -1325,7 +1325,6 @@ class OmniGPUModelRunner(GPUModelRunner):
         decode_batch_size = len(decode_req_ids)
         if decode_batch_size == 0:
             return
-
         _cudagraph_mode, batch_desc, _, _, _ = self._determine_batch_execution_and_padding(
             num_tokens=decode_batch_size,
             num_reqs=decode_batch_size,

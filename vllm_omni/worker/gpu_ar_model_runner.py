@@ -62,7 +62,6 @@ class ExecuteModelState(NamedTuple):
     slot_mappings: dict[str, torch.Tensor] | list[dict[str, torch.Tensor]] | None = None
 
 
-
 class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
     """Autoregressive GPU model runner that returns hidden states per request.
 
@@ -266,7 +265,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         scheduler_output: SchedulerOutput,
         intermediate_tensors: IntermediateTensors | None = None,
     ) -> OmniModelRunnerOutput | AsyncModelRunnerOutput | IntermediateTensors | None:
-        # logger.info("enter execute_model")
         if self.execute_model_state is not None:
             raise RuntimeError("State error: sample_tokens() must be called after execute_model() returns None.")
 
@@ -457,7 +455,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                 slot_mappings=slot_mappings_by_group,
             )
 
-            # logger.info(f"scheduler_output {scheduler_output}")
             (
                 input_ids,
                 inputs_embeds,
@@ -493,7 +490,6 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         # When spec decode is enabled, defer connector finalization
         # (wait_for_save + clear metadata) until after draft model runs.
         defer_kv_connector_finalize = self.speculative_config is not None
-
         with (
             nullcontext(),
             set_forward_context(
