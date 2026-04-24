@@ -220,6 +220,7 @@ class OmniConnectorModelRunnerMixin:
                 self._put_req_chunk.pop(send_req_id, None)
                 self._send_side_request_payload.pop(send_req_id, None)
                 self._code_prompt_token_ids.pop(send_req_id, None)
+            self._kv_pending_transfers.pop(req_id, None)
             self._kv_active_transfers.discard(req_id)
             self._kv_completed_transfers.discard(req_id)
             self._kv_triggered_requests.discard(req_id)
