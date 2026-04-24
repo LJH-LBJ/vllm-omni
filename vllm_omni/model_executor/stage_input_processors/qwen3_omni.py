@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 # Copyright 2025 The Qwen team.
-"""Stage input processor for Qwen3 Omni MoE: Thinker 鈫?Talker transition."""
+"""Stage input processor for Qwen3 Omni MoE: Thinker → Talker transition."""
 
 import logging
 from dataclasses import dataclass, field
@@ -135,7 +135,7 @@ def _merge_pd_embeddings(
         logger.error(
             "_merge_pd_embeddings: failed to extract prefill embeddings (%s). "
             "Expected keys %r and %r, got: %s. "
-            "Falling back to decode-only embeddings 鈥?talker user-segment will be degraded.",
+            "Falling back to decode-only embeddings – talker user-segment will be degraded.",
             exc,
             _EMBED_LAYER_KEY,
             _HIDDEN_LAYER_KEY,
@@ -294,7 +294,7 @@ def _find_assistant_boundary(prompt_token_ids: list[int]) -> int:
         if prompt_token_ids[i] == IM_START:
             if i + 1 < len(prompt_token_ids) and prompt_token_ids[i + 1] == ASSISTANT:
                 return i
-            break  # Last <|im_start|> is not assistant role 鈥?stop
+            break  # Last <|im_start|> is not assistant role — stop
     return -1
 
 
@@ -305,26 +305,25 @@ def thinker2talker_async_chunk(  # noqa: C901
     is_finished: bool = False,
 ) -> list[dict[str, Any]]:
     """
-    Connector from Thinker 鈫?Talker supporting chunked prefill.
-
+    Connector from Thinker → Talker supporting chunked prefill— 
     Three phases determined by len(output_token_ids):
 
-    Phase 1 鈥?n_decoded == 0 (pure prefill) or n_decoded == 1 (transition step):
+    Phase 1 – n_decoded == 0 (pure prefill) or n_decoded == 1 (transition step):
         pooling_output["0"] carries prefill embeddings in BOTH cases.
-        The transition step (n_decoded == 1) is the scheduler step where the
-        thinker processed the last prefill batch AND sampled tok0 鈥?but
+        The transition step (n_decoded == 1) is the scheduler → ep where the
+        thinker proc— ed the last prefill batch AND sampled tok0 — but
         pooling_output["0"] still holds the last prefill batch, NOT tok0's embed.
-        * No assistant segment 鈫?send each chunk immediately (streaming prefill).
-        * Has assistant segment 鈫?accumulate all chunks in request_payload and
+        * No assistant segment → send each chunk immediately (streaming prefill).
+        * Has assistant segment → accumulate all chunks in request_payload and
           wait; the bootstrap (im_start + assistant + \\n + first_text) requires
           tok0's embed which only arrives in the next step.
 
-    Phase 2 鈥?n_decoded >= 2, request_payload present:
+    Phase 2 – n_decoded >= 2, request_payload present:
         First pure-decode step. pooling_output["0"] is now tok0's decode embedding.
         Flush all accumulated prefill embeds + tok0 embed in one chunk so the
         talker receives the complete assistant bootstrap atomically.
 
-    Phase 3 鈥?n_decoded >= 1, request_payload absent:
+    Phase 3 – n_decoded >= 1, request_payload absent:
         Ordinary decode step. Send decode embedding with override_keys.
     """
     request_id = request.external_req_id
@@ -355,7 +354,7 @@ def thinker2talker_async_chunk(  # noqa: C901
         has_assistant = _find_assistant_boundary(prompt_token_ids) != -1
 
         if not has_assistant:
-            # No assistant segment 鈫?stream each prefill chunk immediately.
+            # No assistant segment → stream each prefill chunk immediately.
             info = {
                 "thinker_prefill_embeddings": embeds_cpu,
                 "thinker_hidden_states": hidden_cpu,
