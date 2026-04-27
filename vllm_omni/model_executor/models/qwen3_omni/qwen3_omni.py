@@ -721,8 +721,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
             update_dict["mtp_inputs"] = last_talker_hidden, text_step
 
-        if "num_processed_tokens" not in update_dict:
-            update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + effective_span_len
+        update_dict["num_processed_tokens"] = info_dict.get("num_processed_tokens", 0) + effective_span_len
         return input_ids, input_embeds, update_dict
 
     def talker_mtp(
@@ -869,7 +868,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
         thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + chunk_size]
         speaker_id = self._get_text_spk_token_id(voice_type)
-        req_input_ids, req_embeds, trailing_text_hidden, consumed_decode_for_assistant = (
+        req_input_ids, req_embeds, trailing_text_hidden = (
             self._thinker_to_talker_prefill(
             thinker_embed=thinker_sequence_embed_chunk.to(talker_device),
             thinker_hidden=thinker_hidden_chunk.to(talker_device),
@@ -918,10 +917,10 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict["tts_pad_embed_projected"] = pad_proj.detach()
         except Exception:
             pass
-        update_dict["prefill_consumed_text_tokens"] = consumed_decode_for_assistant
+        update_dict["prefill_consumed_text_tokens"] = 1
         logger.info(
-            "[PREFILL_CONSUMED] req=%s consumed_decode_for_assistant=%s chunk_size=%s chunk_offset=%s",
-            info_dict.get("request_id"), consumed_decode_for_assistant, chunk_size, chunk_offset
+            "[PREFILL_CONSUMED] req=%s chunk_size=%s chunk_offset=%s",
+            info_dict.get("request_id"), chunk_size, chunk_offset
         )
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
 
@@ -996,7 +995,6 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         talker_input_embeds = []  # [1 t d]
         talker_input_ids = []
-        consumed_decode_for_assistant = 0
 
         # calculate the start and end index of the current chunk
         chunk_start_index = chunk_offset
@@ -1083,11 +1081,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                     logger.info(f"trailing_text_hidden {trailing_text_hidden}")
                     talker_input_embeds.append(talker_assistant_embeds)
                     talker_input_ids.append(talker_assistant_ids)
-                    if isinstance(decode_assistant_fill, torch.Tensor):
-                        consumed_decode_for_assistant = max(
-                            0,
-                            int(getattr(self, "_assistant_decode_fill_consumed", 0)),
-                        )
                 # History assistant output (ignore for now)
                 elif (segment_role_token == self.config.assistant_token_id).item() and i != len(im_start_indexes) - 2:
                     continue
@@ -1103,7 +1096,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         talker_input_embed = torch.cat([embed.to(input_ids.device) for embed in talker_input_embeds], dim=0)
         talker_input_id = torch.cat([embed.to(input_ids.device) for embed in talker_input_ids], dim=0)
 
-        return talker_input_id, talker_input_embed, trailing_text_hidden, consumed_decode_for_assistant
+        return talker_input_id, talker_input_embed, trailing_text_hidden
 
     def _thinker_decode_to_talker_decode(
         self,
@@ -1305,7 +1298,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                 decode_assistant_fill.to(tts_pad_embed.device)
             ).to(assistant_hidden.dtype)
             assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
-            self._assistant_decode_fill_consumed = int(decode_assistant_fill.shape[0])
         else:
             # This should NOT happen if the connector guarantees complete bootstrap.
             logger.warning(
@@ -1315,7 +1307,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
             zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
             assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
-            self._assistant_decode_fill_consumed = 0
         # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         assistant_text_hidden = torch.cat(
             (
