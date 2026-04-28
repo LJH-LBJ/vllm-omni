@@ -677,7 +677,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             input_embeds = self.talker.embed_input_ids(input_ids)
 
         span_len = input_ids.shape[0]
-        request_id = info_dict.get("request_id")
         num_processed_thinker_tokens = int(info_dict.get("num_processed_thinker_tokens", 0))
         thinker_sequences = info_dict.get("thinker_sequences")
         thinker_prefill_embeddings = info_dict.get("thinker_prefill_embeddings")
@@ -1279,7 +1278,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         )  # [t, d]
         hidden_dim = assistant_hidden.shape[-1] if assistant_hidden.shape[0] > 0 else tts_pad_embed.shape[-1]
 
-        assert assistant_hidden.shape[0] >= 4, f"Expect at least 4 tokens for assistant part, got {assistant_hidden.shape[0]}"
+        assert assistant_hidden.shape[0] >= 4, f"request_id={request_id} Expect at least 4 tokens for assistant part, got {assistant_hidden.shape[0]}"
 
         # assistant_hidden.shape[0] == 3: im_start + assistant + \n from prefill.
         # The connector guarantees decode_assistant_fill[0] = embed(first_text).
