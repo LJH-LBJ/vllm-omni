@@ -535,6 +535,7 @@ def thinker2talker_async_chunk(  # noqa: C901
         # tok0's embedding is now in pooling_output["0"] (first pure-decode step).
         info["thinker_decode_embeddings"] = pooling_output.get("0").detach().cpu()
         info["thinker_output_token_ids"] = output_token_ids
+        info["override_keys"] = ["thinker_sequences", "thinker_input_ids"]
         return info
 
     # ------------------------------------------------------------------ #
