@@ -865,7 +865,9 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
-        thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + chunk_size]
+
+        actual_embed_size = thinker_sequence_embed_chunk.shape[0]
+        thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + actual_embed_size]
         speaker_id = self._get_text_spk_token_id(voice_type)
         req_input_ids, req_embeds, trailing_text_hidden = (
             self._thinker_to_talker_prefill(
@@ -972,7 +974,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         Returns:
             (input_ids, input_embeds) for talker
         """
-        target_len = thinker_result_ids.shape[-1]
+        target_len = chunk_offset + thinker_result_ids.shape[-1]
         input_id_view = input_ids.reshape(-1)
         im_start_indexes = torch.cat(
             (
