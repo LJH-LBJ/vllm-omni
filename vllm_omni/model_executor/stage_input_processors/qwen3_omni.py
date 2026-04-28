@@ -344,7 +344,7 @@ def _append_assistant_prefill_payload(
             "tts_bos_embed": pooling_output.get("tts_bos_embed").detach().cpu(),
             "tts_eos_embed": pooling_output.get("tts_eos_embed").detach().cpu(),
             "tts_pad_embed": pooling_output.get("tts_pad_embed").detach().cpu(),
-            "thinker_sequences": all_token_ids,
+            "thinker_sequences": prompt_token_ids,
             "thinker_input_ids": prompt_token_ids,
         }
         speaker = extract_speaker_from_request(request)
@@ -357,7 +357,7 @@ def _append_assistant_prefill_payload(
 
     existing["thinker_prefill_embeddings"] = torch.cat([existing["thinker_prefill_embeddings"], embeds_cpu], dim=0)
     existing["thinker_hidden_states"] = torch.cat([existing["thinker_hidden_states"], hidden_cpu], dim=0)
-    existing["thinker_sequences"] = all_token_ids
+    existing["thinker_sequences"] = prompt_token_ids
     existing["thinker_input_ids"] = prompt_token_ids
 
 
@@ -451,12 +451,13 @@ def thinker2talker_async_chunk(  # noqa: C901
             state["pending_hidden_states"] = pending_hid[ready_tokens:]
             state["sent_prompt_tokens"] = send_prefix
 
-            emit_prompt_ids = prompt_token_ids[sent_prompt_tokens:send_prefix]
+
             emit_info = {
                 "thinker_prefill_embeddings": emit_emb,
                 "thinker_hidden_states": emit_hid,
-                "thinker_sequences": emit_prompt_ids,
-                "thinker_input_ids": emit_prompt_ids,
+                "thinker_sequences": prompt_token_ids,
+                "thinker_input_ids": prompt_token_ids,
+                "override_keys": ["thinker_sequences", "thinker_input_ids"],
                 "tts_bos_embed": pooling_output.get("tts_bos_embed").detach().cpu(),
                 "tts_eos_embed": pooling_output.get("tts_eos_embed").detach().cpu(),
                 "tts_pad_embed": pooling_output.get("tts_pad_embed").detach().cpu(),
@@ -522,7 +523,7 @@ def thinker2talker_async_chunk(  # noqa: C901
         info = {
             "thinker_prefill_embeddings": saved["thinker_prefill_embeddings"],
             "thinker_hidden_states": saved["thinker_hidden_states"],
-            "thinker_sequences": all_token_ids,
+            "thinker_sequences": prompt_token_ids,
             "thinker_input_ids": prompt_token_ids,
             "tts_bos_embed": saved["tts_bos_embed"],
             "tts_eos_embed": saved["tts_eos_embed"],
