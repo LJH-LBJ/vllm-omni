@@ -886,7 +886,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         )
 
         # Trace progress for next chunk
-        update_dict["num_processed_thinker_tokens"] = chunk_offset + chunk_size
+        update_dict["num_processed_thinker_tokens"] = chunk_offset + len(thinker_sequences_chunk)
 
         # Queue trailing_text_hidden for decode (drop first for next steps),
         try:
