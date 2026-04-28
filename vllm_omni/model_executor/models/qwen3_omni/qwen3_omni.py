@@ -185,7 +185,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                 "thinker_prefill_embeddings",
                 "thinker_hidden_states",
             }
-
         elif self.model_stage == "code2wav":
             self.enable_update_additional_information = True
             self.thinker = None
@@ -977,7 +976,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         input_id_view = input_ids.reshape(-1)
         im_start_indexes = torch.cat(
             (
-                torch.nonzero(input_ids[0] == self.config.im_start_token_id).squeeze(),
+                torch.nonzero(input_ids[0] == self.config.im_start_token_id).flatten(),
                 torch.tensor([target_len], device=input_ids.device, dtype=input_ids.dtype),
             ),
             dim=-1,
@@ -1088,10 +1087,10 @@ class Qwen3OmniMoeForConditionalGeneration(
                     raise AssertionError("Expect role id after <|im_start|> (assistant, user, system)")
 
         if len(talker_input_embeds) == 0 or len(talker_input_ids) == 0:
-            embed_dim = thinker_embed.shape[-1]
+            embed_dim = self.talker_config.text_config.hidden_size
             talker_input_embed = torch.empty(0, embed_dim, dtype=thinker_embed.dtype, device=input_ids.device)
             talker_input_id = torch.empty(0, dtype=thinker_result_ids.dtype, device=input_ids.device)
-            return talker_input_id, talker_input_embed, trailing_text_hidden, 0
+            return talker_input_id, talker_input_embed, trailing_text_hidden
 
         talker_input_embed = torch.cat([embed.to(input_ids.device) for embed in talker_input_embeds], dim=0)
         talker_input_id = torch.cat([embed.to(input_ids.device) for embed in talker_input_ids], dim=0)
@@ -1120,11 +1119,14 @@ class Qwen3OmniMoeForConditionalGeneration(
             upstream_finished = bool(upstream_finished_obj.item()) if upstream_finished_obj.numel() == 1 else False
         else:
             upstream_finished = bool(upstream_finished_obj)
-        # Update cache first so we can check actual availability below.
-        if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
-            self._decode_embed_cache[request_id] = thinker_decode_embed.to(device)
 
-        cached = self._decode_embed_cache.get(request_id)
+        # Use the per-request accumulated cache from model_intermediate_buffer.
+        # _talker_cache_thinker_decode_embeds already appends new embeddings into
+        # "cached_thinker_decode_embeddings" every prefill/decode step, so we
+        # just read it directly here instead of maintaining a redundant instance-level dict.
+        cached = info_dict.get("cached_thinker_decode_embeddings", None)
+        if isinstance(cached, torch.Tensor) and cached.numel() > 0:
+            cached = cached.to(device)
         cache_len = cached.shape[0] if isinstance(cached, torch.Tensor) else 0
 
         logger.info(
@@ -1145,7 +1147,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                 # Do NOT return tts_pad_embed here – that creates an EOS/PAD ping-pong
                 # that prevents the talker from terminating.
                 update_dict["finished_flag"] = True
-                self._decode_embed_cache.pop(request_id, None)
                 return self.tts_eos_embed.to(device)
             if not upstream_finished:
                 # Thinker still generating — wait without advancing index.
@@ -1163,7 +1164,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             # done and send tts_eos_embed to terminate the talker cleanly.
             if upstream_finished:
                 update_dict["finished_flag"] = True
-                self._decode_embed_cache.pop(request_id, None)
                 return self.tts_eos_embed.to(device)
             update_dict["num_processed_tokens"] = start_index
             return self.tts_pad_embed.to(device)
