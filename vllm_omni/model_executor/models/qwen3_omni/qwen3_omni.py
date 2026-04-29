@@ -861,6 +861,11 @@ class Qwen3OmniMoeForConditionalGeneration(
         assert chunk_size > 0, f"Prefill chunk can not be 0. Received chunk_size={chunk_size}."
         chunk_offset = num_processed_thinker_tokens
         decode_assistant_fill = info_dict.get("thinker_decode_embeddings")
+        # Continuation steps: tok0 has already been cleared; use the cached version.
+        if decode_assistant_fill is None:
+            cached_dec = info_dict.get("cached_thinker_decode_embeddings")
+            if isinstance(cached_dec, torch.Tensor) and cached_dec.shape[0] > 0:
+                decode_assistant_fill = cached_dec[-1:]
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
@@ -919,8 +924,8 @@ class Qwen3OmniMoeForConditionalGeneration(
             pass
         update_dict["prefill_consumed_text_tokens"] = 1
         logger.info(
-            "[PREFILL_CONSUMED] req=%s chunk_size=%s chunk_offset=%s",
-            info_dict.get("request_id"), chunk_size, chunk_offset
+            "[PREFILL_CONSUMED] req=%s chunk_size=%s actual_embed_size=%s chunk_offset=%s",
+            info_dict.get("request_id"), chunk_size, actual_embed_size, chunk_offset
         )
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
 
@@ -1064,11 +1069,14 @@ class Qwen3OmniMoeForConditionalGeneration(
                     talker_input_ids.append(thinker_result_ids[local_start:local_end])
                 # Take assistant output (for now)
                 elif (segment_role_token == self.config.assistant_token_id).item() and i == len(im_start_indexes) - 2:
-                    # Extract the overlapping part from chunk tensors using local coordinates
+                    # start_pos: how many bootstrap tokens were already emitted in previous chunks.
+                    # = how far chunk_start_index is past the assistant <|im_start|> position.
+                    num_assistant_part_processed = max(0, chunk_start_index - segment_start_index_full)
                     talker_assistant_embeds, talker_assistant_ids, trailing_text_hidden = (
                         self._get_talker_assistant_parts(
                             local_start,
                             local_end,
+                            num_assistant_part_processed,
                             speaker_id,
                             thinker_embed,
                             tts_pad_embed,
@@ -1265,6 +1273,8 @@ class Qwen3OmniMoeForConditionalGeneration(
         self,
         im_start_index,
         segment_end_index,
+        # How many tokens of the assistant segment have already been processed in previous chunks
+        num_assistant_part_processed,
         speaker_id,
         thinker_embed,
         tts_pad_embed,
@@ -1278,10 +1288,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         )  # [t, d]
         hidden_dim = assistant_hidden.shape[-1] if assistant_hidden.shape[0] > 0 else tts_pad_embed.shape[-1]
 
-        assert assistant_hidden.shape[0] >= 4, f"request_id={request_id} Expect at least 4 tokens for assistant part, got {assistant_hidden.shape[0]}"
-
-        # assistant_hidden.shape[0] == 3: im_start + assistant + \n from prefill.
-        # The connector guarantees decode_assistant_fill[0] = embed(first_text).
         has_first_text = (
             isinstance(decode_assistant_fill, torch.Tensor)
             and decode_assistant_fill.ndim >= 2
@@ -1294,30 +1300,49 @@ class Qwen3OmniMoeForConditionalGeneration(
             has_first_text,
             int(decode_assistant_fill.shape[0]) if isinstance(decode_assistant_fill, torch.Tensor) else 0,
         )
-        if has_first_text:
-            first_text_embed = self.talker.text_projection(
-                decode_assistant_fill.to(tts_pad_embed.device)
-            ).to(assistant_hidden.dtype)
-            assistant_hidden = torch.cat([assistant_hidden, first_text_embed], dim=0)
+        # Bootstrap 9-token layout:
+        #   pos 0-2: thinker prefill projections (<|im_start|>, assistant, \n)
+        #   pos 3-6: tts_pad × 4  (synthetic)
+        #   pos 7:   tts_bos      (synthetic)
+        #   pos 8:   tok0         (decode_assistant_fill projection)
+        #
+        # num_assistant_part_processed = how many of the 9 positions were already
+        # emitted in prior chunks.  Within this chunk:
+        #   - assistant_hidden covers pos [num .. num + prefill_count - 1]  (max pos 2)
+        #   - synthetic tokens (pos 3-8) are only appended once pos 0-2 are all done
+        #
+        prefill_count = assistant_hidden.shape[0]  # number of thinker prefill tokens in this chunk
+        prefill_end = num_assistant_part_processed + prefill_count  # exclusive end in [0..3]
+
+        if prefill_end < 3:
+            # Still inside pos 0-2; no synthetic tokens yet — just emit the prefill projections.
+            assistant_text_hidden = assistant_hidden
+            trailing_text_hidden = None
         else:
-            # This should NOT happen if the connector guarantees complete bootstrap.
-            logger.warning(
-                "[ASSISTANT_PARTS] req=%s: decode_assistant_fill missing — "
-                "connector bug? Falling back to zero-pad for first_text slot.",
-                request_id,
-            )
-            zero = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
-            assistant_hidden = torch.cat([assistant_hidden, zero], dim=0)
-        # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
-        assistant_text_hidden = torch.cat(
-            (
-                assistant_hidden[:3],
-                tts_pad_embed.expand(4, -1),
-                tts_bos_embed,
-                assistant_hidden[3:4],  # First text
-            ),
-            dim=0,
-        )
+            # pos 0-2 complete in this chunk; append synthetic pos 3-8 (tok0 included).
+            if has_first_text:
+                first_text_embed = self.talker.text_projection(
+                    decode_assistant_fill.to(tts_pad_embed.device)
+                ).to(assistant_hidden.dtype)
+            else:
+                logger.warning(
+                    "[ASSISTANT_PARTS] req=%s: decode_assistant_fill missing — "
+                    "connector bug? Falling back to zero-pad for first_text slot.",
+                    request_id,
+                )
+                first_text_embed = torch.zeros(
+                    (1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype
+                )
+            assistant_text_hidden = torch.cat(
+                (
+                    assistant_hidden,               # remaining prefill projections up to pos 2
+                    tts_pad_embed.expand(4, -1),    # pos 3-6
+                    tts_bos_embed,                  # pos 7
+                    first_text_embed,               # pos 8 = tok0
+                ),
+                dim=0,
+            )  # shape [(3 - num) + 6, d] = [9 - num, d]
+            trailing_text_hidden = tts_eos_embed
         codec_special_tokens = torch.tensor(
             [
                 self.config.talker_config.codec_nothink_id,
@@ -1333,6 +1358,11 @@ class Qwen3OmniMoeForConditionalGeneration(
         embed_input_ids = self.talker.embed_input_ids(codec_special_tokens).to(
             device=tts_pad_embed.device, dtype=torch.bfloat16
         )
+        # Full codec channel: [zeros×3, codec_embeds×6] = 9 tokens.
+        # Slice [num : num + len(assistant_text_hidden)] to align with text channel.
+        # When prefill_end < 3, text channel is only the prefill tokens (no synthetic part).
+        # When prefill_end >= 3, text channel is 9 - num tokens (full remaining bootstrap).
+        n_out = assistant_text_hidden.shape[0]
         assistant_codec_hidden = torch.cat(
             (
                 torch.zeros(
@@ -1343,15 +1373,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 embed_input_ids,
             ),
             dim=0,
-        )
-
-        if assistant_hidden.shape[0] > 4:
-            trailing_text_hidden = torch.cat(
-                (assistant_hidden[4:], tts_eos_embed),
-                dim=0,
-            )
-        else:
-            trailing_text_hidden = tts_eos_embed
+        )[num_assistant_part_processed : num_assistant_part_processed + n_out]
 
         input_embeds = assistant_text_hidden + assistant_codec_hidden
         input_ids = torch.full(
