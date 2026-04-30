@@ -214,3 +214,67 @@ def compute_talker_prompt_ids_length(prompt_ids: list[int]) -> int:
             pass
 
     return sum_user_len + assistant_len
+
+
+def compute_first_chunk_talker_len(
+    prompt_ids: list[int],
+    thinker_max_batched_tokens: int,
+) -> tuple[int, int]:
+    """Compute (first_chunk_talker_len, total_talker_placeholder_len).
+
+    In async_chunk mode the thinker sends embeddings in batches of
+    ``thinker_max_batched_tokens``.  The first batch covers tokens
+    [0 .. min(max_batched, total)-1].  After filtering out the system
+    segment, the remaining non-system tokens correspond to the talker
+    placeholder tokens that will be available from the very first chunk.
+
+    Pre-warming the talker with only ``first_chunk_talker_len`` tokens
+    (instead of the full ``total_talker_placeholder_len``) ensures the
+    talker scheduler never schedules more tokens than there are valid
+    thinker embeddings available for that step, avoiding KV-cache
+    corruption from garbage placeholder embeddings.
+
+    Args:
+        prompt_ids: Thinker prompt token IDs.
+        thinker_max_batched_tokens: ``max_num_batched_tokens`` of the
+            thinker's scheduler config.
+
+    Returns:
+        ``(first_chunk_talker_len, total_talker_placeholder_len)``
+    """
+    total_talker_len = compute_talker_prompt_ids_length(prompt_ids)
+
+    im_start_token_id = 151644
+    system_token_id = 8948
+
+    # Locate system segment(s) and sum their lengths.  The system turn is
+    # always first in Qwen3-Omni, so we stop counting once we hit a non-system
+    # segment.
+    im_start_indexes = [i for i in range(len(prompt_ids)) if prompt_ids[i] == im_start_token_id]
+    im_start_indexes.append(len(prompt_ids))
+    system_prefix_len = 0
+    for i in range(len(im_start_indexes) - 1):
+        s = im_start_indexes[i]
+        e = im_start_indexes[i + 1]
+        if len(prompt_ids) > s + 1 and prompt_ids[s + 1] == system_token_id:
+            system_prefix_len += e - s
+        else:
+            break  # system is always first
+
+    total_prompt_len = len(prompt_ids)
+    if thinker_max_batched_tokens <= 0:
+        return max(1, total_talker_len), total_talker_len
+
+    # Find the first thinker batch that contains at least one non-system token.
+    # Each batch spans [batch_start .. batch_start + max_batched - 1].
+    # batch_index of the first non-system token = floor(system_prefix_len / max_batched)
+    first_non_sys_batch_start = (system_prefix_len // thinker_max_batched_tokens) * thinker_max_batched_tokens
+    first_non_sys_batch_end = min(first_non_sys_batch_start + thinker_max_batched_tokens, total_prompt_len)
+    first_chunk_non_system = max(0, first_non_sys_batch_end - max(system_prefix_len, first_non_sys_batch_start))
+
+    # Non-system thinker tokens map 1:1 to talker placeholder tokens (up to
+    # the bootstrap boundary).  Clip to total_talker_len to be safe.
+    first_chunk_talker_len = min(first_chunk_non_system, total_talker_len)
+    first_chunk_talker_len = max(1, first_chunk_talker_len)
+
+    return first_chunk_talker_len, total_talker_len
