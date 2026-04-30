@@ -24,7 +24,10 @@ from vllm.sampling_params import SamplingParams
 from vllm.v1.engine import EngineCoreOutputs
 from vllm.v1.engine.exceptions import EngineDeadError
 
-from vllm_omni.distributed.omni_connectors.adapter import compute_talker_prompt_ids_length
+from vllm_omni.distributed.omni_connectors.adapter import (
+    compute_first_chunk_talker_len,
+    compute_talker_prompt_ids_length,
+)
 from vllm_omni.engine import (
     OmniEngineCoreRequest,
 )
@@ -170,6 +173,11 @@ class Orchestrator:
 
         # Per-request state
         self.request_states: dict[str, OrchestratorRequestState] = {}
+
+        # async_chunk: pending talker prompt extensions keyed by request_id.
+        # Stores the number of tokens to append to the talker's prompt once the
+        # thinker generates its first output token (= last prefill chunk sent).
+        self._pending_talker_extensions: dict[str, int] = {}
 
         # Stage IDs that have final_output=True (need all to finish before cleanup)
         self._final_output_stage_ids: set[int] = {
@@ -465,6 +473,16 @@ class Orchestrator:
                     "KV transfer may fail. Ensure apply_mooncake_connector_patch() was called.",
                     req_id,
                 )
+
+        # async_chunk: when the thinker generates its first output token the last
+        # prefill chunk has been sent.  Extend the talker prompt now so that the
+        # talker scheduler can schedule the remaining placeholder tokens.
+        if self.async_chunk and stage_id == 0 and req_id in self._pending_talker_extensions:
+            n_decoded = len(output.outputs[0].token_ids) if output.outputs else 0
+            if n_decoded == 1:
+                extend_by = self._pending_talker_extensions.pop(req_id)
+                if extend_by > 0:
+                    await self._extend_talker_prompt(req_id, extend_by)
 
         if (
             (finished or (req_state.streaming.enabled and req_state.streaming.segment_finished))
@@ -972,16 +990,33 @@ class Orchestrator:
             return
 
         # Pre-arm stage-1+ with placeholder prompt IDs.
+        #
+        # For the AR talker (stage 1) in async_chunk mode the placeholder length
+        # is deliberately limited to the tokens that correspond to the FIRST
+        # thinker prefill batch.  The thinker sends embeddings in batches of
+        # max_num_batched_tokens; without this limit the talker scheduler would
+        # schedule more tokens than there are available embeddings in the first
+        # chunk, filling the extra positions with garbage embed_input_ids(0)
+        # embeddings and corrupting the KV cache.
+        #
+        # Once the thinker generates its first output token (signalling that all
+        # prefill chunks have been sent), _route_output issues a streaming_update
+        # to the talker with the remaining tokens.
         try:
-            next_prompt_len = max(1, compute_talker_prompt_ids_length(prompt_token_ids))
+            total_talker_len = max(1, compute_talker_prompt_ids_length(prompt_token_ids))
+            thinker_max_batched = self.stage_vllm_configs[0].scheduler_config.max_num_batched_tokens
+            first_chunk_len, _ = compute_first_chunk_talker_len(prompt_token_ids, thinker_max_batched)
+            first_chunk_len = max(1, first_chunk_len)
         except Exception:
-            next_prompt_len = max(1, len(prompt_token_ids))
+            total_talker_len = max(1, len(prompt_token_ids))
+            first_chunk_len = total_talker_len
+
         original_prompt = req_state.prompt
         if isinstance(original_prompt, dict):
             base_input = copy.deepcopy(original_prompt)
         else:
             base_input = {}
-        base_input["prompt_token_ids"] = [0] * next_prompt_len
+        base_input["prompt_token_ids"] = [0] * total_talker_len
         base_input["multi_modal_data"] = None
         base_input["mm_processor_kwargs"] = None
 
@@ -1001,11 +1036,28 @@ class Orchestrator:
                 req_state.stage_submit_ts[next_stage_id] = _time.time()
                 continue
 
+            # For the AR talker (stage 1): prewarm with only the first-chunk
+            # tokens and schedule the remainder as a deferred extension.
+            remaining_talker_len = total_talker_len - first_chunk_len
+            if next_stage_id == 1 and remaining_talker_len > 0:
+                stage_prompt = dict(base_input)
+                stage_prompt["prompt_token_ids"] = [0] * first_chunk_len
+                stage_resumable = True
+                self._pending_talker_extensions[request_id] = remaining_talker_len
+                logger.info(
+                    "[Orchestrator] async_chunk prewarm: req=%s first_chunk=%d remaining=%d total=%d",
+                    request_id, first_chunk_len, remaining_talker_len, total_talker_len,
+                )
+            else:
+                stage_prompt = base_input
+                stage_resumable = False
+
             request = build_engine_core_request_from_tokens(
                 request_id=request_id,
-                prompt=base_input,
+                prompt=stage_prompt,
                 params=params,
                 model_config=self.stage_vllm_configs[next_stage_id].model_config,
+                resumable=stage_resumable,
             )
             request.external_req_id = request.request_id
 
@@ -1018,6 +1070,39 @@ class Orchestrator:
             )
             await next_client.add_request_async(request)
             req_state.stage_submit_ts[next_stage_id] = _time.time()
+
+    async def _extend_talker_prompt(self, req_id: str, extend_by: int) -> None:
+        """Extend the talker's placeholder prompt in a running async_chunk request.
+
+        Called from *_route_output* when the thinker's first output token is
+        observed (= last thinker prefill chunk has been sent).  Issues a
+        resumable streaming_update so the talker scheduler sees
+        ``first_chunk_len + extend_by = total_talker_placeholder_len`` tokens
+        and can schedule the remaining prefill tokens in the next batch.
+        """
+        req_state = self.request_states.get(req_id)
+        if req_state is None or self.num_stages < 2:
+            return
+        talker_client = self.stage_clients[1]
+        params = req_state.sampling_params_list[1]
+        extension_input: dict[str, Any] = {
+            "prompt_token_ids": [0] * extend_by,
+            "multi_modal_data": None,
+            "mm_processor_kwargs": None,
+        }
+        request = build_engine_core_request_from_tokens(
+            request_id=req_id,
+            prompt=extension_input,
+            params=params,
+            model_config=self.stage_vllm_configs[1].model_config,
+            resumable=True,
+        )
+        request.external_req_id = request.request_id
+        await talker_client.add_request_async(request)
+        logger.info(
+            "[Orchestrator] async_chunk: extended talker prompt req=%s extend_by=%d",
+            req_id, extend_by,
+        )
 
     async def _handle_add_companion(self, msg: dict[str, Any]) -> None:
         """Handle an add_companion_request message: submit companion to stage 0."""
