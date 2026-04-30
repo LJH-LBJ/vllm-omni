@@ -27,6 +27,10 @@ logger = init_logger(__name__)
 _EMBED_LAYER_KEY = "0"
 _HIDDEN_LAYER_KEY = "24"
 
+# ChatML special token IDs
+_IM_START_TOKEN_ID = 151644
+_SYSTEM_TOKEN_ID = 8948
+
 
 def _compute_talker_prompt_ids_length(info, device: torch.device | str = "cuda") -> int:
     im_start_token_id = 151644
@@ -281,16 +285,6 @@ def _get_streaming_codec_delta_len(
 # =========================
 # Thinker -> Talker
 # =========================
-def _find_assistant_boundary(prompt_token_ids: list[int]) -> int:
-    """Return the index of the assistant part start token (<|im_start|>)."""
-    IM_START = 151644
-    ASSISTANT = 77091
-    result = -1
-    for i in range(len(prompt_token_ids) - 1):
-        if prompt_token_ids[i] == IM_START and prompt_token_ids[i + 1] == ASSISTANT:
-            result = i
-    return result
-
 
 def _get_prefill_part_state(transfer_manager: Any, request_id: str) -> dict[str, Any]:
     state_map = getattr(transfer_manager, "_prefill_part_state", None)
@@ -302,10 +296,56 @@ def _get_prefill_part_state(transfer_manager: Any, request_id: str) -> dict[str,
     return state_map[request_id]
 
 
-def _pop_prefill_part_state(transfer_manager: Any, request_id: str) -> None:
-    state_map = getattr(transfer_manager, "_prefill_part_state", None)
-    if isinstance(state_map, dict):
-        state_map.pop(request_id, None)
+def _get_system_segment_ranges(prompt_token_ids: list[int]) -> list[tuple[int, int]]:
+    """Return half-open (start, end) index ranges for system segments in the full prompt."""
+    im_starts = [i for i in range(len(prompt_token_ids)) if prompt_token_ids[i] == _IM_START_TOKEN_ID]
+    im_starts.append(len(prompt_token_ids))
+    ranges: list[tuple[int, int]] = []
+    for idx in range(len(im_starts) - 1):
+        s, e = im_starts[idx], im_starts[idx + 1]
+        if s + 1 < len(prompt_token_ids) and prompt_token_ids[s + 1] == _SYSTEM_TOKEN_ID:
+            ranges.append((s, e))
+    return ranges
+
+
+def _filter_system_rows(
+    prompt_token_ids: list[int],
+    chunk_start: int,
+    embeds: torch.Tensor,
+    hidden: torch.Tensor,
+) -> tuple[list[int], torch.Tensor, torch.Tensor]:
+    """Remove system-segment rows from a chunk's embeddings.
+
+    Args:
+        prompt_token_ids: Full prompt token IDs for the request.
+        chunk_start: Position of the first token of this chunk in the full prompt.
+        embeds: [chunk_size, D] embedding tensor for the current chunk.
+        hidden: [chunk_size, D] hidden state tensor for the current chunk.
+
+    Returns:
+        (filtered_full_ids, filtered_embeds, filtered_hidden):
+          - filtered_full_ids: full prompt IDs with all system tokens removed.
+            Used as thinker_input_ids / thinker_sequences sent to the talker.
+          - filtered_embeds / filtered_hidden: current-chunk rows with system
+            positions removed.
+    """
+    system_ranges = _get_system_segment_ranges(prompt_token_ids)
+    if not system_ranges:
+        return prompt_token_ids, embeds, hidden
+
+    def _in_system(pos: int) -> bool:
+        return any(s <= pos < e for s, e in system_ranges)
+
+    # Full non-system IDs (constant across chunks, sent as override each step)
+    filtered_full_ids = [prompt_token_ids[p] for p in range(len(prompt_token_ids)) if not _in_system(p)]
+
+    # Per-chunk keep mask
+    chunk_size = embeds.shape[0]
+    keep_mask = torch.tensor(
+        [not _in_system(chunk_start + i) for i in range(chunk_size)],
+        dtype=torch.bool,
+    )
+    return filtered_full_ids, embeds[keep_mask], hidden[keep_mask]
 
 
 def _fill_optional_fields(d: dict, request: OmniEngineCoreRequest) -> None:
@@ -314,43 +354,6 @@ def _fill_optional_fields(d: dict, request: OmniEngineCoreRequest) -> None:
         val = fn(request)
         if val is not None:
             d[key] = val
-
-
-def _append_assistant_prefill_payload(
-    transfer_manager: Any,
-    request_id: str,
-    *,
-    embeds_cpu: torch.Tensor,
-    hidden_cpu: torch.Tensor,
-    pooling_output: dict[str, Any],
-    request: OmniEngineCoreRequest,
-    all_token_ids: list[int],
-    prompt_token_ids: list[int],
-) -> None:
-    """Accumulate assistant prefill embeddings; flush later in phase-2 with tok0 embed."""
-    existing = transfer_manager.request_payload.get(request_id)
-    if existing is None:
-        transfer_manager.request_payload[request_id] = {
-            "thinker_prefill_embeddings": embeds_cpu,
-            "thinker_hidden_states": hidden_cpu,
-            "tts_bos_embed": pooling_output.get("tts_bos_embed").detach().cpu(),
-            "tts_eos_embed": pooling_output.get("tts_eos_embed").detach().cpu(),
-            "tts_pad_embed": pooling_output.get("tts_pad_embed").detach().cpu(),
-            "thinker_sequences": prompt_token_ids,
-            "thinker_input_ids": prompt_token_ids,
-        }
-        speaker = extract_speaker_from_request(request)
-        if speaker is not None:
-            transfer_manager.request_payload[request_id]["speaker"] = speaker
-        language = extract_language_from_request(request)
-        if language is not None:
-            transfer_manager.request_payload[request_id]["language"] = language
-        return
-
-    existing["thinker_prefill_embeddings"] = torch.cat([existing["thinker_prefill_embeddings"], embeds_cpu], dim=0)
-    existing["thinker_hidden_states"] = torch.cat([existing["thinker_hidden_states"], hidden_cpu], dim=0)
-    existing["thinker_sequences"] = prompt_token_ids
-    existing["thinker_input_ids"] = prompt_token_ids
 
 
 def thinker2talker_async_chunk(  # noqa: C901
@@ -388,11 +391,28 @@ def thinker2talker_async_chunk(  # noqa: C901
         embeds_cpu = pooling_output.get(_EMBED_LAYER_KEY).detach().cpu()
         hidden_cpu = pooling_output.get(_HIDDEN_LAYER_KEY).detach().cpu()
 
+        # Track the position of this chunk in the full prompt so we can
+        # identify which rows belong to a system segment and drop them.
+        # The talker's _compute_talker_prompt_ids_length already excludes
+        # system tokens from the placeholder length, so embeddings and IDs
+        # must be consistent: system rows must never reach the talker.
+        state = _get_prefill_part_state(transfer_manager, request_id)
+        chunk_start = state["sent_prompt_tokens"]
+        state["sent_prompt_tokens"] = chunk_start + embeds_cpu.shape[0]
+
+        filtered_ids, embeds_cpu, hidden_cpu = _filter_system_rows(
+            prompt_token_ids, chunk_start, embeds_cpu, hidden_cpu
+        )
+
+        # Entire chunk was system tokens — nothing to forward this step.
+        if embeds_cpu.shape[0] == 0:
+            return None
+
         emit_info = {
             "thinker_prefill_embeddings": embeds_cpu,
             "thinker_hidden_states": hidden_cpu,
-            "thinker_sequences": prompt_token_ids,
-            "thinker_input_ids": prompt_token_ids,
+            "thinker_sequences": filtered_ids,
+            "thinker_input_ids": filtered_ids,
             "override_keys": ["thinker_sequences", "thinker_input_ids"],
             "tts_bos_embed": pooling_output.get("tts_bos_embed").detach().cpu(),
             "tts_eos_embed": pooling_output.get("tts_eos_embed").detach().cpu(),
