@@ -862,10 +862,13 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_offset = num_processed_thinker_tokens
         decode_assistant_fill = info_dict.get("thinker_decode_embeddings")
         # Continuation steps: tok0 has already been cleared; use the cached version.
+        # Always use [0:1] (first = tok0), NOT [-1:], because subsequent decode
+        # steps may have already appended tok1, tok2… into the cache before the
+        # talker bootstrap assembly runs.  Bootstrap pos-8 is always tok0.
         if decode_assistant_fill is None:
             cached_dec = info_dict.get("cached_thinker_decode_embeddings")
             if isinstance(cached_dec, torch.Tensor) and cached_dec.shape[0] > 0:
-                decode_assistant_fill = cached_dec[-1:]
+                decode_assistant_fill = cached_dec[0:1]
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
@@ -1325,9 +1328,9 @@ class Qwen3OmniMoeForConditionalGeneration(
                     decode_assistant_fill.to(tts_pad_embed.device)
                 ).to(assistant_hidden.dtype)
             else:
-                logger.warning(
-                    "[ASSISTANT_PARTS] req=%s: decode_assistant_fill missing — "
-                    "connector bug? Falling back to zero-pad for first_text slot.",
+                logger.debug(
+                    "[ASSISTANT_PARTS] req=%s: decode_assistant_fill not provided — "
+                    "using zero-pad for first_text slot (pos 8).",
                     request_id,
                 )
                 first_text_embed = torch.zeros(
