@@ -385,9 +385,13 @@ def thinker2talker_async_chunk(  # noqa: C901
     )
     n_decoded = len(output_token_ids)
 
-    if n_decoded == 0 and not is_finished:
+    prompt_token_ids = _ensure_list(request.prompt_token_ids)
+    state = _get_prefill_part_state(transfer_manager, request_id)
+    chunk_start = state["sent_prompt_tokens"]
+    prefill_still_pending = chunk_start < len(prompt_token_ids)
+
+    if prefill_still_pending and not (is_finished and n_decoded == 0):
         # ----- Prefill -----
-        prompt_token_ids = _ensure_list(request.prompt_token_ids)
         embeds_cpu = pooling_output.get(_EMBED_LAYER_KEY).detach().cpu()
         hidden_cpu = pooling_output.get(_HIDDEN_LAYER_KEY).detach().cpu()
 
@@ -396,8 +400,6 @@ def thinker2talker_async_chunk(  # noqa: C901
         # The talker's _compute_talker_prompt_ids_length already excludes
         # system tokens from the placeholder length, so embeddings and IDs
         # must be consistent: system rows must never reach the talker.
-        state = _get_prefill_part_state(transfer_manager, request_id)
-        chunk_start = state["sent_prompt_tokens"]
         state["sent_prompt_tokens"] = chunk_start + embeds_cpu.shape[0]
 
         filtered_ids, embeds_cpu, hidden_cpu = _filter_system_rows(
@@ -419,6 +421,15 @@ def thinker2talker_async_chunk(  # noqa: C901
             "tts_pad_embed": pooling_output.get("tts_pad_embed").detach().cpu(),
             "finished": torch.tensor(False, dtype=torch.bool),
         }
+        # Last prefill chunk: thinker already emitted the first output token
+        # in this same scheduler step.  Forward the token IDs now so the talker
+        # has the correct sequence length; the decode *embedding* is absent
+        # here and will arrive in the very next decode step's pooling_output.
+        if n_decoded >= 1 and output_token_ids:
+            emit_info["thinker_output_token_ids"] = output_token_ids
+            emit_info["override_keys"] = [
+                "thinker_sequences", "thinker_input_ids", "thinker_output_token_ids"
+            ]
         _fill_optional_fields(emit_info, request)
         return emit_info
 
