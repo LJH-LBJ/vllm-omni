@@ -862,9 +862,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_offset = num_processed_thinker_tokens
         decode_assistant_fill = info_dict.get("thinker_decode_embeddings")
         # Continuation steps: tok0 has already been cleared; use the cached version.
-        # Always use [0:1] (first = tok0), NOT [-1:], because subsequent decode
-        # steps may have already appended tok1, tok2… into the cache before the
-        # talker bootstrap assembly runs.  Bootstrap pos-8 is always tok0.
         if decode_assistant_fill is None:
             cached_dec = info_dict.get("cached_thinker_decode_embeddings")
             if isinstance(cached_dec, torch.Tensor) and cached_dec.shape[0] > 0:
