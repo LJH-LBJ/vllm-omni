@@ -689,6 +689,39 @@ class Qwen3OmniMoeForConditionalGeneration(
         else:
             prefill_total_tokens = 0
         prefill_exhausted = prefill_total_tokens > 0 and num_processed_thinker_tokens >= prefill_total_tokens
+
+        pending_bootstrap_embeds = info_dict.get("pending_bootstrap_embeds")
+        if isinstance(pending_bootstrap_embeds, torch.Tensor) and pending_bootstrap_embeds.shape[0] > 0:
+            n_emit = min(span_len, pending_bootstrap_embeds.shape[0])
+            emit_embeds = pending_bootstrap_embeds[:n_emit].to(self._module_device(self.talker))
+            pending_bootstrap_ids = info_dict.get("pending_bootstrap_ids")
+            if isinstance(pending_bootstrap_ids, torch.Tensor) and pending_bootstrap_ids.shape[0] >= n_emit:
+                emit_ids = pending_bootstrap_ids[:n_emit].to(emit_embeds.device)
+                next_ids = pending_bootstrap_ids[n_emit:] if n_emit < pending_bootstrap_ids.shape[0] else None
+            else:
+                emit_ids = torch.full(
+                    (n_emit,), self.config.tts_pad_token_id, dtype=torch.long, device=emit_embeds.device
+                )
+                next_ids = None
+            return (
+                emit_ids,
+                emit_embeds,
+                {
+                    "pending_bootstrap_embeds": (
+                        pending_bootstrap_embeds[n_emit:]
+                        if n_emit < pending_bootstrap_embeds.shape[0]
+                        else None
+                    ),
+                    "pending_bootstrap_ids": next_ids,
+                    "code_predictor_codes": torch.zeros(
+                        (n_emit, self.talker.num_code_groups),
+                        device=emit_embeds.device,
+                        dtype=torch.long,
+                    ),
+                    "num_processed_tokens": info_dict.get("num_processed_tokens", 0) + n_emit,
+                },
+            )
+
         update_dict = {}
         effective_span_len = span_len
         if not prefill_exhausted:
@@ -862,6 +895,9 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_offset = num_processed_thinker_tokens
         decode_assistant_fill = info_dict.get("thinker_decode_embeddings")
         # Continuation steps: tok0 has already been cleared; use the cached version.
+        # Always use [0:1] (first = tok0), NOT [-1:], because subsequent decode
+        # steps may have already appended tok1, tok2… into the cache before the
+        # talker bootstrap assembly runs.  Bootstrap pos-8 is always tok0.
         if decode_assistant_fill is None:
             cached_dec = info_dict.get("cached_thinker_decode_embeddings")
             if isinstance(cached_dec, torch.Tensor) and cached_dec.shape[0] > 0:
@@ -928,6 +964,12 @@ class Qwen3OmniMoeForConditionalGeneration(
             info_dict.get("request_id"), chunk_size, actual_embed_size, chunk_offset
         )
         self._talker_cache_thinker_decode_embeds(info_dict, update_dict)
+
+        if req_embeds.shape[0] > chunk_size:
+            update_dict["pending_bootstrap_embeds"] = req_embeds[chunk_size:].detach()
+            update_dict["pending_bootstrap_ids"] = req_input_ids[chunk_size:].detach()
+            req_embeds = req_embeds[:chunk_size]
+            req_input_ids = req_input_ids[:chunk_size]
 
         return req_input_ids, req_embeds, update_dict
 
