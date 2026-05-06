@@ -59,6 +59,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.waiting_for_chunk_running_requests: deque[Any] = deque()
         self.requests_with_ready_chunks = set()
         self.requests_origin_status = {}
+        # async_chunk AR mode: maps internal req_id -> original num_prompt_tokens.
+        # Used to gate scheduling so the talker never processes more tokens than
+        # there are available thinker embeddings in the current chunk batch.
+        # Cleared on the first decode chunk (or on cleanup).
+        self._async_chunk_total_tokens: dict[str, int] = {}
 
     @classmethod
     def create_connector(cls, model_config: Any):
@@ -155,6 +160,30 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 request.additional_information = payload_data
                 if payload_data.get("finished"):
                     self.finished_requests.add(req_id)
+                # Gate num_prompt_tokens to the cumulative count of available
+                # thinker embeddings so the talker scheduler never schedules
+                # more tokens than there are real embeddings in this batch.
+                # Without this, extra positions get garbage embed_input_ids(0)
+                # embeddings which corrupt the KV cache.
+                embeds = payload_data.get("thinker_prefill_embeddings")
+                finished_flag = payload_data.get("finished", False)
+                is_chunk_finished = (
+                    bool(finished_flag.item())
+                    if isinstance(finished_flag, torch.Tensor)
+                    else bool(finished_flag)
+                )
+                if isinstance(embeds, torch.Tensor) and not is_chunk_finished:
+                    # Prefill chunk: limit scheduling to cumulative embed count.
+                    if req_id not in self._async_chunk_total_tokens:
+                        self._async_chunk_total_tokens[req_id] = request.num_prompt_tokens
+                    request.num_prompt_tokens = min(
+                        embeds.shape[0], self._async_chunk_total_tokens[req_id]
+                    )
+                elif req_id in self._async_chunk_total_tokens:
+                    # First decode chunk (no thinker_prefill_embeddings) or
+                    # terminal chunk: restore original prompt length so that
+                    # any remaining bootstrap placeholder slots get scheduled.
+                    request.num_prompt_tokens = self._async_chunk_total_tokens.pop(req_id)
             else:
                 if payload_data.get("finished"):
                     self.finished_requests.add(req_id)
@@ -281,6 +310,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.requests_with_ready_chunks.discard(request_id)
         self.request_ids_mapping.pop(request_id, None)
         self.requests_origin_status.pop(request_id, None)
+        self._async_chunk_total_tokens.pop(request_id, None)
 
         self._cancelled_load_reqs.add(request_id)
         self._finished_load_reqs.discard(request_id)
