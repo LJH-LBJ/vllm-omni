@@ -152,7 +152,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             self.get_req_chunk[req_id] += 1
 
             if self.model_mode == "ar":
-                self._update_request_payload(external_req_id, payload_data)
+                payload_data = self._update_request_payload(external_req_id, payload_data)
                 request.additional_information = payload_data
                 finished_flag = payload_data.get("finished", False)
                 is_chunk_finished = (
@@ -168,10 +168,20 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 )
                 prefill_boundary = (
                     is_chunk_finished
-                    or "thinker_output_token_ids" in payload_data
                     or isinstance(payload_data.get("thinker_decode_embeddings"), torch.Tensor)
                 )
                 if has_prefill_embeds and not prefill_boundary:
+                    if "thinker_output_token_ids" in payload_data:
+                        self._pending_load_reqs.append(request)
+                        with self._recv_cond:
+                            self._recv_cond.notify()
+                        logger.info(
+                            "[Stage-%s] Buffering final prefill chunk for key %s until tok0 embed arrives",
+                            stage_id,
+                            connector_get_key,
+                        )
+                        return True
+
                     accumulated = self.request_payload.get(external_req_id, payload_data)
                     cumulative_embeds = accumulated.get("thinker_prefill_embeddings")
                     available_tokens = (
@@ -251,18 +261,21 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             return payload_data
         origin_payload = self.request_payload[req_id]
         override_keys = payload_data.pop("override_keys", [])
+        merged_payload = dict(origin_payload)
         for key, value in payload_data.items():
             if key == "finished":
-                continue
+                merged_payload[key] = value
             elif key in override_keys:
-                payload_data[key] = value
-            elif isinstance(value, torch.Tensor) and key in origin_payload:
-                payload_data[key] = torch.cat([origin_payload[key], value], dim=0)
-            elif isinstance(value, list) and key in origin_payload:
-                payload_data[key] = origin_payload[key] + value
+                merged_payload[key] = value
+            elif isinstance(value, torch.Tensor) and isinstance(origin_payload.get(key), torch.Tensor):
+                merged_payload[key] = torch.cat([origin_payload[key], value], dim=0)
+            elif isinstance(value, list) and isinstance(origin_payload.get(key), list):
+                merged_payload[key] = origin_payload[key] + value
+            else:
+                merged_payload[key] = value
 
-        self.request_payload[req_id] = payload_data
-        return payload_data
+        self.request_payload[req_id] = merged_payload
+        return merged_payload
 
     def _send_single_request(self, task: dict):
         pooling_output = task["pooling_output"]

@@ -1179,6 +1179,17 @@ class Qwen3OmniMoeForConditionalGeneration(
         if isinstance(cached, torch.Tensor) and cached.numel() > 0:
             cached = cached.to(device)
         cache_len = cached.shape[0] if isinstance(cached, torch.Tensor) else 0
+        target_cache_len = max(len(thinker_output_token_ids) - 1, 0)
+        if (
+            isinstance(thinker_decode_embed, torch.Tensor)
+            and thinker_decode_embed.numel() > 0
+            and cache_len < target_cache_len
+        ):
+            new_embeds = thinker_decode_embed.to(device)[: target_cache_len - cache_len]
+            cached = torch.cat([cached, new_embeds], dim=0) if isinstance(cached, torch.Tensor) else new_embeds
+            update_dict["cached_thinker_decode_embeddings"] = cached
+            update_dict["thinker_decode_embeddings"] = None
+            cache_len = cached.shape[0]
 
         logger.info(
             "[DECODE_TO_TALKER] req=%s start_index=%s cache_len=%s decode_len=%s "
