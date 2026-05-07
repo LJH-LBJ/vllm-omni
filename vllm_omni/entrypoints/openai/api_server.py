@@ -2108,7 +2108,7 @@ def _check_max_generated_image_size(
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail=f"Requested image size {width}x{height} exceeds the maximum allowed "
                 f"size of {max_generated_image_size} pixels. You can reduce the requested size "
-                f"or increase the server's --max-generated-image-size limit.",
+                f"or increase the server's --max-generated-image-size limit.\n",
             )
     elif resolution is not None:
         # When resolution is set, the output size is resolution * resolution
@@ -2116,7 +2116,8 @@ def _check_max_generated_image_size(
             raise HTTPException(
                 status_code=HTTPStatus.BAD_REQUEST.value,
                 detail=f"Requested resolution {resolution} (max {resolution}x{resolution} pixels) "
-                f"exceeds the maximum allowed size of {max_generated_image_size} pixels.",
+                f"exceeds the maximum allowed size of {max_generated_image_size} pixels. "
+                f"You can reduce the requested size or increase the server's --max-generated-image-size limit.\n",
             )
 
 

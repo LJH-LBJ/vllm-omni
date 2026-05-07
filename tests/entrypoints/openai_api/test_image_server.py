@@ -1649,3 +1649,76 @@ def test_extract_images_from_result():
     assert len(images) == 1
     assert isinstance(images[0], Image.Image)
     assert images[0].size == (32, 32)
+
+
+# ---------------------------------------------------------------------------
+# _check_max_generated_image_size unit tests
+# ---------------------------------------------------------------------------
+
+
+def test_width_height_within_limit_passes():
+    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
+
+    args = SimpleNamespace(max_generated_image_size=1024 * 1024)
+    # Exactly at limit is allowed (> not >=)
+    _check_max_generated_image_size(args, 1024, 1024)
+    # Below limit
+    _check_max_generated_image_size(args, 512, 512)
+
+
+def test_width_height_exceeds_limit_raises_400():
+    from http import HTTPStatus
+
+    import pytest
+    from fastapi import HTTPException
+
+    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
+
+    limit = 1024 * 1024
+    args = SimpleNamespace(max_generated_image_size=limit)
+    with pytest.raises(HTTPException) as exc_info:
+        _check_max_generated_image_size(args, 1025, 1024)
+    assert exc_info.value.status_code == HTTPStatus.BAD_REQUEST.value
+    assert "1025x1024" in exc_info.value.detail
+    assert str(limit) in exc_info.value.detail
+
+
+def test_width_height_error_message_contains_size_hint():
+    import pytest
+    from fastapi import HTTPException
+
+    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
+
+    args = SimpleNamespace(max_generated_image_size=512 * 512)
+    with pytest.raises(HTTPException) as exc_info:
+        _check_max_generated_image_size(args, 1024, 512)
+    assert "--max-generated-image-size" in exc_info.value.detail
+
+
+def test_resolution_within_limit_passes():
+    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
+
+    args = SimpleNamespace(max_generated_image_size=1024 * 1024)
+    # Exactly at limit is allowed (> not >=): 1024*1024 == limit
+    _check_max_generated_image_size(args, None, None, resolution=1024)
+    # Below limit
+    _check_max_generated_image_size(args, None, None, resolution=512)
+
+
+def test_resolution_exceeds_limit_raises_400():
+    from http import HTTPStatus
+
+    import pytest
+    from fastapi import HTTPException
+
+    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
+
+    limit = 1024 * 1024
+    args = SimpleNamespace(max_generated_image_size=limit)
+    with pytest.raises(HTTPException) as exc_info:
+        _check_max_generated_image_size(args, None, None, resolution=1025)
+    assert exc_info.value.status_code == HTTPStatus.BAD_REQUEST.value
+    detail = exc_info.value.detail
+    assert "1025" in detail
+    assert "1025x1025" in detail
+    assert str(limit) in detail
