@@ -10,10 +10,11 @@ OpenAI-compatible async text-to-image generation API endpoints in api_server.py.
 import base64
 import io
 from argparse import Namespace
+from http import HTTPStatus
 from types import SimpleNamespace
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from PIL import Image
 from pytest_mock import MockerFixture
@@ -21,7 +22,11 @@ from vllm import SamplingParams
 from vllm.entrypoints.openai.models.protocol import BaseModelPath
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni
-from vllm_omni.entrypoints.openai.api_server import _DiffusionServingModels, router
+from vllm_omni.entrypoints.openai.api_server import (
+    _DiffusionServingModels,
+    _check_max_generated_image_size,
+    router
+)
 from vllm_omni.entrypoints.openai.image_api_utils import (
     encode_image_base64,
     parse_size,
@@ -1657,8 +1662,6 @@ def test_extract_images_from_result():
 
 
 def test_width_height_within_limit_passes():
-    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
-
     args = SimpleNamespace(max_generated_image_size=1024 * 1024)
     # Exactly at limit is allowed (> not >=)
     _check_max_generated_image_size(args, 1024, 1024)
@@ -1667,13 +1670,6 @@ def test_width_height_within_limit_passes():
 
 
 def test_width_height_exceeds_limit_raises_400():
-    from http import HTTPStatus
-
-    import pytest
-    from fastapi import HTTPException
-
-    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
-
     limit = 1024 * 1024
     args = SimpleNamespace(max_generated_image_size=limit)
     with pytest.raises(HTTPException) as exc_info:
@@ -1684,11 +1680,6 @@ def test_width_height_exceeds_limit_raises_400():
 
 
 def test_width_height_error_message_contains_size_hint():
-    import pytest
-    from fastapi import HTTPException
-
-    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
-
     args = SimpleNamespace(max_generated_image_size=512 * 512)
     with pytest.raises(HTTPException) as exc_info:
         _check_max_generated_image_size(args, 1024, 512)
@@ -1696,8 +1687,6 @@ def test_width_height_error_message_contains_size_hint():
 
 
 def test_resolution_within_limit_passes():
-    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
-
     args = SimpleNamespace(max_generated_image_size=1024 * 1024)
     # Exactly at limit is allowed (> not >=): 1024*1024 == limit
     _check_max_generated_image_size(args, None, None, resolution=1024)
@@ -1706,13 +1695,6 @@ def test_resolution_within_limit_passes():
 
 
 def test_resolution_exceeds_limit_raises_400():
-    from http import HTTPStatus
-
-    import pytest
-    from fastapi import HTTPException
-
-    from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size
-
     limit = 1024 * 1024
     args = SimpleNamespace(max_generated_image_size=limit)
     with pytest.raises(HTTPException) as exc_info:
