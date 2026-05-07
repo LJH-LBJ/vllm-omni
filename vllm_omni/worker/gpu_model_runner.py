@@ -1329,7 +1329,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                         dtype=req_embeds.dtype,
                     )
 
-                if self.has_talker_mtp and span_len == 1 and "mtp_inputs" in update_dict:
+                if self.has_talker_mtp and "mtp_inputs" in update_dict:
                     last_talker_hidden, text_step = update_dict.pop("mtp_inputs")
                     decode_slice = slice(len(decode_req_ids), len(decode_req_ids) + 1)
                     self.talker_mtp_input_ids.gpu[decode_slice].copy_(req_input_ids)
@@ -1509,6 +1509,8 @@ class OmniGPUModelRunner(GPUModelRunner):
     def _update_streaming_input_additional_info(self, new_req_data, req_id):
         # For streaming input prefill case only. Update buffer from last segment input
         cached_additional_info = self.model_intermediate_buffer.get(req_id, {})
+        _nptt = cached_additional_info.get("meta", {}).get("num_processed_thinker_tokens", "MISSING")
+        print(f"[DBG_STREAMING] req={req_id[-16:]} buffer.meta.num_processed_thinker_tokens={_nptt}", flush=True)
         if cached_additional_info:
             payload_info = getattr(new_req_data, "additional_information", None)
             inc_info = deserialize_additional_information(payload_info)
