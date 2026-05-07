@@ -387,7 +387,6 @@ def thinker2talker_async_chunk(  # noqa: C901
         Ordinary decode step.
     """
     request_id = request.external_req_id
-    chunk_id = transfer_manager.put_req_chunk[request_id]
     if not isinstance(pooling_output, dict):
         logger.debug("thinker2talker_async_chunk: skip non-dict pooling_output for req=%s", request_id)
         return None
@@ -406,15 +405,30 @@ def thinker2talker_async_chunk(  # noqa: C901
         )
         return None
 
-    if chunk_id == 0:
-        all_token_ids = request.all_token_ids  # prefill + decode
-        prompt_token_ids = request.prompt_token_ids
-        # Convert ConstantList to regular list for OmniSerializer serialization
-        all_token_ids = _ensure_list(all_token_ids)
-        prompt_token_ids = _ensure_list(prompt_token_ids)
-        payload: OmniPayload = {
+    output_token_ids = _ensure_list(request.output_token_ids)
+    n_decoded = len(output_token_ids)
+    prompt_token_ids = _ensure_list(request.prompt_token_ids)
+    state = _get_prefill_part_state(transfer_manager, request_id)
+    chunk_start = state["sent_prompt_tokens"]
+    prefill_still_pending = chunk_start < len(prompt_token_ids)
+
+    if prefill_still_pending and not (is_finished and n_decoded == 0):
+        # ----- Prefill -----
+        embeds_cpu = thinker_emb.detach().cpu()
+        hidden_cpu = thinker_hid.detach().cpu()
+        state["sent_prompt_tokens"] = chunk_start + embeds_cpu.shape[0]
+
+        filtered_ids, embeds_cpu, hidden_cpu = _filter_system_rows(
+            prompt_token_ids, chunk_start, embeds_cpu, hidden_cpu
+        )
+
+        # Entire chunk was system tokens — nothing to forward this step.
+        if embeds_cpu.shape[0] == 0:
+            return None
+
+        emit_info: OmniPayload = {
             "embed": {
-                "prefill": thinker_emb.detach().cpu(),
+                "prefill": embeds_cpu,
                 # Provide thinker-side TTS token embeddings for talker projection
                 "tts_bos": thinker_embed.get("tts_bos").detach().cpu()
                 if isinstance(thinker_embed.get("tts_bos"), torch.Tensor)
@@ -426,64 +440,42 @@ def thinker2talker_async_chunk(  # noqa: C901
                 if isinstance(thinker_embed.get("tts_pad"), torch.Tensor)
                 else None,
             },
-            "hidden_states": {"output": thinker_hid.detach().cpu()},
-            "ids": {"all": all_token_ids, "prompt": prompt_token_ids},
-            "meta": {"finished": torch.tensor(is_finished, dtype=torch.bool)},
+            "hidden_states": {"output": hidden_cpu},
+            "ids": {
+                "all": filtered_ids,
+                "prompt": filtered_ids,
+            },
+            "meta": {
+                "finished": torch.tensor(False, dtype=torch.bool),
+                "override_keys": [("ids", "all"), ("ids", "prompt")],
+            },
         }
-        talker_additional_info = payload
-        speaker = extract_speaker_from_request(request)
-        if speaker is not None:
-            talker_additional_info["speaker"] = speaker
-        language = extract_language_from_request(request)
-        if language is not None:
-            talker_additional_info["language"] = language
-        if transfer_manager.request_payload.get(request_id) is None:
-            if not is_finished:
-                transfer_manager.request_payload[request_id] = talker_additional_info
-                return None
-        else:
-            save_payload = transfer_manager.request_payload.pop(request_id)
-            talker_additional_info["embed"]["prefill"] = torch.cat(
-                (
-                    save_payload.get("embed", {}).get("prefill"),
-                    talker_additional_info.get("embed", {}).get("prefill"),
-                ),
-                dim=0,
-            )
-            talker_additional_info["hidden_states"]["output"] = torch.cat(
-                (
-                    save_payload.get("hidden_states", {}).get("output"),
-                    talker_additional_info.get("hidden_states", {}).get("output"),
-                ),
-                dim=0,
-            )
-            if not is_finished:
-                transfer_manager.request_payload[request_id] = talker_additional_info
-                return None
-    else:
-        output_token_ids = request.output_token_ids
-        # Convert ConstantList to regular list for OmniSerializer serialization
-        output_token_ids = _ensure_list(output_token_ids)
+        # Last prefill chunk: thinker already emitted the first output token
+        # in this same scheduler step. Forward the token IDs now so the talker
+        # has the correct sequence length; the decode *embedding* is absent
+        # here and will arrive in the very next decode step's pooling_output.
+        if n_decoded >= 1 and output_token_ids:
+            emit_info["ids"]["output"] = output_token_ids
+            emit_info["meta"]["override_keys"] = [("ids", "all"), ("ids", "prompt"), ("ids", "output")]
+        _fill_optional_fields(emit_info, request)
+        return emit_info
 
+    else:
+        # ----- Decode -----
         talker_additional_info: OmniPayload = {
             "meta": {"finished": torch.tensor(is_finished, dtype=torch.bool)},
         }
-        speaker = extract_speaker_from_request(request)
-        if speaker is not None:
-            talker_additional_info["speaker"] = speaker
-        language = extract_language_from_request(request)
-        if language is not None:
-            talker_additional_info["language"] = language
+        _fill_optional_fields(talker_additional_info, request)
 
         if output_token_ids:
             talker_additional_info["meta"]["override_keys"] = [("embed", "decode"), ("ids", "output")]
             talker_additional_info["embed"] = {"decode": thinker_emb.detach().cpu()}
             talker_additional_info["ids"] = {"output": output_token_ids}
         else:
-            # When prefilling a chunked thinker, thinker_hidden_states needs to be updated.
+            # Edge case: is_finished with no output tokens (request aborted mid-prefill).
             talker_additional_info["embed"] = {"prefill": thinker_emb.detach().cpu()}
             talker_additional_info["hidden_states"] = {"output": thinker_hid.detach().cpu()}
-    return talker_additional_info
+        return talker_additional_info
 
 
 def thinker2talker(
@@ -658,7 +650,7 @@ def talker2code2wav_async_chunk(
     if isinstance(code_predictor_codes, torch.Tensor):
         # TODO: high concurrency issue here, need to fix it
         if not code_predictor_codes.any():
-            logger.warning(f"[CODE2WAV_DIAG] req={request_id[-12:] if request_id else 'N/A'} DROP=all_zero shape={code_predictor_codes.shape}")
+            logger.warning(f"[CODE2WAV_DIAG] req={request_id[-16:] if request_id else 'N/A'} DROP=all_zero shape={code_predictor_codes.shape}")
             return None
     else:
         code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
@@ -667,7 +659,7 @@ def talker2code2wav_async_chunk(
 
     codec_codes = code_predictor_codes.to(torch.long).transpose(0, 1).cpu().to(torch.long).reshape(-1).tolist()
     if sum(codec_codes) == 0:
-        logger.info(f"[CODE2WAV_DIAG] req={request_id[-12:] if request_id else 'N/A'} DROP=sum_zero")
+        logger.info(f"[CODE2WAV_DIAG] req={request_id[-16:] if request_id else 'N/A'} DROP=sum_zero")
         return None
 
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
