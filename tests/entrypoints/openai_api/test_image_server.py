@@ -22,11 +22,7 @@ from vllm import SamplingParams
 from vllm.entrypoints.openai.models.protocol import BaseModelPath
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni
-from vllm_omni.entrypoints.openai.api_server import (
-    _DiffusionServingModels,
-    _check_max_generated_image_size,
-    router
-)
+from vllm_omni.entrypoints.openai.api_server import _check_max_generated_image_size, _DiffusionServingModels, router
 from vllm_omni.entrypoints.openai.image_api_utils import (
     encode_image_base64,
     parse_size,
