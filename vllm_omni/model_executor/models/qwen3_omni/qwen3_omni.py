@@ -674,6 +674,31 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         span_len = input_ids.shape[0]
         update_dict: OmniPayload = {}
+
+        # Consume pending bootstrap embeddings BEFORE the prefill/decode branch.
+        # Bootstrap (9 tokens) can overflow a chunk boundary in two ways:
+        #   - 1 overflow token  → span_len == 1: would enter decode with stale input_embeds
+        #   - 2+ overflow tokens → span_len > 1: would wrongly enter prefill (already done)
+        # In both cases the correct behaviour is identical to if these tokens had
+        # been included in the original prefill chunk: use the pre-computed embeddings,
+        # produce zero codes, and skip decode/MTP logic entirely.
+        pending_bootstrap_embeds = payload.get("pending_bootstrap_embeds")
+        if isinstance(pending_bootstrap_embeds, torch.Tensor) and pending_bootstrap_embeds.shape[0] > 0:
+            target_device = input_embeds.device if input_embeds is not None else input_ids.device
+            n_consume = min(span_len, pending_bootstrap_embeds.shape[0])
+            input_embeds = pending_bootstrap_embeds[:n_consume].to(device=target_device, dtype=torch.bfloat16)
+            remaining = pending_bootstrap_embeds[n_consume:]
+            update_dict["pending_bootstrap_embeds"] = remaining
+            update_dict.setdefault("codes", {})["audio"] = torch.zeros(
+                (n_consume, self.talker.num_code_groups),
+                device=self._module_device(self.talker),
+                dtype=torch.long,
+            )
+            update_dict.setdefault("meta", {})["num_processed_tokens"] = (
+                meta.get("num_processed_tokens", 0) + n_consume
+            )
+            return input_ids, input_embeds, update_dict
+
         if span_len > 1:
             # prefill
             input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, payload)
@@ -1329,9 +1354,15 @@ class Qwen3OmniMoeForConditionalGeneration(
         )[num_assistant_part_processed : num_assistant_part_processed + n_out]
 
         input_embeds = assistant_text_hidden + assistant_codec_hidden
-        input_ids = torch.full(
+        # Use 0 as the placeholder token ID for all bootstrap positions.
+        # tts_pad_token_id (151671) is a thinker-vocabulary ID that lies outside
+        # the talker's embedding table (vocab_size ≈ 3072), so storing it in
+        # vLLM's KV-cache token buffer causes an out-of-bounds gather crash when
+        # the token is later re-scheduled (e.g. after a chunk-overflow).
+        # The actual embedding is always pre-computed in input_embeds above, so
+        # the ID value here is only used for vLLM bookkeeping, not for lookup.
+        input_ids = torch.zeros(
             (assistant_text_hidden.shape[0],),
-            fill_value=self.config.tts_pad_token_id,
             dtype=torch.long,
             device=assistant_text_hidden.device,
         )
