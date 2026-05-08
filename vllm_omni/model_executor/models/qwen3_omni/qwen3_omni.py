@@ -865,17 +865,21 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_size = input_ids.shape[0]
         assert chunk_size > 0, f"Prefill chunk can not be 0. Received chunk_size={chunk_size}."
         chunk_offset = num_processed_thinker_tokens
-        decode_assistant_fill = payload.get("embed", {}).get("decode")
-        if isinstance(decode_assistant_fill, torch.Tensor) and decode_assistant_fill.numel() == 0:
-            decode_assistant_fill = None
-        # Continuation steps: tok0 has already been cleared; use the cached version.
-        # Always use [0:1] (first = tok0), NOT [-1:], because subsequent decode
-        # steps may have already appended tok1, tok2… into the cache before the
-        # talker bootstrap assembly runs.  Bootstrap pos-8 is always tok0.
-        if decode_assistant_fill is None:
-            cached_dec = payload.get("embed", {}).get("cached_decode")
-            if isinstance(cached_dec, torch.Tensor) and cached_dec.shape[0] > 0:
-                decode_assistant_fill = cached_dec[0:1]
+        # Bootstrap pos-8 must always be tok0 — the very first thinker decode embedding.
+        #
+        # Priority: cached_decode[0:1] FIRST, then embed["decode"][0:1] as fallback.
+        # Always slice to [0:1] — never pass a multi-row tensor to _get_talker_assistant_parts
+        # as first_text_embed, which would produce a 10+ token bootstrap and duplicate audio.
+        cached_dec = payload.get("embed", {}).get("cached_decode")
+        if isinstance(cached_dec, torch.Tensor) and cached_dec.shape[0] > 0:
+            decode_assistant_fill = cached_dec[0:1]
+        else:
+            decode_assistant_fill = payload.get("embed", {}).get("decode")
+            if isinstance(decode_assistant_fill, torch.Tensor):
+                if decode_assistant_fill.numel() == 0:
+                    decode_assistant_fill = None
+                else:
+                    decode_assistant_fill = decode_assistant_fill[0:1]
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
@@ -932,7 +936,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict.setdefault("embed", {})["tts_pad_projected"] = pad_proj.detach()
         except Exception:
             pass
-        update_dict.setdefault("meta", {})["prefill_consumed_text_tokens"] = 1
+        update_dict.setdefault("meta", {})["prefill_consumed_text_tokens"] = 1 if decode_assistant_fill is not None else 0
         self._talker_cache_thinker_decode_embeds(embed, update_dict)
 
         if req_embeds.shape[0] > chunk_size:
