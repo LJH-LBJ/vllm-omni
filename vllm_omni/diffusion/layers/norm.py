@@ -88,7 +88,7 @@ class RMSNorm(CustomOp):
         # (returns None) and accesses self.weight.data, which is a DTensor under
         # HSDP. Both patterns confuse inductor's compute_ancestors scheduler.
         # Fall back to forward_native so inductor can fuse the pure-PyTorch ops
-        # itself. In eager mode (including HSDP inference) use the fused kernel.
+        # itself.
         if torch.compiler.is_compiling():
             return self.forward_native(x)
         try:
