@@ -172,6 +172,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 prefill_boundary = (
                     is_chunk_finished
                     or isinstance(payload_data.get("embed", {}).get("decode"), torch.Tensor)
+                    or isinstance(payload_data.get("embed", {}).get("cached_decode"), torch.Tensor)
                 )
                 if has_prefill_embeds and not prefill_boundary:
                     if payload_data.get("ids", {}).get("output"):

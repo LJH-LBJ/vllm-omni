@@ -463,13 +463,16 @@ def thinker2talker_async_chunk(  # noqa: C901
     else:
         # ----- Decode -----
         talker_additional_info: OmniPayload = {
-            "meta": {"finished": torch.tensor(is_finished, dtype=torch.bool)},
+            "meta": {
+                "finished": torch.tensor(is_finished, dtype=torch.bool),
+                "thinker_finished": is_finished,
+            },
         }
         _fill_optional_fields(talker_additional_info, request)
 
         if output_token_ids:
-            talker_additional_info["meta"]["override_keys"] = [("embed", "decode"), ("ids", "output")]
-            talker_additional_info["embed"] = {"decode": thinker_emb.detach().cpu()}
+            talker_additional_info["meta"]["override_keys"] = [("ids", "output")]
+            talker_additional_info["embed"] = {"cached_decode": thinker_emb.detach().cpu()}
             talker_additional_info["ids"] = {"output": output_token_ids}
         else:
             # Edge case: is_finished with no output tokens (request aborted mid-prefill).
