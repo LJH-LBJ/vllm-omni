@@ -320,8 +320,10 @@ def test_rmsnorm_forward_cuda_does_not_call_fused_during_compile():
     norm = RMSNorm(hidden_size=64)
     x = torch.randn(2, 4, 64)
 
-    with patch.object(norm, "_forward_fused", wraps=norm._forward_fused) as mock_fused, \
-         patch("torch.compiler.is_compiling", return_value=True):
+    with (
+        patch.object(norm, "_forward_fused", wraps=norm._forward_fused) as mock_fused,
+        patch("torch.compiler.is_compiling", return_value=True),
+    ):
         out = norm.forward_cuda(x)
 
     mock_fused.assert_not_called()
@@ -341,8 +343,10 @@ def test_rmsnorm_forward_hip_does_not_call_fused_during_compile():
     norm = RMSNorm(hidden_size=64)
     x = torch.randn(2, 4, 64)
 
-    with patch.object(norm, "_forward_fused", wraps=norm._forward_fused) as mock_fused, \
-         patch("torch.compiler.is_compiling", return_value=True):
+    with (
+        patch.object(norm, "_forward_fused", wraps=norm._forward_fused) as mock_fused,
+        patch("torch.compiler.is_compiling", return_value=True),
+    ):
         out = norm.forward_hip(x)
 
     mock_fused.assert_not_called()
