@@ -169,6 +169,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 has_prefill_embeds = isinstance(
                     payload_data.get("embed", {}).get("prefill"), torch.Tensor
                 )
+                # A chunk is considered a "prefill boundary" if it has the "finished" flag or
+                # contains decode/cached_decode embeds.
                 prefill_boundary = (
                     is_chunk_finished
                     or isinstance(payload_data.get("embed", {}).get("decode"), torch.Tensor)

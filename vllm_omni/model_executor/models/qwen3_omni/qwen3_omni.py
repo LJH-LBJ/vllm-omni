@@ -1138,10 +1138,21 @@ class Qwen3OmniMoeForConditionalGeneration(
         start_index = meta.get("num_processed_tokens", 0)
         thinker_output_token_ids = ids.get("output", [])
         if start_index >= len(thinker_output_token_ids) - 1:
-            if meta.get("finished"):
+            # meta["finished"] is True (Python bool) ⟹ TTS EOS already emitted; drain with pad.
+            # meta["finished"] is a tensor ⟹ thinker's live finished flag (EOS not yet emitted).
+            if meta.get("finished") is True:
                 return self.tts_pad_embed.to(device)
-            update_dict.setdefault("meta", {})["finished"] = True
-            return self.tts_eos_embed.to(device)
+            # Emit EOS only when no embedding is available AND thinker has truly finished.
+            embed_available = (
+                isinstance(cached_thinker_decode_embeds, torch.Tensor)
+                and start_index < cached_thinker_decode_embeds.shape[0]
+            ) or isinstance(thinker_decode_embed, torch.Tensor)
+            if not embed_available:
+                if meta.get("thinker_finished", False):
+                    update_dict.setdefault("meta", {})["finished"] = True
+                    return self.tts_eos_embed.to(device)
+                # Thinker still running but no embed available yet — pad (wait)
+                return self.tts_pad_embed.to(device)
         if cached_thinker_decode_embeds is not None and start_index < cached_thinker_decode_embeds.shape[0]:
             cached_thinker_decode_embeds = cached_thinker_decode_embeds.to(device)
             thinker_embed = cached_thinker_decode_embeds[start_index]
@@ -1165,7 +1176,17 @@ class Qwen3OmniMoeForConditionalGeneration(
         text_step = None
         try:
             if self.vllm_config.model_config.async_chunk:
-                text_step = self._thinker_decode_to_talker_decode(payload, input_ids.device, update_dict)
+                q_tail = hs.get("trailing_text", None)
+                if isinstance(q_tail, torch.Tensor) and q_tail.shape[0] > 1:
+                    # trailing_text has pre-buffered decode tokens (tok1..tok(N-1)) followed
+                    # by tts_eos_embed.  shape[0] > 1 means at least one real token remains.
+                    # Consume one per step; no need to wait for thinker here.
+                    text_step = q_tail[0:1, :].to(input_embeds.device, dtype=input_embeds.dtype)
+                    update_dict.setdefault("hidden_states", {})["trailing_text"] = q_tail[1:, :].detach()
+                    # Still accumulate any new thinker decode token arriving this step.
+                    self._talker_cache_thinker_decode_embeds(payload.get("embed", {}), update_dict)
+                else:
+                    text_step = self._thinker_decode_to_talker_decode(payload, input_ids.device, update_dict)
             else:
                 q_tail = hs.get("trailing_text", None)
                 if isinstance(q_tail, torch.Tensor) and q_tail.numel() > 0:
@@ -1299,9 +1320,11 @@ class Qwen3OmniMoeForConditionalGeneration(
         else:
             # pos 0-2 complete in this chunk; append synthetic pos 3-8 (tok0 included).
             if has_first_text:
-                first_text_embed = self.talker.text_projection(
+                first_text_embed_all = self.talker.text_projection(
                     decode_assistant_fill.to(tts_pad_embed.device)
                 ).to(assistant_hidden.dtype)
+                first_text_embed = first_text_embed_all[0:1]   # pos 8 = tok0 only
+                extra_text_embeds = first_text_embed_all[1:]   # tok1..tok(N-1) → trailing_text
             else:
                 logger.debug(
                     "[ASSISTANT_PARTS] req=%s: decode_assistant_fill not provided — "
@@ -1310,6 +1333,9 @@ class Qwen3OmniMoeForConditionalGeneration(
                 )
                 first_text_embed = torch.zeros(
                     (1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype
+                )
+                extra_text_embeds = torch.empty(
+                    (0, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype
                 )
             assistant_text_hidden = torch.cat(
                 (
@@ -1320,7 +1346,12 @@ class Qwen3OmniMoeForConditionalGeneration(
                 ),
                 dim=0,
             )  # shape [(3 - num) + 6, d] = [9 - num, d]
-            trailing_text_hidden = tts_eos_embed
+            # trailing_text: pre-buffered tok1..tok(N-1) (when thinker ran ahead at bootstrap)
+            # followed by tts_eos_embed as the end-of-text sentinel.
+            if extra_text_embeds.shape[0] > 0:
+                trailing_text_hidden = torch.cat((extra_text_embeds, tts_eos_embed), dim=0)
+            else:
+                trailing_text_hidden = tts_eos_embed
         codec_special_tokens = torch.tensor(
             [
                 self.config.talker_config.codec_nothink_id,
