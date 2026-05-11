@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+from pytest_mock import MockerFixture
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
@@ -301,7 +302,7 @@ def test_rmsnorm_numerical_correctness():
 # ── RMSNorm compile-path regression tests ──
 
 
-def test_rmsnorm_forward_cuda_does_not_call_fused_during_compile():
+def test_rmsnorm_forward_cuda_does_not_call_fused_during_compile(mocker: MockerFixture) -> None:
     """Regression: _forward_fused must not be called during torch.compile tracing.
 
     Under HSDP, RMSNorm.weight is a DTensor. Accessing .data on a DTensor inside
@@ -313,41 +314,35 @@ def test_rmsnorm_forward_cuda_does_not_call_fused_during_compile():
     If someone removes the guard, this test will catch the regression by asserting
     that _forward_fused was not called while is_compiling() returns True.
     """
-    from unittest.mock import patch
-
     from vllm_omni.diffusion.layers.norm import RMSNorm
 
     norm = RMSNorm(hidden_size=64)
     x = torch.randn(2, 4, 64)
 
-    with (
-        patch.object(norm, "_forward_fused", wraps=norm._forward_fused) as mock_fused,
-        patch("torch.compiler.is_compiling", return_value=True),
-    ):
-        out = norm.forward_cuda(x)
+    mock_fused = mocker.patch.object(norm, "_forward_fused", wraps=norm._forward_fused)
+    mocker.patch("torch.compiler.is_compiling", return_value=True)
+
+    out = norm.forward_cuda(x)
 
     mock_fused.assert_not_called()
     assert out.shape == x.shape
 
 
-def test_rmsnorm_forward_hip_does_not_call_fused_during_compile():
+def test_rmsnorm_forward_hip_does_not_call_fused_during_compile(mocker: MockerFixture) -> None:
     """Regression: same guard must be present in forward_hip.
 
     forward_hip is the entry point on ROCm (AMD GPU). It must behave identically
     to forward_cuda with respect to the is_compiling() guard.
     """
-    from unittest.mock import patch
-
     from vllm_omni.diffusion.layers.norm import RMSNorm
 
     norm = RMSNorm(hidden_size=64)
     x = torch.randn(2, 4, 64)
 
-    with (
-        patch.object(norm, "_forward_fused", wraps=norm._forward_fused) as mock_fused,
-        patch("torch.compiler.is_compiling", return_value=True),
-    ):
-        out = norm.forward_hip(x)
+    mock_fused = mocker.patch.object(norm, "_forward_fused", wraps=norm._forward_fused)
+    mocker.patch("torch.compiler.is_compiling", return_value=True)
+
+    out = norm.forward_hip(x)
 
     mock_fused.assert_not_called()
     assert out.shape == x.shape
