@@ -226,6 +226,42 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                             next_scheduler_slice,
                         )
                         return True
+
+                # When entering decode phase for the first time, proactively replace
+                # request_payload with a copy that excludes the large prefill tensors.
+                # request.additional_information still references the full merged_payload
+                # so the CURRENT model step (last talker-prefill) can still read
+                # embed.prefill.  Starting from the next _update_request_payload call,
+                # the cleaned payload is used as the base, so subsequent decode steps
+                # serialise only small per-token data.
+                if prefill_boundary and not is_chunk_finished:
+                    acc = self.request_payload.get(external_req_id)
+                    if acc is not None and isinstance(acc.get("embed", {}).get("prefill"), torch.Tensor):
+                        cleaned_embed = {
+                            k: v for k, v in acc.get("embed", {}).items()
+                            if k not in ("prefill", "tts_bos", "tts_eos", "tts_pad")
+                        }
+                        cleaned_hs = {
+                            k: v for k, v in acc.get("hidden_states", {}).items()
+                            if k != "output"
+                        }
+                        cleaned_ids = {
+                            k: v for k, v in acc.get("ids", {}).items()
+                            if k not in ("all", "prompt")
+                        }
+                        cleaned = {
+                            k: v for k, v in acc.items()
+                            if k not in ("embed", "hidden_states", "ids")
+                        }
+                        cleaned["embed"] = cleaned_embed
+                        cleaned["hidden_states"] = cleaned_hs
+                        cleaned["ids"] = cleaned_ids
+                        self.request_payload[external_req_id] = cleaned
+                        logger.debug(
+                            "[Stage-%s] Cleared prefill tensors from request_payload for req %s",
+                            stage_id,
+                            external_req_id,
+                        )
             else:
                 if meta.get("finished"):
                     self.finished_requests.add(req_id)
