@@ -375,12 +375,10 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if success:
             self.put_req_chunk[external_req_id] += 1
             logger.debug(f"[Stage-{stage_id}] Sent {connector_put_key}")
-            # Sender uses struct attr access here; the receive path in
-            # `_load_one_request` / `_update_request_payload` reads dict keys.
-            # That asymmetry is intentional: `OmniMsgpackDecoder` is type-erased
-            # (no target type), so the wire round-trips struct -> dict. If you
-            # change the schema, update both ends — see test_wire_round_trip.
-            finished_flag = payload_data.meta.finished if payload_data.meta is not None else None
+            # payload_data is a dict (returned by thinker2talker_async_chunk).
+            # On the receiver side, the msgpack wire round-trip also produces dicts.
+            meta = payload_data.get("meta", {}) if isinstance(payload_data, dict) else {}
+            finished_flag = meta.get("finished", payload_data.get("finished") if isinstance(payload_data, dict) else None)
             is_payload_finished = False
             if isinstance(finished_flag, torch.Tensor):
                 is_payload_finished = finished_flag.numel() == 1 and bool(finished_flag.item())
