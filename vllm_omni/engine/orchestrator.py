@@ -604,7 +604,7 @@ class Orchestrator:
                     "stage_id": stage_id,
                     "engine_outputs": output,
                     "metrics": stage_metrics,
-                    "finished": finished,
+                    "finished": finished and stage_id == req_state.final_stage_id,
                     "stage_submit_ts": submit_ts,
                 }
             )
