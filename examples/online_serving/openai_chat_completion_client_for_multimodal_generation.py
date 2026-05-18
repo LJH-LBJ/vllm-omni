@@ -417,7 +417,7 @@ def run_multimodal_generation(args, client: OpenAI) -> None:
 
     count = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_concurrent_requests) as executor:
-        # Submit multiple completion requests concurrently.
+        # Submit multiple completion requests concurrently
         futures = [
             executor.submit(
                 client.chat.completions.create,
@@ -444,7 +444,7 @@ def run_multimodal_generation(args, client: OpenAI) -> None:
                         audio_file_path = make_audio_output_filename(request_id=request_id, index=count)
                         with open(audio_file_path, "wb") as f:
                             f.write(audio_data)
-                        print(f"Audio saved to {audio_file_path}")
+                        print(f"\nAudio saved to {audio_file_path}")
                         count += 1
                     elif choice.message.content:
                         print("Chat completion output from text:", choice.message.content)
