@@ -196,7 +196,7 @@ class OmniMsgpackDecoder:
                 return self._decode_ndarray(obj)
             if obj.get(_PIL_IMAGE_MARKER):
                 return self._decode_pil_image(obj)
-            
+
             # Fast path: if every value is a primitive, no recursive processing
             # is needed and no type-marker reconstruction can apply. This avoids
             # O(N) Python-call overhead for plain metadata dicts.

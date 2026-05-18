@@ -3,7 +3,6 @@
 # Copyright 2025 The Qwen team.
 """Stage input processor for Qwen3 Omni MoE: Thinker → Talker transition."""
 
-import logging
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -597,13 +596,22 @@ def thinker2talker_async_chunk(
 
     if prefill_still_pending and not (is_finished and n_decoded == 0):
         return _ThinkerToTalkerChunkedPrefill.build_prefill_payload(
-            thinker_emb, thinker_hid, thinker_embed,
-            prompt_token_ids, chunk_start, state,
-            output_token_ids, request,
+            thinker_emb,
+            thinker_hid,
+            thinker_embed,
+            prompt_token_ids,
+            chunk_start,
+            state,
+            output_token_ids,
+            request,
         )
     else:
         return _ThinkerToTalkerChunkedPrefill.build_decode_payload(
-            thinker_emb, thinker_hid, output_token_ids, is_finished, request,
+            thinker_emb,
+            thinker_hid,
+            output_token_ids,
+            is_finished,
+            request,
         )
 
 
@@ -909,11 +917,13 @@ def talker2code2wav_async_chunk(
         if len(code_predictor_codes) == 0:
             logger.warning(f"req={request_id[-16:] if request_id else 'N/A'} code_predictor_codes is empty 1")
             return None
-    
+
     if isinstance(code_predictor_codes, torch.Tensor):
         # TODO: high concurrency issue here, need to fix it
         if not code_predictor_codes.any():
-            logger.warning(f"[CODE2WAV_DIAG] req={request_id[-16:] if request_id else 'N/A'} DROP=all_zero shape={code_predictor_codes.shape}")
+            logger.warning(
+                f"[CODE2WAV_DIAG] req={request_id[-16:] if request_id else 'N/A'} DROP=all_zero shape={code_predictor_codes.shape}"
+            )
             return None
     else:
         code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)

@@ -172,16 +172,12 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 request.additional_information = merged_payload
                 finished_flag = meta.get("finished", False)
                 is_chunk_finished = (
-                    bool(finished_flag.item())
-                    if isinstance(finished_flag, torch.Tensor)
-                    else bool(finished_flag)
+                    bool(finished_flag.item()) if isinstance(finished_flag, torch.Tensor) else bool(finished_flag)
                 )
                 if is_chunk_finished:
                     self.finished_requests.add(req_id)
 
-                has_prefill_embeds = isinstance(
-                    payload_data.get("embed", {}).get("prefill"), torch.Tensor
-                )
+                has_prefill_embeds = isinstance(payload_data.get("embed", {}).get("prefill"), torch.Tensor)
                 # A chunk is considered a "prefill boundary" if it has the "finished" flag or
                 # contains decode/cached_decode embeds.
                 prefill_boundary = (
@@ -272,11 +268,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
         accumulated = self.request_payload.get(external_req_id, payload_data)
         cumulative_embeds = accumulated.get("embed", {}).get("prefill")
-        available_tokens = (
-            cumulative_embeds.shape[0]
-            if isinstance(cumulative_embeds, torch.Tensor)
-            else 0
-        )
+        available_tokens = cumulative_embeds.shape[0] if isinstance(cumulative_embeds, torch.Tensor) else 0
         remaining_prompt_tokens = max(request.num_prompt_tokens - request.num_computed_tokens, 0)
         next_scheduler_slice = min(
             self.scheduler_max_num_batched_tokens,
@@ -285,8 +277,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         ready_tokens = available_tokens - request.num_computed_tokens
         if ready_tokens >= next_scheduler_slice:
             logger.info(
-                "[Stage-%s] Releasing prefill chunk for key %s: "
-                "available=%d computed=%d next=%d",
+                "[Stage-%s] Releasing prefill chunk for key %s: available=%d computed=%d next=%d",
                 stage_id,
                 connector_get_key,
                 available_tokens,
@@ -300,8 +291,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             with self._recv_cond:
                 self._recv_cond.notify()
             logger.info(
-                "[Stage-%s] Buffering prefill chunk for key %s: "
-                "available=%d computed=%d next=%d",
+                "[Stage-%s] Buffering prefill chunk for key %s: available=%d computed=%d next=%d",
                 stage_id,
                 connector_get_key,
                 available_tokens,
@@ -319,21 +309,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if acc is None or not isinstance(acc.get("embed", {}).get("prefill"), torch.Tensor):
             return
         cleaned_embed = {
-            k: v for k, v in acc.get("embed", {}).items()
-            if k not in ("prefill", "tts_bos", "tts_eos", "tts_pad")
+            k: v for k, v in acc.get("embed", {}).items() if k not in ("prefill", "tts_bos", "tts_eos", "tts_pad")
         }
-        cleaned_hs = {
-            k: v for k, v in acc.get("hidden_states", {}).items()
-            if k != "output"
-        }
-        cleaned_ids = {
-            k: v for k, v in acc.get("ids", {}).items()
-            if k not in ("all", "prompt")
-        }
-        cleaned = {
-            k: v for k, v in acc.items()
-            if k not in ("embed", "hidden_states", "ids")
-        }
+        cleaned_hs = {k: v for k, v in acc.get("hidden_states", {}).items() if k != "output"}
+        cleaned_ids = {k: v for k, v in acc.get("ids", {}).items() if k not in ("all", "prompt")}
+        cleaned = {k: v for k, v in acc.items() if k not in ("embed", "hidden_states", "ids")}
         cleaned["embed"] = cleaned_embed
         cleaned["hidden_states"] = cleaned_hs
         cleaned["ids"] = cleaned_ids
@@ -420,7 +400,9 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             # payload_data is a dict (returned by thinker2talker_async_chunk).
             # On the receiver side, the msgpack wire round-trip also produces dicts.
             meta = payload_data.get("meta", {}) if isinstance(payload_data, dict) else {}
-            finished_flag = meta.get("finished", payload_data.get("finished") if isinstance(payload_data, dict) else None)
+            finished_flag = meta.get(
+                "finished", payload_data.get("finished") if isinstance(payload_data, dict) else None
+            )
             is_payload_finished = False
             if isinstance(finished_flag, torch.Tensor):
                 is_payload_finished = finished_flag.numel() == 1 and bool(finished_flag.item())

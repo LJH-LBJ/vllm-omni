@@ -432,9 +432,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                     # token each). Build per-request codes respecting the batch structure.
                     batch_size = len(seq_token_counts)
                     max_seq_len = max(1, max(t // 16 for t in seq_token_counts))
-                    codes = torch.zeros(
-                        (batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype
-                    )
+                    codes = torch.zeros((batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype)
                     offset = 0
                     for idx, n in enumerate(seq_token_counts):
                         chunk = input_ids[offset : offset + n]
@@ -705,9 +703,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 device=self._module_device(self.talker),
                 dtype=torch.long,
             )
-            update_dict.setdefault("meta", {})["num_processed_tokens"] = (
-                meta.get("num_processed_tokens", 0) + n_consume
-            )
+            update_dict.setdefault("meta", {})["num_processed_tokens"] = meta.get("num_processed_tokens", 0) + n_consume
             return input_ids, input_embeds, update_dict
 
         if span_len > 1:
@@ -894,8 +890,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         actual_embed_size = thinker_sequence_embed_chunk.shape[0]
         thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + actual_embed_size]
         speaker_id = self._get_text_spk_token_id(voice_type)
-        req_input_ids, req_embeds, trailing_text_hidden = (
-            self._thinker_to_talker_prefill(
+        req_input_ids, req_embeds, trailing_text_hidden = self._thinker_to_talker_prefill(
             thinker_embed=thinker_sequence_embed_chunk.to(talker_device),
             thinker_hidden=thinker_hidden_chunk.to(talker_device),
             multimodal_mask=None,
@@ -909,7 +904,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             chunk_offset=chunk_offset,
             request_id=request_id,
             decode_assistant_fill=decode_assistant_fill,
-        )
         )
 
         # Trace progress for next chunk
@@ -943,7 +937,9 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict.setdefault("embed", {})["tts_pad_projected"] = pad_proj.detach()
         except Exception:
             pass
-        update_dict.setdefault("meta", {})["prefill_consumed_text_tokens"] = 1 if decode_assistant_fill is not None else 0
+        update_dict.setdefault("meta", {})["prefill_consumed_text_tokens"] = (
+            1 if decode_assistant_fill is not None else 0
+        )
         self._talker_cache_thinker_decode_embeds(embed, update_dict)
 
         if req_embeds.shape[0] > chunk_size:
@@ -1342,11 +1338,11 @@ class Qwen3OmniMoeForConditionalGeneration(
         else:
             # pos 0-2 complete in this chunk; append synthetic pos 3-8 (tok0 included).
             if has_first_text:
-                first_text_embed_all = self.talker.text_projection(
-                    decode_assistant_fill.to(tts_pad_embed.device)
-                ).to(assistant_hidden.dtype)
-                first_text_embed = first_text_embed_all[0:1]   # pos 8 = tok0 only
-                extra_text_embeds = first_text_embed_all[1:]   # tok1..tok(N-1) → trailing_text
+                first_text_embed_all = self.talker.text_projection(decode_assistant_fill.to(tts_pad_embed.device)).to(
+                    assistant_hidden.dtype
+                )
+                first_text_embed = first_text_embed_all[0:1]  # pos 8 = tok0 only
+                extra_text_embeds = first_text_embed_all[1:]  # tok1..tok(N-1) → trailing_text
             else:
                 logger.debug(
                     "[ASSISTANT_PARTS] req=%s: decode_assistant_fill not provided — "
@@ -1361,10 +1357,10 @@ class Qwen3OmniMoeForConditionalGeneration(
                 )
             assistant_text_hidden = torch.cat(
                 (
-                    assistant_hidden,               # remaining prefill projections up to pos 2
-                    tts_pad_embed.expand(4, -1),    # pos 3-6
-                    tts_bos_embed,                  # pos 7
-                    first_text_embed,               # pos 8 = tok0
+                    assistant_hidden,  # remaining prefill projections up to pos 2
+                    tts_pad_embed.expand(4, -1),  # pos 3-6
+                    tts_bos_embed,  # pos 7
+                    first_text_embed,  # pos 8 = tok0
                 ),
                 dim=0,
             )  # shape [(3 - num) + 6, d] = [9 - num, d]
