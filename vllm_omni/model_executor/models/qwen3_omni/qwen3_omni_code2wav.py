@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -312,16 +313,12 @@ class Qwen3OmniMoeCode2Wav(nn.Module):
         else:
             # Fallback: assume all batch elements share the same sequence length.
             code_seq_lens = [codes.shape[-1]] * codes.shape[0]
-        logger.info(f"code_seq_lens: {code_seq_lens}")
         for idx, code_seq_len in enumerate(code_seq_lens):
-            logger.info(f"idx: {idx}, code_seq_len: {code_seq_len}")
             # Remove context from output (left_context_size * total_upsample samples)
             wav_chunk = batch_wav[
                 idx, :, left_context_size[idx] * self.total_upsample : code_seq_len * self.total_upsample
             ]
-            logger.info(f"wav_chunk.shape: {wav_chunk.shape}")
             wavs.append(wav_chunk)
-        logger.info(f"wavs: {wavs}")
         return wavs
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:

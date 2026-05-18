@@ -178,54 +178,9 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     or isinstance(payload_data.get("embed", {}).get("cached_decode"), torch.Tensor)
                 )
                 if has_prefill_embeds and not prefill_boundary:
-                    if payload_data.get("ids", {}).get("output"):
-                        self._pending_load_reqs.append(request)
-                        with self._recv_cond:
-                            self._recv_cond.notify()
-                        logger.info(
-                            "[Stage-%s] Buffering final prefill chunk for key %s until tok0 embed arrives",
-                            stage_id,
-                            connector_get_key,
-                        )
-                        return True
-
-                    accumulated = self.request_payload.get(external_req_id, payload_data)
-                    cumulative_embeds = accumulated.get("embed", {}).get("prefill")
-                    available_tokens = (
-                        cumulative_embeds.shape[0]
-                        if isinstance(cumulative_embeds, torch.Tensor)
-                        else 0
-                    )
-                    remaining_prompt_tokens = max(request.num_prompt_tokens - request.num_computed_tokens, 0)
-                    next_scheduler_slice = min(
-                        self.scheduler_max_num_batched_tokens,
-                        remaining_prompt_tokens,
-                    )
-                    ready_tokens = available_tokens - request.num_computed_tokens
-                    if ready_tokens >= next_scheduler_slice:
-                        logger.info(
-                            "[Stage-%s] Releasing prefill chunk for key %s: "
-                            "available=%d computed=%d next=%d",
-                            stage_id,
-                            connector_get_key,
-                            available_tokens,
-                            request.num_computed_tokens,
-                            next_scheduler_slice,
-                        )
-                    else:
-                        # wait for more prefill tokens
-                        self._pending_load_reqs.append(request)
-                        with self._recv_cond:
-                            self._recv_cond.notify()
-                        logger.info(
-                            "[Stage-%s] Buffering prefill chunk for key %s: "
-                            "available=%d computed=%d next=%d",
-                            stage_id,
-                            connector_get_key,
-                            available_tokens,
-                            request.num_computed_tokens,
-                            next_scheduler_slice,
-                        )
+                    if self._gate_chunked_prefill_chunk(
+                        request, payload_data, external_req_id, stage_id, connector_get_key
+                    ):
                         return True
 
                 # When entering decode phase for the first time, proactively replace
@@ -236,33 +191,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 # the cleaned payload is used as the base, so subsequent decode steps
                 # serialise only small per-token data.
                 if prefill_boundary and not is_chunk_finished:
-                    acc = self.request_payload.get(external_req_id)
-                    if acc is not None and isinstance(acc.get("embed", {}).get("prefill"), torch.Tensor):
-                        cleaned_embed = {
-                            k: v for k, v in acc.get("embed", {}).items()
-                            if k not in ("prefill", "tts_bos", "tts_eos", "tts_pad")
-                        }
-                        cleaned_hs = {
-                            k: v for k, v in acc.get("hidden_states", {}).items()
-                            if k != "output"
-                        }
-                        cleaned_ids = {
-                            k: v for k, v in acc.get("ids", {}).items()
-                            if k not in ("all", "prompt")
-                        }
-                        cleaned = {
-                            k: v for k, v in acc.items()
-                            if k not in ("embed", "hidden_states", "ids")
-                        }
-                        cleaned["embed"] = cleaned_embed
-                        cleaned["hidden_states"] = cleaned_hs
-                        cleaned["ids"] = cleaned_ids
-                        self.request_payload[external_req_id] = cleaned
-                        logger.debug(
-                            "[Stage-%s] Cleared prefill tensors from request_payload for req %s",
-                            stage_id,
-                            external_req_id,
-                        )
+                    self._evict_prefill_tensors(external_req_id, stage_id)
             else:
                 if meta.get("finished"):
                     self.finished_requests.add(req_id)
@@ -301,6 +230,107 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             return True
 
         return False
+
+    def _gate_chunked_prefill_chunk(
+        self,
+        request: Request,
+        payload_data: dict,
+        external_req_id: str,
+        stage_id: int,
+        connector_get_key: str,
+    ) -> bool:
+        """Chunked-prefill readiness gate for AR-mode Thinker→Talker transfer.
+
+        Returns True if the chunk must be buffered (not enough tokens have
+        accumulated for the next scheduler slice yet), False if it can be
+        released to the scheduler.
+        """
+        # Hold the final prefill chunk until the tok0 decode embed arrives in
+        # the next step, so that the talker receives a complete bootstrap sequence.
+        if payload_data.get("ids", {}).get("output"):
+            self._pending_load_reqs.append(request)
+            with self._recv_cond:
+                self._recv_cond.notify()
+            logger.info(
+                "[Stage-%s] Buffering final prefill chunk for key %s until tok0 embed arrives",
+                stage_id,
+                connector_get_key,
+            )
+            return True
+
+        accumulated = self.request_payload.get(external_req_id, payload_data)
+        cumulative_embeds = accumulated.get("embed", {}).get("prefill")
+        available_tokens = (
+            cumulative_embeds.shape[0]
+            if isinstance(cumulative_embeds, torch.Tensor)
+            else 0
+        )
+        remaining_prompt_tokens = max(request.num_prompt_tokens - request.num_computed_tokens, 0)
+        next_scheduler_slice = min(
+            self.scheduler_max_num_batched_tokens,
+            remaining_prompt_tokens,
+        )
+        ready_tokens = available_tokens - request.num_computed_tokens
+        if ready_tokens >= next_scheduler_slice:
+            logger.info(
+                "[Stage-%s] Releasing prefill chunk for key %s: "
+                "available=%d computed=%d next=%d",
+                stage_id,
+                connector_get_key,
+                available_tokens,
+                request.num_computed_tokens,
+                next_scheduler_slice,
+            )
+            return False
+        else:
+            # wait for more prefill tokens
+            self._pending_load_reqs.append(request)
+            with self._recv_cond:
+                self._recv_cond.notify()
+            logger.info(
+                "[Stage-%s] Buffering prefill chunk for key %s: "
+                "available=%d computed=%d next=%d",
+                stage_id,
+                connector_get_key,
+                available_tokens,
+                request.num_computed_tokens,
+                next_scheduler_slice,
+            )
+            return True
+
+    def _evict_prefill_tensors(self, external_req_id: str, stage_id: int) -> None:
+        """At the Talker prefill→decode boundary, strip large prefill tensors
+        (embed.prefill/tts_*, hidden_states.output, ids.all/prompt) from the
+        cached payload so subsequent decode steps don't serialize them.
+        """
+        acc = self.request_payload.get(external_req_id)
+        if acc is None or not isinstance(acc.get("embed", {}).get("prefill"), torch.Tensor):
+            return
+        cleaned_embed = {
+            k: v for k, v in acc.get("embed", {}).items()
+            if k not in ("prefill", "tts_bos", "tts_eos", "tts_pad")
+        }
+        cleaned_hs = {
+            k: v for k, v in acc.get("hidden_states", {}).items()
+            if k != "output"
+        }
+        cleaned_ids = {
+            k: v for k, v in acc.get("ids", {}).items()
+            if k not in ("all", "prompt")
+        }
+        cleaned = {
+            k: v for k, v in acc.items()
+            if k not in ("embed", "hidden_states", "ids")
+        }
+        cleaned["embed"] = cleaned_embed
+        cleaned["hidden_states"] = cleaned_hs
+        cleaned["ids"] = cleaned_ids
+        self.request_payload[external_req_id] = cleaned
+        logger.debug(
+            "[Stage-%s] Cleared prefill tensors from request_payload for req %s",
+            stage_id,
+            external_req_id,
+        )
 
     def _update_request_payload(self, req_id: str, payload_data: dict[str, Any]) -> dict[str, Any]:
         """Update the stored payload for *req_id* with the latest chunk."""

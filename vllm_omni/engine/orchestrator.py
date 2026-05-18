@@ -101,6 +101,7 @@ class OrchestratorRequestState:
     # Per-request pipeline timing accumulator (milliseconds)
     pipeline_timings: dict[str, float] = field(default_factory=dict)
 
+
 @dataclass
 class StreamingInputState:
     # Flag of streaming input request
@@ -111,6 +112,7 @@ class StreamingInputState:
     new_prompt_len_snapshot: int | None = None
     # Model/bridge-specific runtime states (e.g., thinker->talker)
     bridge_states: dict[str, Any] = field(default_factory=dict)
+
 
 class Orchestrator:
     """Runs inside a background thread's asyncio event loop."""
