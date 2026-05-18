@@ -807,8 +807,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             voice_type = self.default_tts_text_spk_type
         else:
             voice_type = str(voice_type).lower().strip()
-        start_index = meta.get("num_processed_tokens", 0)
-        end_index = start_index + input_embeds.shape[0]
         talker_device = self._module_device(self.talker)
 
         # Read thinker outputs for prefill
@@ -1068,8 +1066,9 @@ class Qwen3OmniMoeForConditionalGeneration(
             for segment_start, segment_end, segment_role_token in execute_segments:
                 local_start = segment_start - chunk_start_index
                 local_end = segment_end - chunk_start_index
-                logger.info(
-                    "Processing request_id %s chunk %s to %s of full sequence (total_thinker_tokens=%s) thinker_result_ids = %s",
+                logger.debug(
+                    "Processing request_id %s chunk %s to %s of full sequence "
+                    "(total_thinker_tokens=%s) thinker_result_ids = %s",
                     request_id,
                     segment_start,
                     segment_end,

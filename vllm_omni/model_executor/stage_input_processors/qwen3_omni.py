@@ -921,9 +921,6 @@ def talker2code2wav_async_chunk(
     if isinstance(code_predictor_codes, torch.Tensor):
         # TODO: high concurrency issue here, need to fix it
         if not code_predictor_codes.any():
-            logger.warning(
-                f"[CODE2WAV_DIAG] req={request_id[-16:] if request_id else 'N/A'} DROP=all_zero shape={code_predictor_codes.shape}"
-            )
             return None
     else:
         code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
