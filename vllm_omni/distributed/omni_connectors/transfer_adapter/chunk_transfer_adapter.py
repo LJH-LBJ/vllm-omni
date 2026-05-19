@@ -176,14 +176,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 )
                 if is_chunk_finished:
                     self.finished_requests.add(req_id)
-
-                has_prefill_embeds = isinstance(payload_data.get("embed", {}).get("prefill"), torch.Tensor)
+                embed_data = payload_data.get("embed", {})
+                has_prefill_embeds = isinstance(embed_data.get("prefill"), torch.Tensor)
                 # A chunk is considered a "prefill boundary" if it has the "finished" flag or
                 # contains decode/cached_decode embeds.
                 prefill_boundary = (
                     is_chunk_finished
-                    or isinstance(payload_data.get("embed", {}).get("decode"), torch.Tensor)
-                    or isinstance(payload_data.get("embed", {}).get("cached_decode"), torch.Tensor)
+                    or isinstance(embed_data.get("decode"), torch.Tensor)
+                    or isinstance(embed_data.get("cached_decode"), torch.Tensor)
                 )
                 if has_prefill_embeds and not prefill_boundary:
                     if self._gate_chunked_prefill_chunk(
