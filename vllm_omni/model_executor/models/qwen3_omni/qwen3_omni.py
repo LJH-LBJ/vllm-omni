@@ -36,7 +36,7 @@ from vllm.v1.outputs import SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
-from vllm_omni.data_entry_keys import Embeddings, HiddenStates, Ids, OmniPayload, OmniPayloadMeta
+from vllm_omni.data_entry_keys import Embeddings, HiddenStates, Ids, OmniPayload
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.qwen3_omni.qwen3_omni_moe_thinker import (
@@ -664,17 +664,13 @@ class Qwen3OmniMoeForConditionalGeneration(
     # logic is easy to identify and isolate from the main flow.
 
     @staticmethod
-    def _chunked_prefill_split_code2wav_codes(
-        input_ids: torch.Tensor, seq_token_counts: list[int]
-    ) -> torch.Tensor:
+    def _chunked_prefill_split_code2wav_codes(input_ids: torch.Tensor, seq_token_counts: list[int]) -> torch.Tensor:
         """Build per-request ``[B, 16, T]`` code2wav codes for chunked-prefill
         batches whose total token count is not divisible by 16 (e.g. each
         request only carries a single finished-sentinel placeholder)."""
         batch_size = len(seq_token_counts)
         max_seq_len = max(1, max(t // 16 for t in seq_token_counts))
-        codes = torch.zeros(
-            (batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype
-        )
+        codes = torch.zeros((batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype)
         offset = 0
         for idx, n in enumerate(seq_token_counts):
             chunk = input_ids[offset : offset + n]
@@ -717,9 +713,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             device=self._module_device(self.talker),
             dtype=torch.long,
         )
-        update_dict.setdefault("meta", {})["num_processed_tokens"] = (
-            meta.get("num_processed_tokens", 0) + n_consume
-        )
+        update_dict.setdefault("meta", {})["num_processed_tokens"] = meta.get("num_processed_tokens", 0) + n_consume
         return input_ids, input_embeds, update_dict
 
     def _chunked_prefill_decode_drain_text_step(
@@ -744,9 +738,9 @@ class Qwen3OmniMoeForConditionalGeneration(
             return self.tts_pad_embed.to(device)
         cached = embed.get("cached_decode", None)
         live = embed.get("decode", None)
-        embed_available = (
-            isinstance(cached, torch.Tensor) and start_index < cached.shape[0]
-        ) or isinstance(live, torch.Tensor)
+        embed_available = (isinstance(cached, torch.Tensor) and start_index < cached.shape[0]) or isinstance(
+            live, torch.Tensor
+        )
         if embed_available:
             return None
         if meta.get("thinker_finished", False):

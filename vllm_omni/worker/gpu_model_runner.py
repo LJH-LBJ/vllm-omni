@@ -1672,13 +1672,9 @@ class OmniGPUModelRunner(GPUModelRunner):
     # payloads (from chunk_transfer_adapter) may carry a stale lower snapshot
     # due to background-thread timing races. Never let a lower value overwrite
     # the runner's progress.
-    _CHUNKED_PREFILL_MONOTONE_META_KEYS: frozenset[str] = frozenset(
-        {"num_processed_thinker_tokens"}
-    )
+    _CHUNKED_PREFILL_MONOTONE_META_KEYS: frozenset[str] = frozenset({"num_processed_thinker_tokens"})
 
-    def _chunked_prefill_try_store_monotone(
-        self, existing_sub: dict, type_key: str, qual: str, val: object
-    ) -> bool:
+    def _chunked_prefill_try_store_monotone(self, existing_sub: dict, type_key: str, qual: str, val: object) -> bool:
         """If ``(type_key, qual)`` names a chunked-prefill monotone meta key,
         store ``val`` only when it advances the existing value and return True.
         Otherwise return False so the caller can fall back to normal storage."""
