@@ -1184,7 +1184,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                             decode_assistant_fill=decode_assistant_fill,
                         )
                     )
-                    logger.info(f"trailing_text_hidden {trailing_text_hidden}")
                     talker_input_embeds.append(talker_assistant_embeds)
                     talker_input_ids.append(talker_assistant_ids)
                 # History assistant output (ignore for now)
@@ -1336,7 +1335,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         )
 
         user_mm_mask = multimodal_mask[im_start_index:segment_end_index]
-        logger.info(
+        logger.debug(
             f"im_start_index={im_start_index}, "
             f"segment_end_index={segment_end_index}, "
             f"thinker_hidden.shape={tuple(thinker_hidden.shape)}, "
@@ -1377,7 +1376,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             and decode_assistant_fill.ndim >= 2
             and int(decode_assistant_fill.shape[0]) >= 1
         )
-        logger.info(
+        logger.debug(
             "[ASSISTANT_PARTS] req=%s prefill_len=%s has_first_text=%s first_text_len=%s",
             request_id,
             assistant_hidden.shape[0],

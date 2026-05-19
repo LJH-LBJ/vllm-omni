@@ -259,7 +259,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             self._pending_load_reqs.append(request)
             with self._recv_cond:
                 self._recv_cond.notify()
-            logger.info(
+            logger.debug(
                 "[Stage-%s] Buffering final prefill chunk for key %s until tok0 embed arrives",
                 stage_id,
                 connector_get_key,
@@ -276,7 +276,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         )
         ready_tokens = available_tokens - request.num_computed_tokens
         if ready_tokens >= next_scheduler_slice:
-            logger.info(
+            logger.debug(
                 "[Stage-%s] Releasing prefill chunk for key %s: available=%d computed=%d next=%d",
                 stage_id,
                 connector_get_key,
@@ -290,7 +290,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             self._pending_load_reqs.append(request)
             with self._recv_cond:
                 self._recv_cond.notify()
-            logger.info(
+            logger.debug(
                 "[Stage-%s] Buffering prefill chunk for key %s: available=%d computed=%d next=%d",
                 stage_id,
                 connector_get_key,

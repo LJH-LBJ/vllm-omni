@@ -929,7 +929,6 @@ def talker2code2wav_async_chunk(
 
     codec_codes = code_predictor_codes.to(torch.long).transpose(0, 1).cpu().to(torch.long).reshape(-1).tolist()
     if sum(codec_codes) == 0:
-        logger.info(f"[CODE2WAV_DIAG] req={request_id[-16:] if request_id else 'N/A'} DROP=sum_zero")
         return None
 
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
