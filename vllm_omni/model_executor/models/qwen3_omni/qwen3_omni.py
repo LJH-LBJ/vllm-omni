@@ -427,19 +427,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                     input_ids.shape[0],
                 )
                 if seq_token_counts is not None:
-                    # Multiple requests batched together where total tokens are not
-                    # divisible by 16 (e.g. finished-sentinel requests with 1 placeholder
-                    # token each). Build per-request codes respecting the batch structure.
-                    batch_size = len(seq_token_counts)
-                    max_seq_len = max(1, max(t // 16 for t in seq_token_counts))
-                    codes = torch.zeros((batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype)
-                    offset = 0
-                    for idx, n in enumerate(seq_token_counts):
-                        chunk = input_ids[offset : offset + n]
-                        offset += n
-                        if chunk.shape[0] >= 16:
-                            seq_len = chunk.shape[0] // 16
-                            codes[idx, :, :seq_len] = chunk[: seq_len * 16].reshape(16, seq_len)
+                    codes = self._chunked_prefill_split_code2wav_codes(input_ids, seq_token_counts)
                 else:
                     input_ids_flatten = input_ids.reshape(-1)
                     input_ids_flatten = torch.cat(
@@ -670,6 +658,121 @@ class Qwen3OmniMoeForConditionalGeneration(
         """
         return {"hidden_states": {"last": hidden_states[-1, :].detach()}}
 
+    # ==================== Chunked Prefill Helpers ====================
+    # All methods in this section exist to support chunked prefill of the
+    # thinker→talker bridge. Keep them grouped so chunked-prefill-specific
+    # logic is easy to identify and isolate from the main flow.
+
+    @staticmethod
+    def _chunked_prefill_split_code2wav_codes(
+        input_ids: torch.Tensor, seq_token_counts: list[int]
+    ) -> torch.Tensor:
+        """Build per-request ``[B, 16, T]`` code2wav codes for chunked-prefill
+        batches whose total token count is not divisible by 16 (e.g. each
+        request only carries a single finished-sentinel placeholder)."""
+        batch_size = len(seq_token_counts)
+        max_seq_len = max(1, max(t // 16 for t in seq_token_counts))
+        codes = torch.zeros(
+            (batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype
+        )
+        offset = 0
+        for idx, n in enumerate(seq_token_counts):
+            chunk = input_ids[offset : offset + n]
+            offset += n
+            if chunk.shape[0] >= 16:
+                seq_len = chunk.shape[0] // 16
+                codes[idx, :, :seq_len] = chunk[: seq_len * 16].reshape(16, seq_len)
+        return codes
+
+    def _chunked_prefill_consume_pending_bootstrap(
+        self,
+        payload: OmniPayload,
+        input_ids: torch.Tensor,
+        input_embeds: torch.Tensor,
+        meta: dict,
+        span_len: int,
+        update_dict: OmniPayload,
+    ):
+        """Consume bootstrap embeddings that overflowed from a previous chunk.
+
+        Bootstrap (9 tokens) can straddle a chunk boundary in two ways:
+          - 1 overflow token  → span_len == 1: would enter decode with stale input_embeds
+          - 2+ overflow tokens → span_len > 1: would wrongly re-enter prefill
+        In both cases the correct behaviour is identical to if these tokens had
+        been included in the original prefill chunk: reuse the pre-computed
+        embeddings, emit zero codes, and skip the decode/MTP path entirely.
+
+        Returns ``(input_ids, input_embeds, update_dict)`` when pending embeds
+        were consumed (caller should short-circuit), otherwise ``None``.
+        """
+        pending = payload.get("pending_bootstrap_embeds")
+        if not (isinstance(pending, torch.Tensor) and pending.shape[0] > 0):
+            return None
+        target_device = input_embeds.device if input_embeds is not None else input_ids.device
+        n_consume = min(span_len, pending.shape[0])
+        input_embeds = pending[:n_consume].to(device=target_device, dtype=torch.bfloat16)
+        update_dict["pending_bootstrap_embeds"] = pending[n_consume:]
+        update_dict.setdefault("codes", {})["audio"] = torch.zeros(
+            (n_consume, self.talker.num_code_groups),
+            device=self._module_device(self.talker),
+            dtype=torch.long,
+        )
+        update_dict.setdefault("meta", {})["num_processed_tokens"] = (
+            meta.get("num_processed_tokens", 0) + n_consume
+        )
+        return input_ids, input_embeds, update_dict
+
+    def _chunked_prefill_decode_drain_text_step(
+        self,
+        meta: dict,
+        embed: "Embeddings",
+        ids: "Ids",
+        device: torch.device,
+        update_dict: OmniPayload,
+    ) -> torch.Tensor | None:
+        """Decide the text_step embedding when decode has run past the end of
+        thinker's output token list. Returns the embedding to use, or ``None``
+        when normal decode processing should continue.
+        """
+        start_index = meta.get("num_processed_tokens", 0)
+        thinker_output_token_ids = ids.get("output", [])
+        if start_index < len(thinker_output_token_ids) - 1:
+            return None
+        # meta["finished"] is True (Python bool) ⟹ TTS EOS already emitted; drain with pad.
+        # meta["finished"] is a tensor ⟹ thinker's live finished flag (EOS not yet emitted).
+        if meta.get("finished") is True:
+            return self.tts_pad_embed.to(device)
+        cached = embed.get("cached_decode", None)
+        live = embed.get("decode", None)
+        embed_available = (
+            isinstance(cached, torch.Tensor) and start_index < cached.shape[0]
+        ) or isinstance(live, torch.Tensor)
+        if embed_available:
+            return None
+        if meta.get("thinker_finished", False):
+            update_dict.setdefault("meta", {})["finished"] = True
+            return self.tts_eos_embed.to(device)
+        # Thinker still running but no embed available yet — pad (wait)
+        return self.tts_pad_embed.to(device)
+
+    @staticmethod
+    def _chunked_prefill_split_overflow(
+        req_input_ids: torch.Tensor,
+        req_embeds: torch.Tensor,
+        chunk_size: int,
+        update_dict: OmniPayload,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Trim bootstrap output to the chunk window, parking overflow embeds
+        and ids in ``update_dict`` so the next chunk can resume from them."""
+        if req_embeds.shape[0] > chunk_size:
+            update_dict["pending_bootstrap_embeds"] = req_embeds[chunk_size:].detach()
+            update_dict["pending_bootstrap_ids"] = req_input_ids[chunk_size:].detach()
+            req_embeds = req_embeds[:chunk_size]
+            req_input_ids = req_input_ids[:chunk_size]
+        return req_input_ids, req_embeds
+
+    # ==================== End Chunked Prefill Helpers ====================
+
     def talker_preprocess(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         """
         Preprocess talker embeds. Noted that we set the MTP here.
@@ -684,27 +787,12 @@ class Qwen3OmniMoeForConditionalGeneration(
         span_len = input_ids.shape[0]
         update_dict: OmniPayload = {}
 
-        # Consume pending bootstrap embeddings BEFORE the prefill/decode branch.
-        # Bootstrap (9 tokens) can overflow a chunk boundary in two ways:
-        #   - 1 overflow token  → span_len == 1: would enter decode with stale input_embeds
-        #   - 2+ overflow tokens → span_len > 1: would wrongly enter prefill (already done)
-        # In both cases the correct behaviour is identical to if these tokens had
-        # been included in the original prefill chunk: use the pre-computed embeddings,
-        # produce zero codes, and skip decode/MTP logic entirely.
-        pending_bootstrap_embeds = payload.get("pending_bootstrap_embeds")
-        if isinstance(pending_bootstrap_embeds, torch.Tensor) and pending_bootstrap_embeds.shape[0] > 0:
-            target_device = input_embeds.device if input_embeds is not None else input_ids.device
-            n_consume = min(span_len, pending_bootstrap_embeds.shape[0])
-            input_embeds = pending_bootstrap_embeds[:n_consume].to(device=target_device, dtype=torch.bfloat16)
-            remaining = pending_bootstrap_embeds[n_consume:]
-            update_dict["pending_bootstrap_embeds"] = remaining
-            update_dict.setdefault("codes", {})["audio"] = torch.zeros(
-                (n_consume, self.talker.num_code_groups),
-                device=self._module_device(self.talker),
-                dtype=torch.long,
-            )
-            update_dict.setdefault("meta", {})["num_processed_tokens"] = meta.get("num_processed_tokens", 0) + n_consume
-            return input_ids, input_embeds, update_dict
+        # Chunked-prefill: a previous chunk may have left bootstrap embeds for us.
+        early_return = self._chunked_prefill_consume_pending_bootstrap(
+            payload, input_ids, input_embeds, meta, span_len, update_dict
+        )
+        if early_return is not None:
+            return early_return
 
         if span_len > 1:
             # prefill
@@ -793,7 +881,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         hs: HiddenStates = payload.get("hidden_states", {})
         embed: Embeddings = payload.get("embed", {})
         ids: Ids = payload.get("ids", {})
-        meta: OmniPayloadMeta = payload.get("meta", {})
         request_id = payload.get("request_id", "")
 
         # Containers to return per-request updates (e.g., code_predictor_hidden_per_request)
@@ -940,11 +1027,10 @@ class Qwen3OmniMoeForConditionalGeneration(
         )
         self._talker_cache_thinker_decode_embeds(embed, update_dict)
 
-        if req_embeds.shape[0] > chunk_size:
-            update_dict["pending_bootstrap_embeds"] = req_embeds[chunk_size:].detach()
-            update_dict["pending_bootstrap_ids"] = req_input_ids[chunk_size:].detach()
-            req_embeds = req_embeds[:chunk_size]
-            req_input_ids = req_input_ids[:chunk_size]
+        # Chunked-prefill: bootstrap may overflow this chunk; park the tail for the next chunk.
+        req_input_ids, req_embeds = self._chunked_prefill_split_overflow(
+            req_input_ids, req_embeds, chunk_size, update_dict
+        )
 
         return req_input_ids, req_embeds, update_dict
 
@@ -1139,26 +1225,14 @@ class Qwen3OmniMoeForConditionalGeneration(
         meta = payload.get("meta", {})
         ids = payload.get("ids", {})
 
+        # Chunked-prefill: decode may run past the end of thinker's outputs; drain with pad/EOS.
+        drain_step = self._chunked_prefill_decode_drain_text_step(meta, embed, ids, device, update_dict)
+        if drain_step is not None:
+            return drain_step
+
         cached_thinker_decode_embeds = embed.get("cached_decode", None)
         thinker_decode_embed = embed.get("decode", None)
         start_index = meta.get("num_processed_tokens", 0)
-        thinker_output_token_ids = ids.get("output", [])
-        if start_index >= len(thinker_output_token_ids) - 1:
-            # meta["finished"] is True (Python bool) ⟹ TTS EOS already emitted; drain with pad.
-            # meta["finished"] is a tensor ⟹ thinker's live finished flag (EOS not yet emitted).
-            if meta.get("finished") is True:
-                return self.tts_pad_embed.to(device)
-            # Emit EOS only when no embedding is available AND thinker has truly finished.
-            embed_available = (
-                isinstance(cached_thinker_decode_embeds, torch.Tensor)
-                and start_index < cached_thinker_decode_embeds.shape[0]
-            ) or isinstance(thinker_decode_embed, torch.Tensor)
-            if not embed_available:
-                if meta.get("thinker_finished", False):
-                    update_dict.setdefault("meta", {})["finished"] = True
-                    return self.tts_eos_embed.to(device)
-                # Thinker still running but no embed available yet — pad (wait)
-                return self.tts_pad_embed.to(device)
 
         if cached_thinker_decode_embeds is not None and start_index < cached_thinker_decode_embeds.shape[0]:
             cached_thinker_decode_embeds = cached_thinker_decode_embeds.to(device)
