@@ -1523,6 +1523,14 @@ class Qwen3OmniMoeForConditionalGeneration(
     # ==================== Logits and Sampling ====================
 
     def _warn_talker_sampling_temperature(self, sampling_metadata: SamplingMetadata):
+        # Guard: only evaluate the CUDA tensor once per process lifetime.
+        # The `.any()` call below triggers cudaStreamSynchronize; putting it here
+        # (behind the flag) removes the sync from the hot path in compute_logits.
+        if getattr(self, "_talker_temp_warned", False):
+            return
+        if sampling_metadata.temperature is not None and not (sampling_metadata.temperature <= 0).any():
+            return
+        self._talker_temp_warned = True
         warning_parts = []
         if sampling_metadata.temperature is None:
             warning_parts.append(
@@ -1555,11 +1563,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         if isinstance(hidden_states, OmniOutput):
             hidden_states = hidden_states.text_hidden_states
 
-        if (
-            getattr(self, "model_stage", None) == "talker"
-            and sampling_metadata is not None
-            and (sampling_metadata.temperature is None or (sampling_metadata.temperature <= 0).any())
-        ):
+        if getattr(self, "model_stage", None) == "talker" and sampling_metadata is not None:
             self._warn_talker_sampling_temperature(sampling_metadata)
 
         # Use active model for logits computation
