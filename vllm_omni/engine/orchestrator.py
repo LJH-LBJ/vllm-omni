@@ -107,7 +107,7 @@ class OrchestratorRequestState:
 
     # Tracks which final_output=True stages have sent their finished output.
     # Cleanup and generator termination are deferred until all of them are done.
-    final_output_stages_done: set = field(default_factory=set)
+    final_output_stages_done: int = 0
 
     # Per-request pipeline timing accumulator (milliseconds)
     pipeline_timings: dict[str, float] = field(default_factory=dict)
@@ -157,6 +157,12 @@ class Orchestrator:
             self._pd_prefill_engine_id = pd_config.get("prefill_engine_id")
         self.request_states: dict[str, OrchestratorRequestState] = {}
         self._cfg_tracker = CfgCompanionTracker()
+
+        # In async_chunk mode multiple stages (e.g. stage-0 text and stage-2
+        # audio) run concurrently and both carry final_output=True.  Cleanup
+        # and the "finished" signal to the frontend generator are deferred
+        # until ALL of them are done.
+        self._num_final_output_stages: int = sum(1 for p in stage_pools if p.final_output)
 
         self._shutdown_event = asyncio.Event()
         self._stages_shutdown = False
@@ -629,6 +635,12 @@ class Orchestrator:
             await self._cleanup_request_ids([req_id])
             return
 
+        # Track which final_output stages have finished so we know when the
+        # frontend generator can safely stop and when to clean up state.
+        if finished and self.stage_pools[stage_id].final_output:
+            req_state.final_output_stages_done += 1
+        all_final_output_done = req_state.final_output_stages_done >= self._num_final_output_stages
+
         if self.stage_pools[stage_id].final_output:
             await self.output_async_queue.put(
                 OutputMessage(
@@ -636,7 +648,7 @@ class Orchestrator:
                     stage_id=stage_id,
                     engine_outputs=output,
                     metrics=stage_metrics,
-                    finished=finished and stage_id == req_state.final_stage_id,
+                    finished=finished and all_final_output_done,
                     stage_submit_ts=submit_ts,
                 )
             )
@@ -688,7 +700,10 @@ class Orchestrator:
                         is_final_update=True,
                     )
 
-        if finished and stage_id == req_state.final_stage_id:
+        # Defer cleanup until ALL final_output=True stages have finished.
+        # Checking only stage_id == final_stage_id (the last pipeline stage)
+        # caused premature removal when stage-2 finished before stage-0.
+        if finished and all_final_output_done:
             await self._cleanup_request_ids([req_id, *self._cfg_tracker.cleanup_parent(req_id)])
 
     def _next_stage_already_submitted(self, stage_id: int, req_state: OrchestratorRequestState) -> bool:
