@@ -1159,7 +1159,8 @@ class Qwen3OmniMoeForConditionalGeneration(
                 # Talker should ignore thinker system prompt
                 if (segment_role_token == self.config.system_token_id).item():
                     continue
-                # Talker takes word embeddings for tokens and hidden state from `accept_hidden_layer` for multimodal inputs
+                # Talker takes word embeddings for tokens and hidden state
+                # from `accept_hidden_layer` for multimodal inputs
                 elif (segment_role_token == self.config.user_token_id).item():
                     talker_user_part = self._get_talker_user_parts(
                         local_start, local_end, multimodal_mask, thinker_hidden, thinker_embed
