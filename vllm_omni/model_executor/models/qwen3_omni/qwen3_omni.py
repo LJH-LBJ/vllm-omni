@@ -1387,18 +1387,14 @@ class Qwen3OmniMoeForConditionalGeneration(
             first_text_embed = first_text_embed_all[0:1]  # pos 8 = tok0 only
             extra_text_embeds = first_text_embed_all[1:]  # tok1..tok(N-1) → trailing_text
         else:
-            first_text_embed = torch.zeros(
-                (1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype
-            )
-            extra_text_embeds = torch.empty(
-                (0, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype
-            )
+            first_text_embed = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
+            extra_text_embeds = torch.empty((0, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
         assistant_text_hidden = torch.cat(
             (
-                assistant_hidden[:3],        # pos 0-2: thinker prefill projections
-                tts_pad_embed.expand(4, -1), # pos 3-6
-                tts_bos_embed,               # pos 7
-                first_text_embed,            # pos 8 = tok0
+                assistant_hidden[:3],  # pos 0-2: thinker prefill projections
+                tts_pad_embed.expand(4, -1),  # pos 3-6
+                tts_bos_embed,  # pos 7
+                first_text_embed,  # pos 8 = tok0
             ),
             dim=0,
         )
