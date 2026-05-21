@@ -449,16 +449,6 @@ class _ThinkerToTalkerChunkedPrefill:
         )
         return filtered_full_ids, embeds[keep_mask], hidden[keep_mask]
 
-    # ---- Optional-field helpers --------------------------------------------
-
-    @staticmethod
-    def _fill_optional_fields(d: dict, request: OmniEngineCoreRequest) -> None:
-        """Add speaker/language to a payload dict if present on the request."""
-        for key, fn in (("speaker", extract_speaker_from_request), ("language", extract_language_from_request)):
-            val = fn(request)
-            if val is not None:
-                d[key] = val
-
     # ---- Payload builders --------------------------------------------------
 
     @staticmethod
@@ -470,7 +460,8 @@ class _ThinkerToTalkerChunkedPrefill:
         chunk_start: int,
         state: dict,
         output_token_ids: list[int],
-        request: OmniEngineCoreRequest,
+        speaker: Any = None,
+        language: Any = None,
     ) -> "OmniPayload | None":
         """Build the payload for one chunked-prefill step (Thinker→Talker).
 
@@ -492,16 +483,9 @@ class _ThinkerToTalkerChunkedPrefill:
         emit_info: OmniPayload = {
             "embed": {
                 "prefill": embeds_cpu,
-                # Provide thinker-side TTS token embeddings for talker projection
-                "tts_bos": thinker_embed.get("tts_bos").detach().cpu()
-                if isinstance(thinker_embed.get("tts_bos"), torch.Tensor)
-                else None,
-                "tts_eos": thinker_embed.get("tts_eos").detach().cpu()
-                if isinstance(thinker_embed.get("tts_eos"), torch.Tensor)
-                else None,
-                "tts_pad": thinker_embed.get("tts_pad").detach().cpu()
-                if isinstance(thinker_embed.get("tts_pad"), torch.Tensor)
-                else None,
+                "tts_bos": _as_tensor_or_none(thinker_embed.get("tts_bos")),
+                "tts_eos": _as_tensor_or_none(thinker_embed.get("tts_eos")),
+                "tts_pad": _as_tensor_or_none(thinker_embed.get("tts_pad")),
             },
             "hidden_states": {"output": hidden_cpu},
             "ids": {
@@ -512,6 +496,8 @@ class _ThinkerToTalkerChunkedPrefill:
                 "finished": torch.tensor(False, dtype=torch.bool),
                 "override_keys": [("ids", "all"), ("ids", "prompt")],
             },
+            "speaker": speaker,
+            "language": language,
         }
         # Last prefill chunk: thinker already emitted the first output token
         # in this same scheduler step. Forward the token IDs now so the talker
@@ -520,7 +506,6 @@ class _ThinkerToTalkerChunkedPrefill:
         if output_token_ids:
             emit_info["ids"]["output"] = output_token_ids
             emit_info["meta"]["override_keys"] = [("ids", "all"), ("ids", "prompt"), ("ids", "output")]
-        _ThinkerToTalkerChunkedPrefill._fill_optional_fields(emit_info, request)
         return emit_info
 
     @staticmethod
@@ -529,7 +514,8 @@ class _ThinkerToTalkerChunkedPrefill:
         thinker_hid: torch.Tensor,
         output_token_ids: list[int],
         is_finished: bool,
-        request: OmniEngineCoreRequest,
+        speaker: Any = None,
+        language: Any = None,
     ) -> "OmniPayload":
         """Build the payload for one decode step (Thinker→Talker)."""
         talker_additional_info: OmniPayload = {
@@ -537,8 +523,9 @@ class _ThinkerToTalkerChunkedPrefill:
                 "finished": torch.tensor(is_finished, dtype=torch.bool),
                 "thinker_finished": is_finished,
             },
+            "speaker": speaker,
+            "language": language,
         }
-        _ThinkerToTalkerChunkedPrefill._fill_optional_fields(talker_additional_info, request)
 
         if output_token_ids:
             talker_additional_info["meta"]["override_keys"] = [("ids", "output")]
@@ -561,16 +548,20 @@ def thinker2talker_async_chunk(
     Connector from Thinker → Talker supporting chunked prefill.
     Two phases:
 
-      if n_decoded == 0 and not is_finished  (prefill):
-        Emit all tokens immediately (including assistant part).
-        Bootstrap pos 8 (tok0) will be zero-padded by the talker.
+      if prefill_still_pending and not (is_finished and n_decoded == 0)  (prefill):
+        Forward one chunk of prompt tokens to the Talker.  May be called
+        multiple times (one per prefill chunk) until all prompt tokens have
+        been sent (tracked by state["sent_prompt_tokens"]).
       else  (decode):
         Ordinary decode step.
     """
+
     request_id = request.external_req_id
     if not isinstance(pooling_output, dict):
         logger.debug("thinker2talker_async_chunk: skip non-dict pooling_output for req=%s", request_id)
         return None
+    speaker = extract_speaker_from_request(request)
+    language = extract_language_from_request(request)
 
     thinker_hs = pooling_output.get("hidden_states", {})
     thinker_layers = thinker_hs.get("layers", {}) if isinstance(thinker_hs, dict) else {}
@@ -603,7 +594,8 @@ def thinker2talker_async_chunk(
             chunk_start,
             state,
             output_token_ids,
-            request,
+            speaker=speaker,
+            language=language,
         )
     else:
         return _ThinkerToTalkerChunkedPrefill.build_decode_payload(
@@ -611,7 +603,8 @@ def thinker2talker_async_chunk(
             thinker_hid,
             output_token_ids,
             is_finished,
-            request,
+            speaker=speaker,
+            language=language,
         )
 
 
@@ -752,7 +745,6 @@ def thinker2talker(
         thinker_emb = emb_layer.detach().to(device=device, dtype=torch.float)[-new_seq_length:]
         thinker_hid = hid_layer.detach().to(device=device, dtype=torch.float)[-new_seq_length:]
 
-        prefill_mm: dict[str, Any] | None = None
         prefill_mm = _get_prefill_multimodal_output(req_id, streaming_context)
 
         if prefill_mm is not None:
@@ -890,15 +882,12 @@ def talker2code2wav_async_chunk(
     """
     Pooling version.
     """
-    request_id = getattr(request, "external_req_id", None)
     if not isinstance(pooling_output, dict):
         return None
     talker_codes = pooling_output.get("codes", {})
     if not isinstance(talker_codes, dict):
         return None
     code_predictor_codes = talker_codes.get("audio")
-    if code_predictor_codes is None:
-        return None
 
     connector = getattr(transfer_manager, "connector", None)
     raw_cfg = getattr(connector, "config", {}) or {}
@@ -907,19 +896,15 @@ def talker2code2wav_async_chunk(
     left_context_size_config = int(cfg.get("codec_left_context_frames", 25))
 
     if code_predictor_codes is None:
-        logger.warning(f"req={request_id[-16:] if request_id else 'N/A'} DROP=none")
         return None
     if isinstance(code_predictor_codes, torch.Tensor):
         if code_predictor_codes.numel() == 0:
-            logger.warning(f"req={request_id[-16:] if request_id else 'N/A'} code_predictor_codes is empty 0")
             return None
     elif hasattr(code_predictor_codes, "__len__"):
         if len(code_predictor_codes) == 0:
-            logger.warning(f"req={request_id[-16:] if request_id else 'N/A'} code_predictor_codes is empty 1")
             return None
 
     if isinstance(code_predictor_codes, torch.Tensor):
-        # TODO: high concurrency issue here, need to fix it
         if not code_predictor_codes.any():
             return None
     else:
@@ -931,6 +916,7 @@ def talker2code2wav_async_chunk(
     if sum(codec_codes) == 0:
         return None
 
+    request_id = request.external_req_id
     transfer_manager.code_prompt_token_ids[request_id].append(codec_codes)
     length = len(transfer_manager.code_prompt_token_ids[request_id])
 
