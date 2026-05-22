@@ -738,11 +738,8 @@ class Qwen3OmniMoeForConditionalGeneration(
         # meta["finished"] is a tensor ⟹ thinker's live finished flag (EOS not yet emitted).
         if meta.get("finished") is True:
             return self.tts_pad_embed.to(device)
-        cached = embed.get("cached_decode", None)
         live = embed.get("decode", None)
-        embed_available = (isinstance(cached, torch.Tensor) and start_index < cached.shape[0]) or isinstance(
-            live, torch.Tensor
-        )
+        embed_available = isinstance(live, torch.Tensor) and live.numel() > 0
         if embed_available:
             return None
         if meta.get("thinker_finished", False):
@@ -953,17 +950,13 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_size = input_ids.shape[0]
         assert chunk_size > 0, f"Prefill chunk can not be 0. Received chunk_size={chunk_size}."
         chunk_offset = num_processed_thinker_tokens
-        # Bootstrap pos-8 is tok0; any extra tokens (tok1..tok(N-1)) from cached_decode
+        # Bootstrap pos-8 is tok0; any extra decode tokens (tok1..tok(N-1))
         # are passed through to _get_talker_assistant_parts, which places them into
         # trailing_text so decode steps 1..N-1 can consume them without waiting for thinker.
-        cached_dec = payload.get("embed", {}).get("cached_decode")
-        if isinstance(cached_dec, torch.Tensor) and cached_dec.shape[0] > 0:
-            decode_assistant_fill = cached_dec
-        else:
-            decode_assistant_fill = payload.get("embed", {}).get("decode")
-            if isinstance(decode_assistant_fill, torch.Tensor):
-                if decode_assistant_fill.numel() == 0:
-                    decode_assistant_fill = None
+        decode_assistant_fill = payload.get("embed", {}).get("decode")
+        if isinstance(decode_assistant_fill, torch.Tensor):
+            if decode_assistant_fill.numel() == 0:
+                decode_assistant_fill = None
 
         thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
         thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
@@ -1021,7 +1014,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         update_dict.setdefault("meta", {})["prefill_consumed_text_tokens"] = (
             1 if decode_assistant_fill is not None else 0
         )
-        self._talker_cache_thinker_decode_embeds(embed, update_dict)
+        update_dict.setdefault("embed", {})["decode"] = None
 
         # Chunked-prefill: bootstrap may overflow this chunk; park the tail for the next chunk.
         req_input_ids, req_embeds = self._chunked_prefill_split_overflow(
@@ -1030,30 +1023,42 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         return req_input_ids, req_embeds, update_dict
 
-    def _talker_cache_thinker_decode_embeds(
+    def _project_thinker_decode_embeds(
         self,
+        thinker_decode_embeds: torch.Tensor,
+        device: torch.device,
+        dtype: torch.dtype | None = None,
+    ) -> torch.Tensor:
+        thinker_decode_embeds = thinker_decode_embeds.reshape(-1, thinker_decode_embeds.shape[-1]).to(
+            device=self._module_device(self.talker), dtype=torch.bfloat16
+        )
+        text_embeds = self.talker.text_projection(thinker_decode_embeds)
+        if dtype is not None:
+            text_embeds = text_embeds.to(device=device, dtype=dtype)
+        else:
+            text_embeds = text_embeds.to(device=device)
+        return text_embeds.reshape(-1, self.talker_config.text_config.hidden_size)
+
+    def _append_decode_to_trailing_text(
+        self,
+        trailing_text: torch.Tensor,
         embed: Embeddings,
         update_dict: OmniPayload,
-    ) -> None:
-        """
-        Cache thinker embeds for decode stage.
-        """
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
         thinker_decode_embeds = embed.get("decode", None)
-        if thinker_decode_embeds is not None:
-            cached_thinker_decode_embeds = embed.get("cached_decode", None)
-            if cached_thinker_decode_embeds is None:
-                update_dict.setdefault("embed", {})["cached_decode"] = thinker_decode_embeds
-            else:
-                cached_thinker_decode_embeds = cached_thinker_decode_embeds.to(
-                    device=self._module_device(self.talker), dtype=torch.bfloat16
-                )
-                thinker_decode_embeds = thinker_decode_embeds.to(
-                    device=self._module_device(self.talker), dtype=torch.bfloat16
-                )
-                update_dict.setdefault("embed", {})["cached_decode"] = torch.cat(
-                    [cached_thinker_decode_embeds, thinker_decode_embeds], dim=0
-                )
+        if not isinstance(thinker_decode_embeds, torch.Tensor) or thinker_decode_embeds.numel() == 0:
+            return trailing_text
+
+        text_embeds = self._project_thinker_decode_embeds(thinker_decode_embeds, device, dtype)
+        trailing_text = trailing_text.to(device=device, dtype=dtype)
+        if trailing_text.shape[0] > 0:
+            trailing_text = torch.cat((trailing_text[:-1], text_embeds, trailing_text[-1:]), dim=0)
+        else:
+            trailing_text = text_embeds
         update_dict.setdefault("embed", {})["decode"] = None
+        return trailing_text.detach()
 
     def _thinker_to_talker_prefill(
         self,
@@ -1221,33 +1226,18 @@ class Qwen3OmniMoeForConditionalGeneration(
         if drain_step is not None:
             return drain_step
 
-        cached_thinker_decode_embeds = embed.get("cached_decode", None)
         thinker_decode_embed = embed.get("decode", None)
-        start_index = meta.get("num_processed_tokens", 0)
+        if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
+            text_step = self._project_thinker_decode_embeds(thinker_decode_embed, device)
+            update_dict.setdefault("embed", {})["decode"] = None
+            return text_step[0:1]
 
-        if cached_thinker_decode_embeds is not None and start_index < cached_thinker_decode_embeds.shape[0]:
-            cached_thinker_decode_embeds = cached_thinker_decode_embeds.to(device)
-            thinker_embed = cached_thinker_decode_embeds[start_index]
-            if thinker_decode_embed is not None:
-                thinker_decode_embed = thinker_decode_embed.to(device)
-                cached_thinker_decode_embeds = torch.cat([cached_thinker_decode_embeds, thinker_decode_embed], dim=0)
-                update_dict.setdefault("embed", {})["cached_decode"] = cached_thinker_decode_embeds
-
-        elif thinker_decode_embed is not None:
-            thinker_embed = thinker_decode_embed
-            if thinker_embed.device != device:
-                thinker_embed = thinker_embed.to(device)
-
-        else:
-            # When the tokens output by the thinker are exhausted, an EOS token needs to be appended.
-            # Use the finished_flag to mark that all tokens output by thinker have been consumed.
-            if meta.get("eos_emitted", False):
-                return self.tts_pad_embed.to(device)
-            update_dict.setdefault("meta", {})["eos_emitted"] = True
-            return self.tts_eos_embed.to(device)
-
-        update_dict.setdefault("embed", {})["decode"] = None
-        return self.talker.text_projection(thinker_embed).to(device)
+        # When the tokens output by the thinker are exhausted, an EOS token needs to be appended.
+        # Use the finished_flag to mark that all tokens output by thinker have been consumed.
+        if meta.get("eos_emitted", False):
+            return self.tts_pad_embed.to(device)
+        update_dict.setdefault("meta", {})["eos_emitted"] = True
+        return self.tts_eos_embed.to(device)
 
     def talker_preprocess_decode(
         self, input_ids: torch.Tensor, input_embeds: torch.Tensor, update_dict: OmniPayload, payload: OmniPayload
@@ -1264,9 +1254,14 @@ class Qwen3OmniMoeForConditionalGeneration(
                     # by tts_eos_embed.  shape[0] > 1 means at least one real token remains.
                     # Consume one per step; no need to wait for thinker here.
                     text_step = q_tail[0:1, :].to(input_embeds.device, dtype=input_embeds.dtype)
-                    update_dict.setdefault("hidden_states", {})["trailing_text"] = q_tail[1:, :].detach()
-                    # Still accumulate any new thinker decode token arriving this step.
-                    self._talker_cache_thinker_decode_embeds(payload.get("embed", {}), update_dict)
+                    trailing_text = self._append_decode_to_trailing_text(
+                        q_tail[1:, :].detach(),
+                        payload.get("embed", {}),
+                        update_dict,
+                        input_embeds.device,
+                        input_embeds.dtype,
+                    )
+                    update_dict.setdefault("hidden_states", {})["trailing_text"] = trailing_text
                 else:
                     text_step = self._thinker_decode_to_talker_decode(payload, input_ids.device, update_dict)
             else:

@@ -529,7 +529,7 @@ class _ThinkerToTalkerChunkedPrefill:
 
         if output_token_ids:
             talker_additional_info["meta"]["override_keys"] = [("ids", "output")]
-            talker_additional_info["embed"] = {"cached_decode": thinker_emb.detach().cpu()}
+            talker_additional_info["embed"] = {"decode": thinker_emb.detach().cpu()}
             talker_additional_info["ids"] = {"output": output_token_ids}
         else:
             # Edge case: is_finished with no output tokens (request aborted mid-prefill).
