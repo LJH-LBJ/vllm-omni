@@ -734,16 +734,14 @@ class Qwen3OmniMoeForConditionalGeneration(
         thinker_output_token_ids = ids.get("output", [])
         if start_index < len(thinker_output_token_ids) - 1:
             return None
-        # meta["finished"] is True (Python bool) ⟹ TTS EOS already emitted; drain with pad.
-        # meta["finished"] is a tensor ⟹ thinker's live finished flag (EOS not yet emitted).
-        if meta.get("finished") is True:
+        if meta.get("eos_emitted", False):
             return self.tts_pad_embed.to(device)
         live = embed.get("decode", None)
         embed_available = isinstance(live, torch.Tensor) and live.numel() > 0
         if embed_available:
             return None
         if meta.get("thinker_finished", False):
-            update_dict.setdefault("meta", {})["finished"] = True
+            update_dict.setdefault("meta", {})["eos_emitted"] = True
             return self.tts_eos_embed.to(device)
         # Thinker still running but no embed available yet — pad (wait)
         return self.tts_pad_embed.to(device)
