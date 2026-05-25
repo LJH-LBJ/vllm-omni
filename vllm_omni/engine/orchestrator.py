@@ -135,6 +135,9 @@ class OrchestratorRequestState:
     # Tracks which final_output=True stages have sent their finished output.
     # Cleanup and generator termination are deferred until all of them are done.
     final_output_stages_done: int = 0
+    # Number of final_output=True stages this request is expected to wait for.
+    # Computed from final_stage_id, which is derived from requested modalities.
+    expected_final_output_stages: int = 1
 
     # Per-request pipeline timing accumulator (milliseconds)
     pipeline_timings: dict[str, float] = field(default_factory=dict)
@@ -192,12 +195,6 @@ class Orchestrator:
         self.request_states: dict[str, OrchestratorRequestState] = {}
         self._cfg_tracker = CfgCompanionTracker()
 
-        # In async_chunk mode multiple stages (e.g. stage-0 text and stage-2
-        # audio) run concurrently and both carry final_output=True.  Cleanup
-        # and the "finished" signal to the frontend generator are deferred
-        # until ALL of them are done.
-        self._num_final_output_stages: int = sum(1 for p in stage_pools if p.final_output)
-
         self._shutdown_event = asyncio.Event()
         self._stages_shutdown = False
         self._fatal_error: str | None = None
@@ -224,6 +221,19 @@ class Orchestrator:
             for pool in self.stage_pools:
                 pool.attach_hub(self._hub)
                 pool.attach_load_balancer(factory())
+
+    def _compute_expected_final_output_stages(self, final_stage_id: int) -> int:
+        """Return how many final_output stages a request should wait for.
+
+        This is request-scoped: only stages up to ``final_stage_id`` are
+        considered. ``final_stage_id`` is derived from requested modalities
+        (e.g. text-only requests should not wait for audio stage completion).
+        """
+        max_sid = min(final_stage_id, self.num_stages - 1)
+        if max_sid < 0:
+            return 1
+        expected = sum(1 for sid in range(max_sid + 1) if self.stage_pools[sid].final_output)
+        return max(1, expected)
 
     async def run(self) -> None:
         """Main entry point for the Orchestrator event loop."""
@@ -400,6 +410,7 @@ class Orchestrator:
             prompt=original_prompt,
             sampling_params_list=sampling_params_list,
             final_stage_id=final_stage_id,
+            expected_final_output_stages=self._compute_expected_final_output_stages(final_stage_id),
             mm_features=getattr(prompt, "mm_features", None),
         )
         self.request_states[request_id] = req_state
@@ -484,6 +495,7 @@ class Orchestrator:
             prompt=companion_prompt,
             sampling_params_list=sampling_params_list,
             final_stage_id=0,
+            expected_final_output_stages=self._compute_expected_final_output_stages(0),
         )
         self.request_states[companion_id] = companion_state
         companion_state.stage_submit_ts[0] = _time.time()
@@ -760,7 +772,7 @@ class Orchestrator:
         # frontend generator can safely stop and when to clean up state.
         if finished and self.stage_pools[stage_id].final_output:
             req_state.final_output_stages_done += 1
-        all_final_output_done = req_state.final_output_stages_done >= self._num_final_output_stages
+        all_final_output_done = req_state.final_output_stages_done >= req_state.expected_final_output_stages
 
         if self.stage_pools[stage_id].final_output:
             await self.output_async_queue.put(
