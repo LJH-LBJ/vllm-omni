@@ -207,10 +207,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     self._mark_upstream_finished_or_wait_for_decode_drain(req_id, external_req_id)
                 # A chunk is considered a "prefill boundary" if it has the "finished" flag or
                 # contains decode embeds.
-                prefill_boundary = (
-                    is_chunk_finished
-                    or has_decode_embed
-                )
+                prefill_boundary = is_chunk_finished or has_decode_embed
                 if has_prefill_embeds and not prefill_boundary:
                     if self._gate_chunked_prefill_chunk(
                         request, payload_data, external_req_id, stage_id, connector_get_key
