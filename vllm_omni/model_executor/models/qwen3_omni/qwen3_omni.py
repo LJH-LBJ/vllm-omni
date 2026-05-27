@@ -1517,9 +1517,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         # thinker's prefill is chunked and the talker processes before all tokens arrive).
         n_proj = assistant_hidden.shape[0]
         if n_proj < 3:
-            pad_rows = torch.zeros(
-                (3 - n_proj, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype
-            )
+            pad_rows = torch.zeros((3 - n_proj, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
             assistant_proj3 = torch.cat((assistant_hidden[:n_proj], pad_rows), dim=0)
         else:
             assistant_proj3 = assistant_hidden[:3]
