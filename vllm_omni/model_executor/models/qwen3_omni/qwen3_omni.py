@@ -185,6 +185,9 @@ class Qwen3OmniMoeForConditionalGeneration(
             self.streaming_accumulated_keys: set[tuple[str, str]] = {
                 ("embed", "prefill"),
                 ("hidden_states", "output"),
+                # Accumulate all thinker decode-step embeds so the talker can use
+                # the correct tok0 embed regardless of when it processes the bootstrap.
+                ("embed", "decode_all"),
             }
 
         elif self.model_stage == "code2wav":
@@ -792,7 +795,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             # prefill
             input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, payload)
             code_predictor_codes = torch.zeros(
-                (input_embeds.shape[0], self.talker.num_code_groups),
+                (span_len, self.talker.num_code_groups),
                 device=self._module_device(self.talker),
                 dtype=torch.long,
             )
@@ -951,16 +954,83 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_size = input_ids.shape[0]
         assert chunk_size > 0, f"Prefill chunk can not be 0. Received chunk_size={chunk_size}."
         chunk_offset = num_processed_thinker_tokens
-        # Bootstrap pos-8 is tok0; any extra decode tokens (tok1..tok(N-1))
-        # are passed through to _get_talker_assistant_parts, which places them into
-        # trailing_text so decode steps 1..N-1 can consume them without waiting for thinker.
-        decode_assistant_fill = payload.get("embed", {}).get("decode")
-        if isinstance(decode_assistant_fill, torch.Tensor):
-            if decode_assistant_fill.numel() == 0:
-                decode_assistant_fill = None
+        # When the thinker has finished (non-async-chunk / full-payload path),
+        # use ALL remaining embeddings so the assistant segment (which starts after
+        # the user segment) falls within the chunk window and trailing_text is
+        # populated with the full response token sequence.  _chunked_prefill_split_overflow
+        # still clips req_embeds to chunk_size (= next_stage_prompt_len = sum_user_len + 9).
+        is_final_chunk = bool(payload.get("meta", {}).get("finished", False))
 
-        thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
-        thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
+        # Bootstrap conditioning strategy for pos-8 (first_text_embed) and trailing_text:
+        #
+        # decode_all accumulates layer-0 hidden states from each decode step:
+        #   decode_all[0] = embed of last PROMPT token (\n) — neutral, good for text-only.
+        #   decode_all[1] = embed of first RESPONSE token tok0.
+        #   decode_all[k] = embed of tok_{k-1}.
+        #
+        # • is_final_chunk=True: use full decode_all WITHOUT EOS stripping.
+        #     decode_all[0]=emb_\n → pos-8 neutral for text-only short prompts.
+        #     All response embeds go into trailing_text, including the last word
+        #     (critical for one-word responses like "London").
+        # • is_final_chunk=False, k≥3: use embed.decode (latest single-step embed).
+        #     Avoids emb_\n from a long-context (audio/image) prompt at pos-8,
+        #     which causes garbled audio.
+        # • is_final_chunk=False, k<3: use decode_all[0:1] = [emb_\n] only.
+        #     pos-8=emb_\n (neutral), trailing_text stays empty at bootstrap.
+        #     Avoids emb_tok0-at-pos-8 AND avoids double-conditioning in trailing_text.
+        decode_assistant_fill = None
+        # For k<3 is_final_chunk=False, we set meta["await_thinker_embed"]=True so that
+        # _thinker_decode_to_talker_decode returns tts_pad (wait) instead of tts_eos
+        # (terminate) when embed.decode is temporarily None.
+        decode_all_raw = payload.get("embed", {}).get("decode_all")
+        if isinstance(decode_all_raw, torch.Tensor) and decode_all_raw.numel() > 0:
+            if decode_all_raw.ndim == 1:
+                decode_all_raw = decode_all_raw.unsqueeze(0)
+            k = decode_all_raw.shape[0]
+            if is_final_chunk:
+                # Thinker finished: use full decode_all, NO EOS stripping.
+                decode_assistant_fill = decode_all_raw
+                # Clear the "waiting" flag so that after trailing_text is
+                # exhausted, _thinker_decode_to_talker_decode returns tts_eos
+                # (terminate) instead of tts_pad (infinite wait).
+                update_dict.setdefault("meta", {})["await_thinker_embed"] = False
+            elif k >= 3:
+                # Enough context accumulated: use latest single-step embed.
+                decode_assistant_fill = payload.get("embed", {}).get("decode")
+                if isinstance(decode_assistant_fill, torch.Tensor):
+                    if decode_assistant_fill.numel() == 0:
+                        decode_assistant_fill = None
+                    elif decode_assistant_fill.ndim == 1:
+                        decode_assistant_fill = decode_assistant_fill.unsqueeze(0)
+            else:
+                # k <= 2: use only decode_all[0:1] = [emb_\n] for pos-8.
+                # Using full decode_all would put emb_tok0 in trailing_text, but
+                # subsequent decode payloads also send embed.decode = emb_tok0,
+                # causing _append_decode_to_trailing_text to insert it a second
+                # time → double-conditioning (e.g. "London, London").
+                decode_assistant_fill = decode_all_raw[0:1]
+                # Mark that we are still waiting for the thinker to produce real
+                # content embeds.  _thinker_decode_to_talker_decode checks this
+                # flag: when True it returns tts_pad (wait) instead of tts_eos
+                # (terminate), preventing premature TTS termination for short
+                # one-word responses where is_final_chunk=True arrives slightly
+                # after the talker's first decode step runs.
+                update_dict.setdefault("meta", {})["await_thinker_embed"] = True
+        if decode_assistant_fill is None:
+            # Fallback: single-step overwritten embed.
+            decode_assistant_fill = payload.get("embed", {}).get("decode")
+            if isinstance(decode_assistant_fill, torch.Tensor):
+                if decode_assistant_fill.numel() == 0:
+                    decode_assistant_fill = None
+                elif decode_assistant_fill.ndim == 1:
+                    decode_assistant_fill = decode_assistant_fill.unsqueeze(0)
+
+        if is_final_chunk:
+            thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset:]
+            thinker_hidden_chunk = thinker_hidden_states[chunk_offset:]
+        else:
+            thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
+            thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
 
         actual_embed_size = thinker_sequence_embed_chunk.shape[0]
         thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + actual_embed_size]
@@ -1012,10 +1082,23 @@ class Qwen3OmniMoeForConditionalGeneration(
                 update_dict.setdefault("embed", {})["tts_pad_projected"] = pad_proj.detach()
         except Exception:
             pass
-        update_dict.setdefault("meta", {})["prefill_consumed_text_tokens"] = (
-            1 if decode_assistant_fill is not None else 0
-        )
-        update_dict.setdefault("embed", {})["decode"] = None
+        meta_out = update_dict.setdefault("meta", {})
+        meta_out["prefill_consumed_text_tokens"] = 1 if decode_assistant_fill is not None else 0
+        # Embeds to skip at the first talker decode step (already consumed at bootstrap):
+        #   is_final_chunk or k>=3 → all k (all in trailing_text, or all stale)
+        #   k<3, not final         → 1 (only emb_0 / emb_\n used at pos-8)
+        if isinstance(decode_all_raw, torch.Tensor) and decode_all_raw.numel() > 0:
+            k_raw = decode_all_raw.shape[0]
+            meta_out["num_bootstrap_embeds_consumed"] = k_raw if (is_final_chunk or k_raw >= 3) else 1
+        else:
+            meta_out["num_bootstrap_embeds_consumed"] = 0
+        # For k<3 NOT is_final_chunk (await_thinker_embed=True in update_dict):
+        # PRESERVE embed.decode (the first queued thinker embed, emb_\n, that was
+        # consumed at the bootstrap step).  This lets decode step-1 use proj(emb_\n)
+        # instead of tts_pad, eliminating the "echo" artifact for short prompts.
+        # For all other paths (is_final_chunk, k>=3, no decode_all): clear it.
+        if not update_dict.get("meta", {}).get("await_thinker_embed", False):
+            update_dict.setdefault("embed", {})["decode"] = None
 
         # Chunked-prefill: bootstrap may overflow this chunk; park the tail for the next chunk.
         req_input_ids, req_embeds = self._chunked_prefill_split_overflow(
@@ -1044,16 +1127,41 @@ class Qwen3OmniMoeForConditionalGeneration(
         self,
         trailing_text: torch.Tensor,
         embed: Embeddings,
+        meta: dict[str, Any] | None,
         update_dict: OmniPayload,
         device: torch.device,
         dtype: torch.dtype,
+        current_text_step: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        finished_flag = False
+        if isinstance(meta, dict):
+            raw_finished = meta.get("finished", meta.get("thinker_finished", False))
+            finished_flag = bool(raw_finished.item()) if isinstance(raw_finished, torch.Tensor) else bool(raw_finished)
+
         thinker_decode_embeds = embed.get("decode", None)
         if not isinstance(thinker_decode_embeds, torch.Tensor) or thinker_decode_embeds.numel() == 0:
             return trailing_text
 
+        # Once thinker is finished, trailing_text already contains the terminal
+        # decode sequence; do not append queued decode embeds again.
+        if finished_flag:
+            update_dict.setdefault("embed", {})["decode"] = None
+            return trailing_text.detach()
+
         text_embeds = self._project_thinker_decode_embeds(thinker_decode_embeds, device, dtype)
         trailing_text = trailing_text.to(device=device, dtype=dtype)
+        # When draining pre-buffered trailing_text, a stale queue embed can match
+        # the token already emitted at this decode step. Skip re-inserting it to
+        # prevent duplicated audio like "London, London".
+        if (
+            isinstance(current_text_step, torch.Tensor)
+            and text_embeds.shape[0] == 1
+            and current_text_step.shape == text_embeds.shape
+        ):
+            current = current_text_step.to(device=device, dtype=dtype)
+            if torch.equal(text_embeds, current):
+                update_dict.setdefault("embed", {})["decode"] = None
+                return trailing_text.detach()
         if trailing_text.shape[0] > 0:
             trailing_text = torch.cat((trailing_text[:-1], text_embeds, trailing_text[-1:]), dim=0)
         else:
@@ -1229,9 +1337,19 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         thinker_decode_embed = embed.get("decode", None)
         if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
+            # Got a real embed: clear the "waiting" flag if set, then use it.
+            if meta.get("await_thinker_embed", False):
+                update_dict.setdefault("meta", {})["await_thinker_embed"] = False
             text_step = self._project_thinker_decode_embeds(thinker_decode_embed, device)
             update_dict.setdefault("embed", {})["decode"] = None
             return text_step[0:1]
+
+        # embed.decode is None.
+        if meta.get("await_thinker_embed", False):
+            # Thinker is still running but hasn't delivered the next embed yet
+            # (race condition: bootstrap fired at k<3).  Return pad to keep the
+            # TTS alive without corrupting it; the real embed will arrive shortly.
+            return self.tts_pad_embed.to(device)
 
         # When the tokens output by the thinker are exhausted, an EOS token needs to be appended.
         # Use the finished_flag to mark that all tokens output by thinker have been consumed.
@@ -1258,9 +1376,11 @@ class Qwen3OmniMoeForConditionalGeneration(
                     trailing_text = self._append_decode_to_trailing_text(
                         q_tail[1:, :].detach(),
                         payload.get("embed", {}),
+                        payload.get("meta", {}),
                         update_dict,
                         input_embeds.device,
                         input_embeds.dtype,
+                        current_text_step=text_step,
                     )
                     update_dict.setdefault("hidden_states", {})["trailing_text"] = trailing_text
                 else:
@@ -1383,12 +1503,29 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
             first_text_embed = first_text_embed_all[0:1]  # pos 8 = tok0 only
             extra_text_embeds = first_text_embed_all[1:]  # tok1..tok(N-1) → trailing_text
+        elif assistant_hidden.shape[0] > 3:
+            # Full-payload (non-async-chunk) path: assistant_hidden already contains
+            # projected thinker response embeddings. Use them directly so pos-8 gets
+            # the real tok0 embed and trailing_text is built from tok1..tok(N-1).
+            first_text_embed = assistant_hidden[3:4]  # pos 8 = tok0 (already projected)
+            extra_text_embeds = assistant_hidden[4:]  # tok1..tok(N-1) → trailing_text
         else:
             first_text_embed = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
             extra_text_embeds = torch.empty((0, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
+        # Pad to exactly 3 rows if the assistant segment is partially out of the current
+        # thinker embed chunk (can happen when max_num_batched_tokens is small so the
+        # thinker's prefill is chunked and the talker processes before all tokens arrive).
+        n_proj = assistant_hidden.shape[0]
+        if n_proj < 3:
+            pad_rows = torch.zeros(
+                (3 - n_proj, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype
+            )
+            assistant_proj3 = torch.cat((assistant_hidden[:n_proj], pad_rows), dim=0)
+        else:
+            assistant_proj3 = assistant_hidden[:3]
         assistant_text_hidden = torch.cat(
             (
-                assistant_hidden[:3],  # pos 0-2: thinker prefill projections
+                assistant_proj3,  # pos 0-2: thinker prefill projections (padded if partial)
                 tts_pad_embed.expand(4, -1),  # pos 3-6
                 tts_bos_embed,  # pos 7
                 first_text_embed,  # pos 8 = tok0

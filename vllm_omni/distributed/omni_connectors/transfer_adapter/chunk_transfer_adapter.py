@@ -24,6 +24,10 @@ logger = get_connector_logger(__name__)
 class _PendingDecodeQueue:
     embeds: deque[torch.Tensor] = field(default_factory=deque)
     upstream_finished: bool = False
+    # Set to True after the first embed is consumed at the talker bootstrap step.
+    # Before bootstrap, we require ≥2 embeds (or upstream_finished) to release,
+    # so that the talker always has enough context for a robust first decode step.
+    bootstrap_consumed: bool = False
 
 
 class OmniChunkTransferAdapter(OmniTransferAdapterBase):
@@ -157,7 +161,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
         # have not consumed all chunks sent by previous stage,
         # don't need to poll connector
-        if self.model_mode == "ar" and self._has_pending_decode_embed(external_req_id):
+        if self.model_mode == "ar" and self._can_release_pending_decode_embed(external_req_id):
             cached_payload = self.request_payload.get(external_req_id)
             if cached_payload is not None:
                 request.additional_information = cached_payload
@@ -266,6 +270,27 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         state = self._pending_decode.get(external_req_id)
         return bool(state is not None and state.embeds)
 
+    def _can_release_pending_decode_embed(self, external_req_id: str) -> bool:
+        """Return True when the talker may receive the next decode embed.
+
+        Before the bootstrap step (bootstrap_consumed=False) we require the
+        thinker to be fully finished. This prevents releasing from cached
+        payload too early (which can skip the chunk carrying finished=True),
+        a race that leaves stale decode embeds in queue and causes duplicated
+        audio like "London, London".
+
+        After bootstrap (bootstrap_consumed=True) any single queued embed is
+        enough – normal per-step delivery for running decode requests.
+        """
+        state = self._pending_decode.get(external_req_id)
+        if state is None or not state.embeds:
+            return False
+        # After the first embed was consumed at bootstrap, release freely.
+        if state.bootstrap_consumed:
+            return True
+        # Before bootstrap: wait until thinker is fully finished.
+        return state.upstream_finished
+
     def _queue_decode_embed(self, external_req_id: str, decode_embed: torch.Tensor) -> None:
         state = self._pending_decode.setdefault(external_req_id, _PendingDecodeQueue())
         if decode_embed.ndim >= 2 and decode_embed.shape[0] > 1:
@@ -305,9 +330,20 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         payload = dict(additional_info)
         embed = payload.get("embed", {})
         embed = dict(embed) if isinstance(embed, dict) else {}
-        embed["decode"] = state.embeds.popleft()
-        payload["embed"] = embed
 
+        if not state.bootstrap_consumed:
+            # First decode step: discard embeds already consumed at bootstrap.
+            # num_bootstrap_embeds_consumed is set by talker_preprocess_prefill_chunked.
+            meta = payload.get("meta", {})
+            n = int(meta.get("num_bootstrap_embeds_consumed", 0))
+            for _ in range(min(n, len(state.embeds))):
+                state.embeds.popleft()
+            state.bootstrap_consumed = True
+
+        if state.embeds:
+            embed["decode"] = state.embeds.popleft()
+
+        payload["embed"] = embed
         self._finish_if_decode_queue_drained(req_id, external_req_id, state)
         return payload
 
