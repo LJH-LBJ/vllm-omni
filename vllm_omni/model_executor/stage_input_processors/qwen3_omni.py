@@ -532,9 +532,6 @@ class _ThinkerToTalkerChunkedPrefill:
             talker_additional_info["meta"]["override_keys"] = [("ids", "output")]
             talker_additional_info["embed"] = {
                 "decode": thinker_emb.detach().cpu(),
-                # Also send to the accumulated key so the talker can always see tok0
-                # regardless of how many decode steps ran before bootstrap.
-                "decode_all": thinker_emb.detach().cpu(),
             }
             talker_additional_info["ids"] = {"output": output_token_ids}
         else:
