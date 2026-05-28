@@ -893,6 +893,8 @@ def talker2code2wav_async_chunk(
     if not isinstance(talker_codes, dict):
         return None
     code_predictor_codes = talker_codes.get("audio")
+    if code_predictor_codes is None:
+        return None
 
     connector = getattr(transfer_manager, "connector", None)
     raw_cfg = getattr(connector, "config", {}) or {}
@@ -900,8 +902,6 @@ def talker2code2wav_async_chunk(
     chunk_size_config = int(cfg.get("codec_chunk_frames", 25))
     left_context_size_config = int(cfg.get("codec_left_context_frames", 25))
 
-    if code_predictor_codes is None:
-        return None
     if isinstance(code_predictor_codes, torch.Tensor):
         if code_predictor_codes.numel() == 0:
             return None

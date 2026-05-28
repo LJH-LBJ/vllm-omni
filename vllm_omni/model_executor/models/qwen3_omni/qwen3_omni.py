@@ -433,17 +433,14 @@ class Qwen3OmniMoeForConditionalGeneration(
                         "Code2Wav input length is not divisible by 16; padding with zeros. "
                         "This is expected only during cudagraph warmup."
                     )
-                if seq_token_counts is not None:
-                    codes = self._chunked_prefill_split_code2wav_codes(input_ids, seq_token_counts)
-                else:
-                    input_ids_flatten = input_ids.reshape(-1)
-                    input_ids_flatten = torch.cat(
-                        [
-                            input_ids_flatten,
-                            torch.zeros(16 - input_ids.shape[0] % 16, dtype=torch.long, device=input_ids.device),
-                        ]
-                    )
-                    codes = input_ids_flatten.reshape(1, 16, -1)
+                input_ids_flatten = input_ids.reshape(-1)
+                input_ids_flatten = torch.cat(
+                    [
+                        input_ids_flatten,
+                        torch.zeros(16 - input_ids.shape[0] % 16, dtype=torch.long, device=input_ids.device),
+                    ]
+                )
+                codes = input_ids_flatten.reshape(1, 16, -1)
 
             # Generate audio from codec codes
             # Get every request's left_context_size from runtime_additional_information (passed via kwargs)
@@ -670,23 +667,6 @@ class Qwen3OmniMoeForConditionalGeneration(
     # All methods in this section exist to support chunked prefill of the
     # thinker→talker bridge. Keep them grouped so chunked-prefill-specific
     # logic is easy to identify and isolate from the main flow.
-
-    @staticmethod
-    def _chunked_prefill_split_code2wav_codes(input_ids: torch.Tensor, seq_token_counts: list[int]) -> torch.Tensor:
-        """Build per-request ``[B, 16, T]`` code2wav codes for chunked-prefill
-        batches whose total token count is not divisible by 16 (e.g. each
-        request only carries a single finished-sentinel placeholder)."""
-        batch_size = len(seq_token_counts)
-        max_seq_len = max(1, max(t // 16 for t in seq_token_counts))
-        codes = torch.zeros((batch_size, 16, max_seq_len), device=input_ids.device, dtype=input_ids.dtype)
-        offset = 0
-        for idx, n in enumerate(seq_token_counts):
-            chunk = input_ids[offset : offset + n]
-            offset += n
-            if chunk.shape[0] >= 16:
-                seq_len = chunk.shape[0] // 16
-                codes[idx, :, :seq_len] = chunk[: seq_len * 16].reshape(16, seq_len)
-        return codes
 
     def _chunked_prefill_consume_pending_bootstrap(
         self,
