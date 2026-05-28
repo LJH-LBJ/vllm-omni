@@ -76,6 +76,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.requests_origin_status = {}
         self.requests_num_chunks_sent: dict[str, int] = defaultdict(int)
         self._pending_decode: dict[str, _PendingDecodeQueue] = {}
+        self._pending_prefill_boot: dict[str, dict[str, Any]] = {}
 
     @classmethod
     def create_connector(cls, model_config: Any):
@@ -199,6 +200,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 if has_decode_embed:
                     decode_embed = embed_data.pop("decode")
                 if isinstance(decode_embed, torch.Tensor):
+                    boot_payload = self._release_pending_prefill_boot(external_req_id, decode_embed, meta)
+                    if boot_payload is not None:
+                        request.additional_information = boot_payload
+                        if bool(meta.get("finished", False)):
+                            self.finished_requests.add(req_id)
+                        self._finished_load_reqs.add(req_id)
+                        self._evict_prefill_tensors(external_req_id, stage_id)
+                        return True
                     self._queue_decode_embed(external_req_id, decode_embed)
 
                 merged_payload = self._update_request_payload(external_req_id, payload_data)
@@ -347,6 +356,36 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self._finish_if_decode_queue_drained(req_id, external_req_id, state)
         return payload
 
+    def _release_pending_prefill_boot(
+        self,
+        external_req_id: str,
+        decode_embed: torch.Tensor,
+        decode_meta: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        pending_payload = self._pending_prefill_boot.pop(external_req_id, None)
+        if pending_payload is None:
+            return None
+
+        payload = dict(pending_payload)
+        embed = payload.get("embed", {})
+        embed = dict(embed) if isinstance(embed, dict) else {}
+        embed["decode"] = decode_embed
+        embed["decode_all"] = decode_embed
+        payload["embed"] = embed
+
+        meta = payload.get("meta", {})
+        meta = dict(meta) if isinstance(meta, dict) else {}
+        if isinstance(decode_meta, dict):
+            meta.update({key: decode_meta[key] for key in ("finished", "thinker_finished") if key in decode_meta})
+        payload["meta"] = meta
+
+        cached_payload = dict(payload)
+        cached_embed = dict(embed)
+        cached_embed.pop("decode", None)
+        cached_payload["embed"] = cached_embed
+        self.request_payload[external_req_id] = cached_payload
+        return payload
+
     def _gate_chunked_prefill_chunk(
         self,
         request: Request,
@@ -363,7 +402,15 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         """
         # Hold the final prefill chunk until the tok0 decode embed arrives in
         # the next step, so that the talker receives a complete bootstrap sequence.
-        if payload_data.get("ids", {}).get("output"):
+        final_prefill_flag = payload_data.get("meta", {}).get("is_final_prefill_chunk", False)
+        is_final_prefill_chunk = (
+            bool(final_prefill_flag.item())
+            if isinstance(final_prefill_flag, torch.Tensor)
+            else bool(final_prefill_flag)
+        )
+        is_final_prefill_chunk = is_final_prefill_chunk or bool(payload_data.get("ids", {}).get("output"))
+        if is_final_prefill_chunk:
+            self._pending_prefill_boot[external_req_id] = self.request_payload.get(external_req_id, payload_data)
             self._pending_load_reqs.append(request)
             with self._recv_cond:
                 self._recv_cond.notify()
@@ -564,6 +611,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.code_prompt_token_ids.pop(external_req_id, None)
         self.requests_num_chunks_sent.pop(external_req_id, None)
         self._pending_decode.pop(external_req_id, None)
+        self._pending_prefill_boot.pop(external_req_id, None)
         prefill_part_state = getattr(self, "_prefill_part_state", None)
         if isinstance(prefill_part_state, dict):
             prefill_part_state.pop(external_req_id, None)
@@ -657,6 +705,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         for req_id in cached_reqs.req_ids:
             request = requests.get(req_id) if req_id else None
             additional_info = getattr(request, "additional_information", None) if request else None
+            # collect all asynchronously arrived embeds, and pop one to inject into payload at each decode step
             additional_info = self._attach_next_decode_embed(req_id, additional_info)
             cached_reqs.additional_information[req_id] = additional_info
             if request and additional_info:

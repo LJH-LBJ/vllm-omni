@@ -519,7 +519,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             span_len = audio_codes.shape[0]
             talker_hidden = talker_hidden[:span_len]
             return OmniOutput(text_hidden_states=talker_hidden, multimodal_outputs=multimodal_outputs)
-
         elif self.model_stage == "code2wav":
             audio_tensors = model_outputs
             return OmniOutput(

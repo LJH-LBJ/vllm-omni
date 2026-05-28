@@ -506,6 +506,7 @@ class _ThinkerToTalkerChunkedPrefill:
         if output_token_ids:
             emit_info["ids"]["output"] = output_token_ids
             emit_info["meta"]["override_keys"] = [("ids", "all"), ("ids", "prompt"), ("ids", "output")]
+            emit_info["meta"]["is_final_prefill_chunk"] = True
         return emit_info
 
     @staticmethod
