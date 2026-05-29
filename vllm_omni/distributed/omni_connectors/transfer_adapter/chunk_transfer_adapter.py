@@ -323,7 +323,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         external_req_id: str,
     ) -> bool:
         if payload_data.get("meta", {}).get("is_final_prefill_chunk", False):
-            self._pending_prefill_boot[external_req_id] = self.request_payload.get(external_req_id, payload_data)
+            pending_payload = self.request_payload.get(external_req_id, payload_data)
+            self._pending_prefill_boot[external_req_id] = {
+                key: (dict(value) if isinstance(value, dict) else value)
+                for key, value in pending_payload.items()
+            }
             self._pending_load_reqs.append(request)
             with self._recv_cond:
                 self._recv_cond.notify()
