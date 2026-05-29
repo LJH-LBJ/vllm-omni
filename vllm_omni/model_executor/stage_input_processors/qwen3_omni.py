@@ -368,200 +368,14 @@ def _get_streaming_codec_delta_len(
 # =========================
 
 
-class _ThinkerToTalkerChunkedPrefill:
-    """Pure-namespace class grouping all helpers introduced by chunked-prefill support.
-
-    Every method is @staticmethod — this class is a namespace, not instantiated.
-    All logic here is specific to the chunked-prefill path and is called only
-    from ``thinker2talker_async_chunk``.  Nothing here is needed for the
-    non-chunked streaming / PD code paths.
-    """
-
-    # ---- Per-request state -------------------------------------------------
-
-    @staticmethod
-    def get_prefill_state(transfer_manager: Any, request_id: str) -> dict[str, Any]:
-        """Lazily create and return the per-request chunked-prefill progress dict.
-
-        The state tracks how many prompt tokens have already been forwarded
-        to the talker (``sent_prompt_tokens``).  It is stored on
-        *transfer_manager* so that it survives across multiple scheduler steps.
-        """
-        state_map = getattr(transfer_manager, "_prefill_part_state", None)
-        if state_map is None:
-            state_map = {}
-            setattr(transfer_manager, "_prefill_part_state", state_map)
-        if request_id not in state_map:
-            state_map[request_id] = {"sent_prompt_tokens": 0}
-        return state_map[request_id]
-
-    # ---- System-token filtering --------------------------------------------
-
-    @staticmethod
-    def _get_system_segment_ranges(prompt_token_ids: list[int]) -> list[tuple[int, int]]:
-        """Return half-open (start, end) index ranges for system segments in the full prompt."""
-        im_starts = [i for i in range(len(prompt_token_ids)) if prompt_token_ids[i] == _IM_START_TOKEN_ID]
-        im_starts.append(len(prompt_token_ids))
-        ranges: list[tuple[int, int]] = []
-        for idx in range(len(im_starts) - 1):
-            s, e = im_starts[idx], im_starts[idx + 1]
-            if s + 1 < len(prompt_token_ids) and prompt_token_ids[s + 1] == _SYSTEM_TOKEN_ID:
-                ranges.append((s, e))
-        return ranges
-
-    @staticmethod
-    def filter_system_rows(
-        prompt_token_ids: list[int],
-        chunk_start: int,
-        embeds: torch.Tensor,
-        hidden: torch.Tensor,
-    ) -> tuple[list[int], torch.Tensor, torch.Tensor]:
-        """Remove system-segment rows from a chunk's embeddings.
-
-        Args:
-            prompt_token_ids: Full prompt token IDs for the request.
-            chunk_start: Position of the first token of this chunk in the full prompt.
-            embeds: [chunk_size, D] embedding tensor for the current chunk.
-            hidden: [chunk_size, D] hidden state tensor for the current chunk.
-
-        Returns:
-            (filtered_full_ids, filtered_embeds, filtered_hidden):
-              - filtered_full_ids: full prompt IDs with all system tokens removed.
-                Used as thinker_input_ids / thinker_sequences sent to the talker.
-              - filtered_embeds / filtered_hidden: current-chunk rows with system
-                positions removed.
-        """
-        system_ranges = _ThinkerToTalkerChunkedPrefill._get_system_segment_ranges(prompt_token_ids)
-        if not system_ranges:
-            return prompt_token_ids, embeds, hidden
-
-        def _in_system(pos: int) -> bool:
-            return any(s <= pos < e for s, e in system_ranges)
-
-        # Full non-system IDs (constant across chunks, sent as override each step)
-        filtered_full_ids = [prompt_token_ids[p] for p in range(len(prompt_token_ids)) if not _in_system(p)]
-
-        # Per-chunk keep mask
-        chunk_size = embeds.shape[0]
-        keep_mask = torch.tensor(
-            [not _in_system(chunk_start + i) for i in range(chunk_size)],
-            dtype=torch.bool,
-        )
-        return filtered_full_ids, embeds[keep_mask], hidden[keep_mask]
-
-    # ---- Payload builders --------------------------------------------------
-
-    @staticmethod
-    def build_prefill_payload(
-        thinker_emb: torch.Tensor,
-        thinker_hid: torch.Tensor,
-        thinker_embed: dict,
-        prompt_token_ids: list[int],
-        chunk_start: int,
-        state: dict,
-        output_token_ids: list[int],
-        speaker: Any = None,
-        language: Any = None,
-    ) -> "OmniPayload | None":
-        """Build the payload for one chunked-prefill step (Thinker→Talker).
-
-        Updates ``sent_prompt_tokens`` progress in *state*.
-        Returns None if the entire chunk consisted of system tokens.
-        """
-        embeds_cpu = thinker_emb.detach().cpu()
-        hidden_cpu = thinker_hid.detach().cpu()
-        state["sent_prompt_tokens"] = chunk_start + embeds_cpu.shape[0]
-
-        filtered_ids, embeds_cpu, hidden_cpu = _ThinkerToTalkerChunkedPrefill.filter_system_rows(
-            prompt_token_ids, chunk_start, embeds_cpu, hidden_cpu
-        )
-
-        # Entire chunk was system tokens — nothing to forward this step.
-        if embeds_cpu.shape[0] == 0:
-            return None
-
-        emit_info: OmniPayload = {
-            "embed": {
-                "prefill": embeds_cpu,
-                "tts_bos": _as_tensor_or_none(thinker_embed.get("tts_bos")),
-                "tts_eos": _as_tensor_or_none(thinker_embed.get("tts_eos")),
-                "tts_pad": _as_tensor_or_none(thinker_embed.get("tts_pad")),
-            },
-            "hidden_states": {"output": hidden_cpu},
-            "ids": {
-                "all": filtered_ids,
-                "prompt": filtered_ids,
-            },
-            "meta": {
-                "finished": torch.tensor(False, dtype=torch.bool),
-                "override_keys": [("ids", "all"), ("ids", "prompt")],
-            },
-            "speaker": speaker,
-            "language": language,
-        }
-        # Last prefill chunk: thinker already emitted the first output token
-        # in this same scheduler step. Forward the token IDs now so the talker
-        # has the correct sequence length; the decode *embedding* is absent
-        # here and will arrive in the very next decode step's pooling_output.
-        if output_token_ids:
-            emit_info["ids"]["output"] = output_token_ids
-            emit_info["meta"]["override_keys"] = [("ids", "all"), ("ids", "prompt"), ("ids", "output")]
-            emit_info["meta"]["is_final_prefill_chunk"] = True
-        return emit_info
-
-    @staticmethod
-    def build_decode_payload(
-        thinker_emb: torch.Tensor,
-        thinker_hid: torch.Tensor,
-        output_token_ids: list[int],
-        is_finished: bool,
-        speaker: Any = None,
-        language: Any = None,
-    ) -> "OmniPayload":
-        """Build the payload for one decode step (Thinker→Talker)."""
-        talker_additional_info: OmniPayload = {
-            "meta": {
-                "finished": torch.tensor(is_finished, dtype=torch.bool),
-                "thinker_finished": is_finished,
-            },
-            "speaker": speaker,
-            "language": language,
-        }
-
-        if output_token_ids:
-            talker_additional_info["meta"]["override_keys"] = [("ids", "output")]
-            talker_additional_info["embed"] = {
-                "decode": thinker_emb.detach().cpu(),
-            }
-            talker_additional_info["ids"] = {"output": output_token_ids}
-        else:
-            # Edge case: is_finished with no output tokens (request aborted mid-prefill).
-            talker_additional_info["embed"] = {"prefill": thinker_emb.detach().cpu()}
-            talker_additional_info["hidden_states"] = {"output": thinker_hid.detach().cpu()}
-        return talker_additional_info
-
-
 def thinker2talker_async_chunk(
     transfer_manager: Any,
     pooling_output: OmniPayload,
     request: OmniEngineCoreRequest,
     is_finished: bool = False,
 ) -> OmniPayloadStruct | None:
-    """
-    Connector from Thinker → Talker supporting chunked prefill.
-    Two phases:
-
-      if prefill_still_pending and not (is_finished and n_decoded == 0)  (prefill):
-        Forward one chunk of prompt tokens to the Talker.  May be called
-        multiple times (one per prefill chunk) until all prompt tokens have
-        been sent (tracked by state["sent_prompt_tokens"]).
-      else  (decode):
-        Ordinary decode step.
-    """
-
     request_id = request.external_req_id
     if not isinstance(pooling_output, dict):
-        logger.debug("thinker2talker_async_chunk: skip non-dict pooling_output for req=%s", request_id)
         return None
     speaker = extract_speaker_from_request(request)
     language = extract_language_from_request(request)
@@ -573,42 +387,75 @@ def thinker2talker_async_chunk(
     thinker_emb = _layer_tensor(thinker_layers, _EMBED_LAYER_KEY)
     thinker_hid = _layer_tensor(thinker_layers, _HIDDEN_LAYER_KEY)
     if thinker_emb is None or thinker_hid is None:
-        logger.debug(
-            "thinker2talker_async_chunk: missing thinker layers for req=%s (embed=%s hidden=%s)",
-            request_id,
-            thinker_emb is not None,
-            thinker_hid is not None,
-        )
         return None
 
     output_token_ids = _ensure_list(request.output_token_ids)
     n_decoded = len(output_token_ids)
     prompt_token_ids = _ensure_list(request.prompt_token_ids)
-    state = _ThinkerToTalkerChunkedPrefill.get_prefill_state(transfer_manager, request_id)
+    state_map = getattr(transfer_manager, "_prefill_part_state", None)
+    if state_map is None:
+        state_map = {}
+        setattr(transfer_manager, "_prefill_part_state", state_map)
+    state = state_map.setdefault(request_id, {"sent_prompt_tokens": 0})
     chunk_start = state["sent_prompt_tokens"]
     prefill_still_pending = chunk_start < len(prompt_token_ids)
 
     if prefill_still_pending and not (is_finished and n_decoded == 0):
-        return _ThinkerToTalkerChunkedPrefill.build_prefill_payload(
-            thinker_emb,
-            thinker_hid,
-            thinker_embed,
-            prompt_token_ids,
-            chunk_start,
-            state,
-            output_token_ids,
-            speaker=speaker,
-            language=language,
-        )
+        embeds_cpu = thinker_emb.detach().cpu()
+        hidden_cpu = thinker_hid.detach().cpu()
+        state["sent_prompt_tokens"] = chunk_start + embeds_cpu.shape[0]
+        im_starts = [i for i, token_id in enumerate(prompt_token_ids) if token_id == _IM_START_TOKEN_ID]
+        im_starts.append(len(prompt_token_ids))
+        system_ranges = [
+            (s, e)
+            for s, e in zip(im_starts, im_starts[1:])
+            if s + 1 < len(prompt_token_ids) and prompt_token_ids[s + 1] == _SYSTEM_TOKEN_ID
+        ]
+        if system_ranges:
+            def _in_system(pos: int) -> bool:
+                return any(s <= pos < e for s, e in system_ranges)
+
+            filtered_ids = [token_id for pos, token_id in enumerate(prompt_token_ids) if not _in_system(pos)]
+            keep_mask = torch.tensor([not _in_system(chunk_start + i) for i in range(embeds_cpu.shape[0])], dtype=torch.bool)
+            embeds_cpu, hidden_cpu = embeds_cpu[keep_mask], hidden_cpu[keep_mask]
+        else:
+            filtered_ids = prompt_token_ids
+        if embeds_cpu.shape[0] == 0:
+            return None
+        emit_info: OmniPayload = {
+            "embed": {
+                "prefill": embeds_cpu,
+                "tts_bos": _as_tensor_or_none(thinker_embed.get("tts_bos")),
+                "tts_eos": _as_tensor_or_none(thinker_embed.get("tts_eos")),
+                "tts_pad": _as_tensor_or_none(thinker_embed.get("tts_pad")),
+            },
+            "hidden_states": {"output": hidden_cpu},
+            "ids": {"all": filtered_ids, "prompt": filtered_ids},
+            "meta": {"finished": torch.tensor(False, dtype=torch.bool), "override_keys": [("ids", "all"), ("ids", "prompt")]},
+            "speaker": speaker,
+            "language": language,
+        }
+        if output_token_ids:
+            emit_info["ids"]["output"] = output_token_ids
+            emit_info["meta"].update({
+                "override_keys": [("ids", "all"), ("ids", "prompt"), ("ids", "output")],
+                "is_final_prefill_chunk": True,
+            })
+        return emit_info
+
+    talker_additional_info: OmniPayload = {
+        "meta": {"finished": torch.tensor(is_finished, dtype=torch.bool), "thinker_finished": is_finished},
+        "speaker": speaker,
+        "language": language,
+    }
+    if output_token_ids:
+        talker_additional_info["meta"]["override_keys"] = [("ids", "output")]
+        talker_additional_info["embed"] = {"decode": thinker_emb.detach().cpu()}
+        talker_additional_info["ids"] = {"output": output_token_ids}
     else:
-        return _ThinkerToTalkerChunkedPrefill.build_decode_payload(
-            thinker_emb,
-            thinker_hid,
-            output_token_ids,
-            is_finished,
-            speaker=speaker,
-            language=language,
-        )
+        talker_additional_info["embed"] = {"prefill": thinker_emb.detach().cpu()}
+        talker_additional_info["hidden_states"] = {"output": thinker_hid.detach().cpu()}
+    return talker_additional_info
 
 
 def thinker2talker_full_payload(
