@@ -822,7 +822,10 @@ class Qwen3OmniMoeForConditionalGeneration(
         num_processed_thinker_tokens = payload.get("meta", {}).get("num_processed_thinker_tokens", 0)
         if thinker_sequences is None:
             thinker_sequences = ids_chatml
-        chunk_size = input_ids.shape[0]
+        if self.vllm_config.model_config.async_chunk:
+            chunk_size = input_ids.shape[0]
+        else:
+            chunk_size = thinker_sequence_embeds.shape[0]
         assert chunk_size > 0, f"Prefill chunk can not be 0. Received chunk_size={chunk_size}."
         chunk_offset = num_processed_thinker_tokens
 
@@ -1154,11 +1157,14 @@ class Qwen3OmniMoeForConditionalGeneration(
             first_text_embed_all = self.talker.text_projection(decode_assistant_fill.to(tts_pad_embed.device)).to(
                 assistant_hidden.dtype
             )
-            first_text_embed = first_text_embed_all[0:1]
-            extra_text_embeds = first_text_embed_all[1:]
+            first_text_embed = first_text_embed_all[0:1]  # pos 8 = tok0 only
+            extra_text_embeds = first_text_embed_all[1:]  # tok1..tok(N-1) → trailing_text
         elif assistant_hidden.shape[0] > 3:
-            first_text_embed = assistant_hidden[3:4]
-            extra_text_embeds = assistant_hidden[4:]
+            # Full-payload (non-async-chunk) path: assistant_hidden already contains
+            # projected thinker response embeddings. Use them directly so pos-8 gets
+            # the real tok0 embed and trailing_text is built from tok1..tok(N-1).
+            first_text_embed = assistant_hidden[3:4]  # pos 8 = tok0 (already projected)
+            extra_text_embeds = assistant_hidden[4:]  # tok1..tok(N-1) → trailing_text
         else:
             first_text_embed = torch.zeros((1, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
             extra_text_embeds = torch.empty((0, hidden_dim), device=tts_pad_embed.device, dtype=assistant_hidden.dtype)
@@ -1170,10 +1176,10 @@ class Qwen3OmniMoeForConditionalGeneration(
             assistant_proj3 = assistant_hidden[:3]
         assistant_text_hidden = torch.cat(
             (
-                assistant_proj3,
-                tts_pad_embed.expand(4, -1),
-                tts_bos_embed,
-                first_text_embed,
+                assistant_proj3,  # pos 0-2: thinker prefill projections (padded if partial)
+                tts_pad_embed.expand(4, -1),  # pos 3-6
+                tts_bos_embed,  # pos 7
+                first_text_embed,  # pos 8 = tok0
             ),
             dim=0,
         )
