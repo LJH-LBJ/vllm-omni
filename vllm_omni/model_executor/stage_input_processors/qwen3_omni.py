@@ -479,11 +479,14 @@ def thinker2talker_async_chunk(
             if s + 1 < len(prompt_token_ids) and prompt_token_ids[s + 1] == _SYSTEM_TOKEN_ID
         ]
         if system_ranges:
+
             def _in_system(pos: int) -> bool:
                 return any(s <= pos < e for s, e in system_ranges)
 
             filtered_ids = [token_id for pos, token_id in enumerate(prompt_token_ids) if not _in_system(pos)]
-            keep_mask = torch.tensor([not _in_system(chunk_start + i) for i in range(embeds_cpu.shape[0])], dtype=torch.bool)
+            keep_mask = torch.tensor(
+                [not _in_system(chunk_start + i) for i in range(embeds_cpu.shape[0])], dtype=torch.bool
+            )
             embeds_cpu, hidden_cpu = embeds_cpu[keep_mask], hidden_cpu[keep_mask]
         else:
             filtered_ids = prompt_token_ids
@@ -498,16 +501,21 @@ def thinker2talker_async_chunk(
             },
             "hidden_states": {"output": hidden_cpu},
             "ids": {"all": filtered_ids, "prompt": filtered_ids},
-            "meta": {"finished": torch.tensor(False, dtype=torch.bool), "override_keys": [("ids", "all"), ("ids", "prompt")]},
+            "meta": {
+                "finished": torch.tensor(False, dtype=torch.bool),
+                "override_keys": [("ids", "all"), ("ids", "prompt")],
+            },
             "speaker": speaker,
             "language": language,
         }
         if output_token_ids:
             emit_info["ids"]["output"] = output_token_ids
-            emit_info["meta"].update({
-                "override_keys": [("ids", "all"), ("ids", "prompt"), ("ids", "output")],
-                "is_final_prefill_chunk": True,
-            })
+            emit_info["meta"].update(
+                {
+                    "override_keys": [("ids", "all"), ("ids", "prompt"), ("ids", "output")],
+                    "is_final_prefill_chunk": True,
+                }
+            )
         return emit_info
 
     if request.resumable:

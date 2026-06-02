@@ -279,8 +279,13 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             payload_segment_finished = self._is_truthy_scalar(meta.get("is_segment_finished"))
             if self.model_mode == "ar":
                 early = self._handle_ar_payload(
-                    request, req_id, external_req_id,
-                    payload_data, meta, payload_finished, payload_segment_finished,
+                    request,
+                    req_id,
+                    external_req_id,
+                    payload_data,
+                    meta,
+                    payload_finished,
+                    payload_segment_finished,
                 )
                 if payload_segment_finished:
                     self.segment_finished_requests.add(req_id)
@@ -421,8 +426,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if payload_data.get("meta", {}).get("is_final_prefill_chunk", False):
             pending_payload = self.request_payload.get(external_req_id, payload_data)
             self._pending_prefill_boot[external_req_id] = {
-                key: (dict(value) if isinstance(value, dict) else value)
-                for key, value in pending_payload.items()
+                key: (dict(value) if isinstance(value, dict) else value) for key, value in pending_payload.items()
             }
             self._pending_load_reqs.append(request)
             with self._recv_cond:

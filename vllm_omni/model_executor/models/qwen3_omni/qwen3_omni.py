@@ -857,8 +857,18 @@ class Qwen3OmniMoeForConditionalGeneration(
         else:
             decode_assistant_fill = None
 
-        thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
-        thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
+        # In full-payload mode (meta.finished=True), use ALL remaining thinker embeddings
+        # so that the assistant response embeddings are included in extra_text_embeds
+        # inside _get_talker_assistant_parts, giving the talker correct trailing_text.
+        # Without this, only the prompt portion (chunk_size rows) is used, resulting
+        # in 2-8 audio frames and Whisper hallucinations in the default test scenario.
+        is_final_chunk = bool(payload.get("meta", {}).get("finished", False))
+        if is_final_chunk:
+            thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset:]
+            thinker_hidden_chunk = thinker_hidden_states[chunk_offset:]
+        else:
+            thinker_sequence_embed_chunk = thinker_sequence_embeds[chunk_offset : chunk_offset + chunk_size]
+            thinker_hidden_chunk = thinker_hidden_states[chunk_offset : chunk_offset + chunk_size]
 
         actual_embed_size = thinker_sequence_embed_chunk.shape[0]
         thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + actual_embed_size]
