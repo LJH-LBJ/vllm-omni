@@ -195,6 +195,51 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         with self._save_cond:
             self._save_cond.notify()
 
+    def _handle_ar_payload(
+        self,
+        request: Request,
+        req_id: str,
+        external_req_id: str,
+        payload_data: dict,
+        meta: dict,
+        payload_finished: bool,
+        payload_segment_finished: bool,
+    ) -> bool | None:
+        """Handle one received payload chunk for the AR (talker) stage.
+
+        Returns ``True`` if the caller should immediately return True (early
+        exit), or ``None`` to fall through to the normal finished-load bookkeeping.
+        """
+        embed_data = payload_data.get("embed", {})
+        if not isinstance(embed_data, dict):
+            embed_data = {}
+        has_prefill_embeds = isinstance(embed_data.get("prefill"), torch.Tensor)
+        has_decode_embed = isinstance(embed_data.get("decode"), torch.Tensor)
+
+        decode_embed = None
+        if has_decode_embed:
+            decode_embed = embed_data.pop("decode")
+        if isinstance(decode_embed, torch.Tensor):
+            boot_payload = self._release_pending_prefill_boot(external_req_id, decode_embed, meta)
+            if boot_payload is not None:
+                request.additional_information = boot_payload
+                self._finished_load_reqs.add(req_id)
+                self._evict_prefill_tensors(external_req_id)
+                return True
+            self._queue_decode_embed(external_req_id, decode_embed)
+
+        merged_payload = self._update_request_payload(external_req_id, payload_data)
+        request.additional_information = merged_payload
+
+        prefill_boundary = payload_finished or has_decode_embed
+        if has_prefill_embeds and not prefill_boundary:
+            if self._gate_chunked_prefill_chunk(request, payload_data, external_req_id):
+                return True
+
+        if prefill_boundary and not payload_finished:
+            self._evict_prefill_tensors(external_req_id)
+        return None
+
     def _poll_single_request(self, request: Request):
         stage_id = self.connector.stage_id
         target_stage_id = stage_id - 1
@@ -226,40 +271,27 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         payload_data, size = result
 
         if payload_data:
+            # Update connector state
             self.get_req_chunk[req_id] += 1
 
             meta = payload_data.get("meta", {})
             payload_finished = self._is_truthy_scalar(meta.get("finished"))
             payload_segment_finished = self._is_truthy_scalar(meta.get("is_segment_finished"))
             if self.model_mode == "ar":
-                embed_data = payload_data.get("embed", {})
-                if not isinstance(embed_data, dict):
-                    embed_data = {}
-                has_prefill_embeds = isinstance(embed_data.get("prefill"), torch.Tensor)
-                has_decode_embed = isinstance(embed_data.get("decode"), torch.Tensor)
-
-                decode_embed = None
-                if has_decode_embed:
-                    decode_embed = embed_data.pop("decode")
-                if isinstance(decode_embed, torch.Tensor):
-                    boot_payload = self._release_pending_prefill_boot(external_req_id, decode_embed, meta)
-                    if boot_payload is not None:
-                        request.additional_information = boot_payload
-                        if payload_finished:
-                            self.finished_requests.add(req_id)
-                            request.resumable = False
-                        if payload_segment_finished:
-                            self.segment_finished_requests.add(req_id)
-                        self._finished_load_reqs.add(req_id)
-                        self._evict_prefill_tensors(external_req_id)
-                        return True
-                    self._queue_decode_embed(external_req_id, decode_embed)
-
-                merged_payload = self._update_request_payload(external_req_id, payload_data)
-                request.additional_information = merged_payload
+                early = self._handle_ar_payload(
+                    request, req_id, external_req_id,
+                    payload_data, meta, payload_finished, payload_segment_finished,
+                )
+                if payload_segment_finished:
+                    self.segment_finished_requests.add(req_id)
+                if early is True:
+                    if payload_finished:
+                        self.finished_requests.add(req_id)
+                        request.resumable = False
+                    return True
                 if chunk_id > 0 and request.resumable:
+                    # For new streaming input segment, we should update prompt from payload
                     construct_next_stage_streaming_input_prompt(payload_data, request)
-
                 if payload_finished:
                     pending_decode = self._pending_decode.get(external_req_id)
                     if pending_decode is not None and pending_decode.embeds:
@@ -267,15 +299,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     else:
                         self.finished_requests.add(req_id)
                     request.resumable = False
-                if payload_segment_finished:
-                    self.segment_finished_requests.add(req_id)
-                prefill_boundary = payload_finished or has_decode_embed
-                if has_prefill_embeds and not prefill_boundary:
-                    if self._gate_chunked_prefill_chunk(request, payload_data, external_req_id):
-                        return True
-
-                if prefill_boundary and not payload_finished:
-                    self._evict_prefill_tensors(external_req_id)
             else:
                 if payload_finished:
                     self.finished_requests.add(req_id)

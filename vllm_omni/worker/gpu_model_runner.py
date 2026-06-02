@@ -1662,8 +1662,7 @@ class OmniGPUModelRunner(GPUModelRunner):
 
                 # update the inputs_embeds and input_ids
                 seg_len = min(span_len, req_embeds.shape[0])
-                if seg_len > 0:
-                    inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
+                inputs_embeds[s : s + seg_len] = req_embeds[:seg_len]
                 if isinstance(req_input_ids, torch.Tensor) and req_input_ids.numel() == seg_len:
                     input_ids[s : s + seg_len] = req_input_ids
 
@@ -1833,24 +1832,6 @@ class OmniGPUModelRunner(GPUModelRunner):
         else:
             dest[key] = value
 
-    # Chunked-prefill: meta keys whose values must never regress.
-    # The runner writes the authoritative value after each chunk; scheduler
-    # payloads (from chunk_transfer_adapter) may carry a stale lower snapshot
-    # due to background-thread timing races. Never let a lower value overwrite
-    # the runner's progress.
-    _CHUNKED_PREFILL_MONOTONE_META_KEYS: frozenset[str] = frozenset({"num_processed_thinker_tokens"})
-
-    def _chunked_prefill_try_store_monotone(self, existing_sub: dict, type_key: str, qual: str, val: object) -> bool:
-        """If ``(type_key, qual)`` names a chunked-prefill monotone meta key,
-        store ``val`` only when it advances the existing value and return True.
-        Otherwise return False so the caller can fall back to normal storage."""
-        if type_key != "meta" or qual not in self._CHUNKED_PREFILL_MONOTONE_META_KEYS:
-            return False
-        current = existing_sub.get(qual)
-        if current is None or val > current:
-            existing_sub[qual] = val
-        return True
-
     def _update_intermediate_buffer(self, req_id: str, upd: dict) -> None:
         if not isinstance(upd, dict) or not upd:
             return
@@ -1866,8 +1847,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             if isinstance(v, dict):
                 existing_sub = existing.setdefault(k, {})
                 for qual, val in v.items():
-                    if self._chunked_prefill_try_store_monotone(existing_sub, k, qual, val):
-                        continue
                     self._store_value(existing_sub, qual, val, {q for tk, q in gpu_keys if tk == k})
             else:
                 self._store_value(existing, k, v, set())
