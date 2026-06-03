@@ -492,49 +492,53 @@ def thinker2talker_async_chunk(
             filtered_ids = prompt_token_ids
         if embeds_cpu.shape[0] == 0:
             return None
-        emit_info: OmniPayload = {
-            "embed": {
-                "prefill": embeds_cpu,
-                "tts_bos": _as_tensor_or_none(thinker_embed.get("tts_bos")),
-                "tts_eos": _as_tensor_or_none(thinker_embed.get("tts_eos")),
-                "tts_pad": _as_tensor_or_none(thinker_embed.get("tts_pad")),
-            },
-            "hidden_states": {"output": hidden_cpu},
-            "ids": {"all": filtered_ids, "prompt": filtered_ids},
-            "meta": {
-                "finished": torch.tensor(False, dtype=torch.bool),
-                "override_keys": [("ids", "all"), ("ids", "prompt")],
-            },
-            "speaker": speaker,
-            "language": language,
-        }
+        meta = MetaStruct(
+            finished=torch.tensor(False, dtype=torch.bool),
+            override_keys=[("ids", "all"), ("ids", "prompt")],
+        )
+        ids = IdsStruct(all=filtered_ids, prompt=filtered_ids)
         if output_token_ids:
-            emit_info["ids"]["output"] = output_token_ids
-            emit_info["meta"].update(
-                {
-                    "override_keys": [("ids", "all"), ("ids", "prompt"), ("ids", "output")],
-                    "is_final_prefill_chunk": True,
-                }
-            )
-        return emit_info
+            ids.output = output_token_ids
+            meta.override_keys = [("ids", "all"), ("ids", "prompt"), ("ids", "output")]
+            meta.is_final_prefill_chunk = True
+        return OmniPayloadStruct(
+            embed=EmbeddingsStruct(
+                prefill=embeds_cpu,
+                tts_bos=_as_tensor_or_none(thinker_embed.get("tts_bos")),
+                tts_eos=_as_tensor_or_none(thinker_embed.get("tts_eos")),
+                tts_pad=_as_tensor_or_none(thinker_embed.get("tts_pad")),
+            ),
+            hidden_states=HiddenStatesStruct(output=hidden_cpu),
+            ids=ids,
+            meta=meta,
+            speaker=speaker,
+            language=language,
+        )
 
     if request.resumable:
         return _construct_thinker2talker_streaming_input_async_chunk(
             is_finished, request, thinker_emb, thinker_hid, transfer_manager
         )
-    talker_additional_info: OmniPayload = {
-        "meta": {"finished": torch.tensor(is_finished, dtype=torch.bool), "thinker_finished": is_finished},
-        "speaker": speaker,
-        "language": language,
-    }
+    meta = MetaStruct(
+        finished=torch.tensor(is_finished, dtype=torch.bool),
+        thinker_finished=is_finished,
+    )
     if output_token_ids:
-        talker_additional_info["meta"]["override_keys"] = [("ids", "output")]
-        talker_additional_info["embed"] = {"decode": thinker_emb.detach().cpu()}
-        talker_additional_info["ids"] = {"output": output_token_ids}
-    else:
-        talker_additional_info["embed"] = {"prefill": thinker_emb.detach().cpu()}
-        talker_additional_info["hidden_states"] = {"output": thinker_hid.detach().cpu()}
-    return talker_additional_info
+        meta.override_keys = [("ids", "output")]
+        return OmniPayloadStruct(
+            meta=meta,
+            embed=EmbeddingsStruct(decode=thinker_emb.detach().cpu()),
+            ids=IdsStruct(output=output_token_ids),
+            speaker=speaker,
+            language=language,
+        )
+    return OmniPayloadStruct(
+        meta=meta,
+        embed=EmbeddingsStruct(prefill=thinker_emb.detach().cpu()),
+        hidden_states=HiddenStatesStruct(output=thinker_hid.detach().cpu()),
+        speaker=speaker,
+        language=language,
+    )
 
 
 def thinker2talker_full_payload(

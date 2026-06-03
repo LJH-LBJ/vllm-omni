@@ -203,7 +203,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         payload_data: dict,
         meta: dict,
         payload_finished: bool,
-        payload_segment_finished: bool,
     ) -> bool | None:
         """Handle one received payload chunk for the AR (talker) stage.
 
@@ -285,7 +284,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     payload_data,
                     meta,
                     payload_finished,
-                    payload_segment_finished,
                 )
                 if payload_segment_finished:
                     self.segment_finished_requests.add(req_id)
@@ -547,12 +545,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if success:
             self.put_req_chunk[external_req_id] += 1
             logger.debug(f"[Stage-{stage_id}] Sent {connector_put_key}")
-            # payload_data is a dict (returned by thinker2talker_async_chunk).
-            # On the receiver side, the msgpack wire round-trip also produces dicts.
-            meta = payload_data.get("meta", {}) if isinstance(payload_data, dict) else {}
-            finished_flag = meta.get(
-                "finished", payload_data.get("finished") if isinstance(payload_data, dict) else None
-            )
+            finished_flag = payload_data.meta.finished if payload_data.meta is not None else None
             is_payload_finished = False
             if isinstance(finished_flag, torch.Tensor):
                 is_payload_finished = finished_flag.numel() == 1 and bool(finished_flag.item())
