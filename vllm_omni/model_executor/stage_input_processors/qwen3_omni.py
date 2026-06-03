@@ -3,12 +3,12 @@
 # Copyright 2025 The Qwen team.
 """Stage input processor for Qwen3 Omni MoE: Thinker → Talker transition."""
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 import torch
 from vllm.inputs import TextPrompt
-from vllm.logger import init_logger
 from vllm.platforms import current_platform
 
 from vllm_omni.data_entry_keys import (
@@ -30,7 +30,7 @@ from vllm_omni.model_executor.stage_input_processors.tts_utils import (
     extract_speaker_from_request,
 )
 
-logger = init_logger(__name__)
+logger = logging.getLogger(__name__)
 
 # Pooling output layer keys: "0" = word embedding, "24" = accept_hidden_layer
 _EMBED_LAYER_KEY = "0"
@@ -441,11 +441,17 @@ def thinker2talker_async_chunk(
     request: OmniEngineCoreRequest,
     is_finished: bool = False,
 ) -> OmniPayloadStruct | None:
+    """
+        Process thinker outputs to create talker inputs.
+        1. thinker's text generation outputs (token IDs + hidden states)
+        2. Split hidden states into: prompt embeddings + generated embeddings
+        3. Package for talker with additional information
+    """
+
     request_id = request.external_req_id
     if not isinstance(pooling_output, dict):
+        logger.debug("thinker2talker_async_chunk: skip non-dict pooling_output for req=%s", request_id)
         return None
-    speaker = extract_speaker_from_request(request)
-    language = extract_language_from_request(request)
 
     thinker_hs = pooling_output.get("hidden_states", {})
     thinker_layers = thinker_hs.get("layers", {}) if isinstance(thinker_hs, dict) else {}
@@ -454,7 +460,15 @@ def thinker2talker_async_chunk(
     thinker_emb = _layer_tensor(thinker_layers, _EMBED_LAYER_KEY)
     thinker_hid = _layer_tensor(thinker_layers, _HIDDEN_LAYER_KEY)
     if thinker_emb is None or thinker_hid is None:
+        logger.debug(
+            "thinker2talker_async_chunk: missing thinker layers for req=%s (embed=%s hidden=%s)",
+            request_id,
+            thinker_emb is not None,
+            thinker_hid is not None,
+        )
         return None
+    speaker = extract_speaker_from_request(request)
+    language = extract_language_from_request(request)
 
     output_token_ids = _ensure_list(request.output_token_ids)
     n_decoded = len(output_token_ids)

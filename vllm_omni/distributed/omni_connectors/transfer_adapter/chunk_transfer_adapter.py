@@ -247,6 +247,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         external_req_id = self.request_ids_mapping.get(req_id, req_id)
         connector_get_key = f"{external_req_id}_{target_stage_id}_{chunk_id}"
 
+        # Use timeout=0 for non-blocking poll
         pending_decode = self._pending_decode.get(external_req_id)
         if self.model_mode == "ar" and pending_decode is not None and pending_decode.embeds:
             cached_payload = self.request_payload.get(external_req_id)
@@ -295,6 +296,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 if chunk_id > 0 and request.resumable:
                     # For new streaming input segment, we should update prompt from payload
                     construct_next_stage_streaming_input_prompt(payload_data, request)
+
                 if payload_finished:
                     pending_decode = self._pending_decode.get(external_req_id)
                     if pending_decode is not None and pending_decode.embeds:
@@ -353,6 +355,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     # first DAC frame arrives.
                     return False
 
+            # Mark as finished for consumption
             self._finished_load_reqs.add(req_id)
             logger.debug(f"[Stage-{stage_id}] Received one chunk for key {connector_get_key}")
             return True
@@ -545,6 +548,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if success:
             self.put_req_chunk[external_req_id] += 1
             logger.debug(f"[Stage-{stage_id}] Sent {connector_put_key}")
+            # Sender uses struct attr access here; the receive path in
+            # `_load_one_request` / `_update_request_payload` reads dict keys.
+            # That asymmetry is intentional: `OmniMsgpackDecoder` is type-erased
+            # (no target type), so the wire round-trips struct -> dict. If you
+            # change the schema, update both ends — see test_wire_round_trip.
             finished_flag = payload_data.meta.finished if payload_data.meta is not None else None
             is_payload_finished = False
             if isinstance(finished_flag, torch.Tensor):

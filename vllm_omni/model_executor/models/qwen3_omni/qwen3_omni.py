@@ -512,6 +512,10 @@ class Qwen3OmniMoeForConditionalGeneration(
             )
         elif self.model_stage == "talker":
             talker_hidden = model_outputs
+            # Here is the only place to use model_intermediate_buffer. After MTP in the
+            # preprocess function, the code_predictor_codes are stored in the info_dict list.
+            # We need to merge the tensors from different requests into a single tensor.
+            # In the future, we may allow user to custom an aggregated function.
             info_dicts = kwargs.get("model_intermediate_buffer")
             if info_dicts is None:
                 info_dicts = kwargs.get("runtime_additional_information")
@@ -948,7 +952,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             thinker_embed, tts_bos_thinker, tts_eos_thinker, tts_pad_thinker
         )
 
-        talker_input_embeds = []
+        talker_input_embeds = []  # [1 t d]
         talker_input_ids = []
 
         chunk_start_index = chunk_offset
@@ -1181,6 +1185,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         )  # [t, d]
         hidden_dim = assistant_hidden.shape[-1] if assistant_hidden.shape[0] > 0 else tts_pad_embed.shape[-1]
 
+        # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
         has_first_text = isinstance(decode_assistant_fill, torch.Tensor) and decode_assistant_fill.shape[0] >= 1
         if has_first_text:
             first_text_embed_all = self.talker.text_projection(decode_assistant_fill.to(tts_pad_embed.device)).to(

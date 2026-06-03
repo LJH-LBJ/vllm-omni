@@ -256,10 +256,32 @@ class Orchestrator:
         transfer_emitter: Any,
         log_stats: bool = False,
     ) -> None:
-        """Wire up all metric-related orchestrator state."""
+        """Wire up all metric-related orchestrator state.
+
+        Sets ``self._running_counter`` and ``self._transfer_emitter``
+        (both optional, used by request-add / forward paths), builds the
+        ``(stage_id, replica_id) ↔ engine_idx`` lookup used at record() time,
+        and best-effort constructs the ``OmniPrometheusStatLogger`` wrap
+        that exposes ~37 upstream ``vllm:*`` families with per-(stage,
+        replica) labels. Failure to build the wrap is logged and metrics
+        are simply disabled — orchestrator construction continues so unit
+        tests with a minimal ``vllm_config`` still pass.
+
+        ``log_stats=False`` short-circuits the wrap entirely so the
+        ~65 upstream ``vllm:*`` families are not registered in the
+        Prometheus default registry at all. The per-step record() path
+        already no-ops on ``scheduler_stats is None`` (which is what
+        the upstream scheduler returns when its own log_stats is False),
+        so this gate is mainly to keep the ``/metrics`` surface clean
+        when the user did not request stats.
+        """
         self._running_counter = running_counter
         self._transfer_emitter = transfer_emitter
 
+        # Flat engine_idx ↔ (stage, replica) maps. The reverse map is
+        # consulted at record() time to translate the orchestrator's
+        # (stage_id, replica_id) loop variables into an engine_idx the
+        # underlying PrometheusStatLogger can address.
         stage_replica_map: dict[int, tuple[str, str]] = {}
         self._stage_replica_to_engine_idx: dict[tuple[int, int], int] = {}
         flat_idx = 0
@@ -286,6 +308,9 @@ class Orchestrator:
                 stage_replica_map=stage_replica_map,
             )
         except Exception:
+            # Minimal vllm_config in unit-test contexts can lack fields the
+            # upstream PrometheusStatLogger expects. Skip wrap rather than
+            # break orchestrator construction.
             logger.exception("[Orchestrator] OmniPrometheusStatLogger init failed; metrics wrap disabled")
             self._stat_logger = None
 
