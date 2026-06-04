@@ -73,7 +73,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             module = importlib.import_module(module_path)
             self.custom_process_next_stage_input_func = getattr(module, func_name)
         hook_func_path = custom_process_input_func or custom_process_next_stage_input_func
-        if hook_func_path:
+        async_chunk_enabled = bool(getattr(model_config, "async_chunk", False))
+        between_stage_chunked_prefill_enabled = bool(
+            getattr(model_config, "enable_chunked_prefill_between_stage", False)
+        )
+        if hook_func_path and async_chunk_enabled and between_stage_chunked_prefill_enabled:
             hook_module_path, _ = hook_func_path.rsplit(".", 1)
             hook_module = importlib.import_module(hook_module_path)
             self._load_chunked_prefill_hooks(hook_module)

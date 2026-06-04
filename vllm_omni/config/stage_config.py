@@ -217,6 +217,7 @@ class StagePipelineConfig:
     custom_process_next_stage_input_func: str | None = None
     # Alternates picked by ``merge_pipeline_deploy`` based on ``deploy.async_chunk``.
     async_chunk_process_next_stage_input_func: str | None = None
+    async_chunk_chunked_prefill_between_stage_process_next_stage_input_func: str | None = None
     sync_process_input_func: str | None = None
     prompt_expand_func: str | None = None
     cfg_kv_collect_func: str | None = None
@@ -506,7 +507,8 @@ class DeployConfig:
 
     Top-level fields (``trust_remote_code``, ``distributed_executor_backend``,
     ``dtype``, ``quantization``, ``enable_prefix_caching``,
-    ``enable_chunked_prefill``, ``data_parallel_size``,
+    ``enable_chunked_prefill``, ``enable_chunked_prefill_between_stage``,
+    ``data_parallel_size``,
     ``pipeline_parallel_size``) are pipeline-wide: they apply uniformly to
     every stage. Fields that legitimately vary per stage live in the
     individual ``StageDeployConfig`` entries under ``stages:``.
@@ -529,6 +531,7 @@ class DeployConfig:
     quantization: str | None = None
     enable_prefix_caching: bool | None = None
     enable_chunked_prefill: bool | None = None
+    enable_chunked_prefill_between_stage: bool | None = None
     data_parallel_size: int | None = None
     pipeline_parallel_size: int | None = None
     custom_voice_dir: str | None = None
@@ -708,6 +711,7 @@ def load_deploy_config(path: str | Path) -> DeployConfig:
         "quantization",
         "enable_prefix_caching",
         "enable_chunked_prefill",
+        "enable_chunked_prefill_between_stage",
         "data_parallel_size",
         "pipeline_parallel_size",
         "custom_voice_dir",
@@ -810,11 +814,18 @@ def _resolve_execution_mode(
 def _select_processor_funcs(
     ps: StagePipelineConfig,
     async_chunk: bool,
+    enable_chunked_prefill_between_stage: bool,
 ) -> tuple[str | None, str | None]:
     """Pick ``(input_proc, next_stage_proc)`` based on the async_chunk mode."""
     next_stage_proc = ps.custom_process_next_stage_input_func
     input_proc = ps.custom_process_input_func
-    if async_chunk and ps.async_chunk_process_next_stage_input_func:
+    if (
+        async_chunk
+        and enable_chunked_prefill_between_stage
+        and ps.async_chunk_chunked_prefill_between_stage_process_next_stage_input_func
+    ):
+        next_stage_proc = ps.async_chunk_chunked_prefill_between_stage_process_next_stage_input_func
+    elif async_chunk and ps.async_chunk_process_next_stage_input_func:
         next_stage_proc = ps.async_chunk_process_next_stage_input_func
     elif not async_chunk and ps.sync_process_input_func:
         input_proc = ps.sync_process_input_func
@@ -830,6 +841,7 @@ _PIPELINE_WIDE_ENGINE_FIELDS: tuple[str, ...] = (
     "quantization",
     "enable_prefix_caching",
     "enable_chunked_prefill",
+    "enable_chunked_prefill_between_stage",
     "data_parallel_size",
     "pipeline_parallel_size",
     "active_stream_window",
@@ -937,13 +949,16 @@ def merge_pipeline_deploy(
     # present — that's the "user enabled async_chunk but pipeline has no
     # inter-stage processing at all" case.
     if deploy.async_chunk and not any(
-        ps.async_chunk_process_next_stage_input_func or ps.custom_process_next_stage_input_func
+        ps.async_chunk_chunked_prefill_between_stage_process_next_stage_input_func
+        or ps.async_chunk_process_next_stage_input_func
+        or ps.custom_process_next_stage_input_func
         for ps in pipeline.stages
     ):
         raise ValueError(
             f"Pipeline {pipeline.model_type!r} has async_chunk=True in deploy but no stage "
             "declares a next-stage input processor "
-            "(``async_chunk_process_next_stage_input_func`` or ``custom_process_next_stage_input_func``). "
+            "(``async_chunk_chunked_prefill_between_stage_process_next_stage_input_func``, "
+            "``async_chunk_process_next_stage_input_func`` or ``custom_process_next_stage_input_func``). "
             "Either set async_chunk=False or implement an async-chunk processor on the pipeline."
         )
 
@@ -951,7 +966,11 @@ def merge_pipeline_deploy(
     for ps in pipeline.stages:
         ds = deploy_by_id.get(ps.stage_id)
         stage_type, worker_type = _resolve_execution_mode(ps.execution_type)
-        input_proc, next_stage_proc = _select_processor_funcs(ps, deploy.async_chunk)
+        input_proc, next_stage_proc = _select_processor_funcs(
+            ps,
+            deploy.async_chunk,
+            bool(deploy.enable_chunked_prefill_between_stage),
+        )
         engine_args = _build_engine_args(ps, ds, pipeline, deploy, next_stage_proc)
         sched_cls = _resolve_scheduler(
             ps.execution_type,
