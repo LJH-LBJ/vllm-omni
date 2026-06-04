@@ -61,11 +61,32 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.model_mode = getattr(model_config, "worker_type", None) or "ar"
         # State specific to Chunk management
         self.custom_process_next_stage_input_func: Callable[..., OmniPayloadStruct | None] | None = None
+        self.async_chunk_try_cached_payload_func: Callable[..., bool] | None = None
+        self.async_chunk_handle_ar_payload_func: Callable[..., bool | None] | None = None
+        self.async_chunk_attach_additional_info_func: Callable[..., Any] | None = None
+        self.async_chunk_cleanup_state_func: Callable[..., None] | None = None
         custom_process_next_stage_input_func = getattr(model_config, "custom_process_next_stage_input_func", None)
+        custom_process_input_func = getattr(model_config, "custom_process_input_func", None)
         if custom_process_next_stage_input_func:
             module_path, func_name = custom_process_next_stage_input_func.rsplit(".", 1)
             module = importlib.import_module(module_path)
             self.custom_process_next_stage_input_func = getattr(module, func_name)
+        hook_func_path = custom_process_input_func or custom_process_next_stage_input_func
+        if hook_func_path:
+            hook_module_path, _ = hook_func_path.rsplit(".", 1)
+            hook_module = importlib.import_module(hook_module_path)
+            self.async_chunk_try_cached_payload_func = getattr(
+                hook_module, "async_chunk_try_cached_payload", None
+            )
+            self.async_chunk_handle_ar_payload_func = getattr(
+                hook_module, "async_chunk_handle_ar_payload", None
+            )
+            self.async_chunk_attach_additional_info_func = getattr(
+                hook_module, "async_chunk_attach_additional_information", None
+            )
+            self.async_chunk_cleanup_state_func = getattr(
+                hook_module, "async_chunk_cleanup_state", None
+            )
         # mapping for request id and chunk id
         self.put_req_chunk: dict[str, int] = defaultdict(int)
         self.get_req_chunk: dict[str, int] = defaultdict(int)
@@ -195,50 +216,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         with self._save_cond:
             self._save_cond.notify()
 
-    def _handle_ar_payload(
-        self,
-        request: Request,
-        req_id: str,
-        external_req_id: str,
-        payload_data: dict,
-        meta: dict,
-        payload_finished: bool,
-    ) -> bool | None:
-        """Handle one received payload chunk for the AR (talker) stage.
-
-        Returns ``True`` if the caller should immediately return True (early
-        exit), or ``None`` to fall through to the normal finished-load bookkeeping.
-        """
-        embed_data = payload_data.get("embed", {})
-        if not isinstance(embed_data, dict):
-            embed_data = {}
-        has_prefill_embeds = isinstance(embed_data.get("prefill"), torch.Tensor)
-        has_decode_embed = isinstance(embed_data.get("decode"), torch.Tensor)
-
-        decode_embed = None
-        if has_decode_embed:
-            decode_embed = embed_data.pop("decode")
-        if isinstance(decode_embed, torch.Tensor):
-            boot_payload = self._release_pending_prefill_boot(external_req_id, decode_embed, meta)
-            if boot_payload is not None:
-                request.additional_information = boot_payload
-                self._finished_load_reqs.add(req_id)
-                self._evict_prefill_tensors(external_req_id)
-                return True
-            self._queue_decode_embed(external_req_id, decode_embed)
-
-        merged_payload = self._update_request_payload(external_req_id, payload_data)
-        request.additional_information = merged_payload
-
-        prefill_boundary = payload_finished or has_decode_embed
-        if has_prefill_embeds and not prefill_boundary:
-            if self._gate_chunked_prefill_chunk(request, payload_data, external_req_id):
-                return True
-
-        if prefill_boundary and not payload_finished:
-            self._evict_prefill_tensors(external_req_id)
-        return None
-
     def _poll_single_request(self, request: Request):
         stage_id = self.connector.stage_id
         target_stage_id = stage_id - 1
@@ -247,13 +224,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         external_req_id = self.request_ids_mapping.get(req_id, req_id)
         connector_get_key = f"{external_req_id}_{target_stage_id}_{chunk_id}"
 
-        # Use timeout=0 for non-blocking poll
-        pending_decode = self._pending_decode.get(external_req_id)
-        if self.model_mode == "ar" and pending_decode is not None and pending_decode.embeds:
-            cached_payload = self.request_payload.get(external_req_id)
-            if cached_payload is not None:
-                request.additional_information = cached_payload
-                self._finished_load_reqs.add(req_id)
+        if self.model_mode == "ar" and self.async_chunk_try_cached_payload_func is not None:
+            if self.async_chunk_try_cached_payload_func(self, request):
                 return True
 
         try:
@@ -278,14 +250,19 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             payload_finished = self._is_truthy_scalar(meta.get("finished"))
             payload_segment_finished = self._is_truthy_scalar(meta.get("is_segment_finished"))
             if self.model_mode == "ar":
-                early = self._handle_ar_payload(
-                    request,
-                    req_id,
-                    external_req_id,
-                    payload_data,
-                    meta,
-                    payload_finished,
-                )
+                if self.async_chunk_handle_ar_payload_func is not None:
+                    early = self.async_chunk_handle_ar_payload_func(
+                        self,
+                        request,
+                        req_id,
+                        external_req_id,
+                        payload_data,
+                        meta,
+                        payload_finished,
+                    )
+                else:
+                    request.additional_information = payload_data
+                    early = None
                 if payload_segment_finished:
                     self.segment_finished_requests.add(req_id)
                 if early is True:
@@ -369,29 +346,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                 state.embeds.append(row.unsqueeze(0))
         else:
             state.embeds.append(decode_embed)
-
-    def _attach_next_decode_embed(self, req_id: str, additional_info: Any) -> Any:
-        if not isinstance(additional_info, dict):
-            return additional_info
-
-        external_req_id = self.request_ids_mapping.get(req_id, req_id)
-        state = self._pending_decode.get(external_req_id)
-        if state is None or not state.embeds:
-            return additional_info
-
-        payload = dict(additional_info)
-        embed = payload.get("embed", {})
-        embed = dict(embed) if isinstance(embed, dict) else {}
-
-        if state.embeds:
-            embed["decode"] = state.embeds.popleft()
-
-        payload["embed"] = embed
-        if not state.embeds:
-            self._pending_decode.pop(external_req_id, None)
-            if state.upstream_finished:
-                self.finished_requests.add(req_id)
-        return payload
 
     def _release_pending_prefill_boot(
         self,
@@ -620,12 +574,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.request_payload.pop(external_req_id, None)
         self.code_prompt_token_ids.pop(external_req_id, None)
         self.requests_num_chunks_sent.pop(external_req_id, None)
-        self._pending_decode.pop(external_req_id, None)
-        self._pending_prefill_boot.pop(external_req_id, None)
-        self._pending_streaming_prefills.pop(external_req_id, None)
-        prefill_part_state = getattr(self, "_prefill_part_state", None)
-        if isinstance(prefill_part_state, dict):
-            prefill_part_state.pop(external_req_id, None)
+        if self.async_chunk_cleanup_state_func is not None:
+            self.async_chunk_cleanup_state_func(self, external_req_id)
 
         cached_ic = getattr(self, "_cached_ic", None)
         if cached_ic is not None:
@@ -845,8 +795,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         for req_id in cached_reqs.req_ids:
             request = requests.get(req_id) if req_id else None
             additional_info = getattr(request, "additional_information", None) if request else None
-            # collect all asynchronously arrived embeds, and pop one to inject into payload at each decode step
-            additional_info = self._attach_next_decode_embed(req_id, additional_info)
+            if self.async_chunk_attach_additional_info_func is not None:
+                additional_info = self.async_chunk_attach_additional_info_func(self, req_id, additional_info)
             cached_reqs.additional_information[req_id] = additional_info
             if request and additional_info:
                 request.additional_information = None

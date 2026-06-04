@@ -555,6 +555,102 @@ def thinker2talker_async_chunk(
     )
 
 
+def async_chunk_try_cached_payload(
+    transfer_manager: Any,
+    request: Any,
+) -> bool:
+    external_req_id = transfer_manager.request_ids_mapping.get(request.request_id, request.request_id)
+    pending_decode = transfer_manager._pending_decode.get(external_req_id)
+    if pending_decode is None or not pending_decode.embeds:
+        return False
+    cached_payload = transfer_manager.request_payload.get(external_req_id)
+    if cached_payload is None:
+        return False
+    request.additional_information = cached_payload
+    transfer_manager._finished_load_reqs.add(request.request_id)
+    return True
+
+
+def async_chunk_handle_ar_payload(
+    transfer_manager: Any,
+    request: Any,
+    req_id: str,
+    external_req_id: str,
+    payload_data: dict[str, Any],
+    meta: dict[str, Any],
+    payload_finished: bool,
+) -> bool | None:
+    embed_data = payload_data.get("embed", {})
+    if not isinstance(embed_data, dict):
+        embed_data = {}
+    has_prefill_embeds = isinstance(embed_data.get("prefill"), torch.Tensor)
+    has_decode_embed = isinstance(embed_data.get("decode"), torch.Tensor)
+
+    decode_embed = None
+    if has_decode_embed:
+        decode_embed = embed_data.pop("decode")
+    if isinstance(decode_embed, torch.Tensor):
+        boot_payload = transfer_manager._release_pending_prefill_boot(external_req_id, decode_embed, meta)
+        if boot_payload is not None:
+            request.additional_information = boot_payload
+            transfer_manager._finished_load_reqs.add(req_id)
+            transfer_manager._evict_prefill_tensors(external_req_id)
+            return True
+        transfer_manager._queue_decode_embed(external_req_id, decode_embed)
+
+    merged_payload = transfer_manager._update_request_payload(external_req_id, payload_data)
+    request.additional_information = merged_payload
+
+    prefill_boundary = payload_finished or has_decode_embed
+    if has_prefill_embeds and not prefill_boundary:
+        if transfer_manager._gate_chunked_prefill_chunk(request, payload_data, external_req_id):
+            return True
+
+    if prefill_boundary and not payload_finished:
+        transfer_manager._evict_prefill_tensors(external_req_id)
+    return None
+
+
+def async_chunk_attach_additional_information(
+    transfer_manager: Any,
+    req_id: str,
+    additional_info: Any,
+) -> Any:
+    if not isinstance(additional_info, dict):
+        return additional_info
+
+    external_req_id = transfer_manager.request_ids_mapping.get(req_id, req_id)
+    state = transfer_manager._pending_decode.get(external_req_id)
+    if state is None or not state.embeds:
+        return additional_info
+
+    payload = dict(additional_info)
+    embed = payload.get("embed", {})
+    embed = dict(embed) if isinstance(embed, dict) else {}
+
+    if state.embeds:
+        embed["decode"] = state.embeds.popleft()
+
+    payload["embed"] = embed
+    if not state.embeds:
+        transfer_manager._pending_decode.pop(external_req_id, None)
+        if state.upstream_finished:
+            transfer_manager.finished_requests.add(req_id)
+    return payload
+
+
+def async_chunk_cleanup_state(
+    transfer_manager: Any,
+    external_req_id: str,
+) -> None:
+    transfer_manager._pending_decode.pop(external_req_id, None)
+    transfer_manager._pending_prefill_boot.pop(external_req_id, None)
+    transfer_manager._pending_streaming_prefills.pop(external_req_id, None)
+    prefill_part_state = getattr(transfer_manager, "_prefill_part_state", None)
+    if isinstance(prefill_part_state, dict):
+        prefill_part_state.pop(external_req_id, None)
+
+
 def thinker2talker_full_payload(
     transfer_manager: Any,
     pooling_output: dict[str, Any],
