@@ -1069,7 +1069,6 @@ class Qwen3OmniMoeForConditionalGeneration(
         self,
         thinker_embed: torch.Tensor,
         thinker_hidden: torch.Tensor,
-        multimodal_mask: torch.Tensor | None,
         input_ids: torch.Tensor,
         thinker_result_ids: torch.Tensor,
         speaker_id,
