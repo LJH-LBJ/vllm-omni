@@ -202,8 +202,9 @@ class OmniMsgpackDecoder:
             # Fast path: if every value is a primitive, no recursive processing
             # is needed and no type-marker reconstruction can apply. This avoids
             # O(N) Python-call overhead for plain metadata dicts.
-            if not (_REQUEST_OUTPUT_KEYS.issubset(obj) or _COMPLETION_OUTPUT_KEYS.issubset(obj)) \
-            and all(isinstance(v, _PRIMITIVE_TYPES) for v in obj.values()):
+            if not (_REQUEST_OUTPUT_KEYS.issubset(obj) or _COMPLETION_OUTPUT_KEYS.issubset(obj)) and all(
+                isinstance(v, _PRIMITIVE_TYPES) for v in obj.values()
+            ):
                 return obj
 
             # Process values recursively first

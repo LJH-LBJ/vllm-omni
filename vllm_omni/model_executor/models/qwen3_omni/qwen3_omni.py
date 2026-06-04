@@ -726,9 +726,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         update_dict.setdefault("meta", {})["num_processed_tokens"] = meta.get("num_processed_tokens", 0) + span_len
         return input_ids, input_embeds, update_dict
 
-    def talker_preprocess_chunked_prefill(
-        self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict
-    ):
+    def talker_preprocess_chunked_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         """
         Preprocess talker embeds for between-stage chunked-prefill.
         """

@@ -113,21 +113,13 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     setattr(self, attr_name, hook)
                 return
 
-        self.async_chunk_try_cached_payload_func = getattr(
-            hook_module, "async_chunk_try_cached_payload", None
-        )
-        self.async_chunk_handle_ar_payload_func = getattr(
-            hook_module, "async_chunk_handle_ar_payload", None
-        )
+        self.async_chunk_try_cached_payload_func = getattr(hook_module, "async_chunk_try_cached_payload", None)
+        self.async_chunk_handle_ar_payload_func = getattr(hook_module, "async_chunk_handle_ar_payload", None)
         self.async_chunk_attach_additional_info_func = getattr(
             hook_module, "async_chunk_attach_additional_information", None
         )
-        self.async_chunk_cleanup_state_func = getattr(
-            hook_module, "async_chunk_cleanup_state", None
-        )
-        self.async_chunk_finalize_ar_payload_func = getattr(
-            hook_module, "async_chunk_finalize_ar_payload", None
-        )
+        self.async_chunk_cleanup_state_func = getattr(hook_module, "async_chunk_cleanup_state", None)
+        self.async_chunk_finalize_ar_payload_func = getattr(hook_module, "async_chunk_finalize_ar_payload", None)
 
     @staticmethod
     def _is_truthy_scalar(value: Any) -> bool:
@@ -355,7 +347,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             return True
 
         return False
-
 
     def _send_single_request(self, task: dict):
         raw_po = task["pooling_output"]
