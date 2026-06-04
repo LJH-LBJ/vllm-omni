@@ -586,10 +586,10 @@ def thinker2talker_async_chunk(
     is_finished: bool = False,
 ) -> OmniPayloadStruct | None:
     """
-        Process thinker outputs to create talker inputs.
-        1. thinker's text generation outputs (token IDs + hidden states)
-        2. Split hidden states into: prompt embeddings + generated embeddings
-        3. Package for talker with additional information
+    Process thinker outputs to create talker inputs.
+    1. thinker's text generation outputs (token IDs + hidden states)
+    2. Split hidden states into: prompt embeddings + generated embeddings
+    3. Package for talker with additional information
     """
 
     request_id = request.external_req_id
@@ -805,6 +805,16 @@ def async_chunk_cleanup_state(
         prefill_part_state.pop(external_req_id, None)
 
 
+def hook_for_chunked_prefill() -> dict[str, Any]:
+    return {
+        "async_chunk_try_cached_payload_func": async_chunk_try_cached_payload,
+        "async_chunk_handle_ar_payload_func": async_chunk_handle_ar_payload,
+        "async_chunk_attach_additional_info_func": async_chunk_attach_additional_information,
+        "async_chunk_cleanup_state_func": async_chunk_cleanup_state,
+        "async_chunk_finalize_ar_payload_func": async_chunk_finalize_ar_payload,
+    }
+
+
 def thinker2talker_full_payload(
     transfer_manager: Any,
     pooling_output: dict[str, Any],
@@ -949,6 +959,7 @@ def thinker2talker(
         thinker_emb = emb_layer.detach().to(device=device, dtype=torch.float)[-new_seq_length:]
         thinker_hid = hid_layer.detach().to(device=device, dtype=torch.float)[-new_seq_length:]
 
+        prefill_mm: dict[str, Any] | None = None
         prefill_mm = _get_prefill_multimodal_output(req_id, streaming_context)
 
         if prefill_mm is not None:

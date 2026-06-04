@@ -48,7 +48,14 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             model_max_num_seqs = self.scheduler_max_num_seqs
         self._active_window = min(active_stream_window, model_max_num_seqs) if active_stream_window > 0 else 0
         if self._active_window > 0:
-            logger.info("Bounded active-stream window enabled: K=%d", self._active_window)
+            logger.info(
+                "Bounded active-stream window enabled: K=%d. "
+                "Multi-replica deployments require sticky per-stream routing across Stage 1 "
+                "replicas (each replica owns an independent active-set; without sticky routing, "
+                "a stream can be active on one replica and non-active on another and both will "
+                "race to evict it).",
+                self._active_window,
+            )
         self.connector = self.create_connector(model_config)
         super().__init__(model_config)
         self.model_mode = getattr(model_config, "worker_type", None) or "ar"
@@ -69,21 +76,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         if hook_func_path:
             hook_module_path, _ = hook_func_path.rsplit(".", 1)
             hook_module = importlib.import_module(hook_module_path)
-            self.async_chunk_try_cached_payload_func = getattr(
-                hook_module, "async_chunk_try_cached_payload", None
-            )
-            self.async_chunk_handle_ar_payload_func = getattr(
-                hook_module, "async_chunk_handle_ar_payload", None
-            )
-            self.async_chunk_attach_additional_info_func = getattr(
-                hook_module, "async_chunk_attach_additional_information", None
-            )
-            self.async_chunk_cleanup_state_func = getattr(
-                hook_module, "async_chunk_cleanup_state", None
-            )
-            self.async_chunk_finalize_ar_payload_func = getattr(
-                hook_module, "async_chunk_finalize_ar_payload", None
-            )
+            self._load_chunked_prefill_hooks(hook_module)
         # mapping for request id and chunk id
         self.put_req_chunk: dict[str, int] = defaultdict(int)
         self.get_req_chunk: dict[str, int] = defaultdict(int)
@@ -106,6 +99,31 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         #   been read").
         self._held_non_active: deque[Any] = deque()
         self.requests_num_chunks_sent: dict[str, int] = defaultdict(int)
+
+    def _load_chunked_prefill_hooks(self, hook_module: Any) -> None:
+        hook_factory = getattr(hook_module, "hook_for_chunked_prefill", None)
+        if callable(hook_factory):
+            hook_bundle = hook_factory()
+            if isinstance(hook_bundle, dict):
+                for attr_name, hook in hook_bundle.items():
+                    setattr(self, attr_name, hook)
+                return
+
+        self.async_chunk_try_cached_payload_func = getattr(
+            hook_module, "async_chunk_try_cached_payload", None
+        )
+        self.async_chunk_handle_ar_payload_func = getattr(
+            hook_module, "async_chunk_handle_ar_payload", None
+        )
+        self.async_chunk_attach_additional_info_func = getattr(
+            hook_module, "async_chunk_attach_additional_information", None
+        )
+        self.async_chunk_cleanup_state_func = getattr(
+            hook_module, "async_chunk_cleanup_state", None
+        )
+        self.async_chunk_finalize_ar_payload_func = getattr(
+            hook_module, "async_chunk_finalize_ar_payload", None
+        )
 
     @staticmethod
     def _is_truthy_scalar(value: Any) -> bool:
