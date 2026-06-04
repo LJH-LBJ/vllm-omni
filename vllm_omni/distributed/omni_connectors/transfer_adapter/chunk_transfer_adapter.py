@@ -4,7 +4,6 @@
 import importlib
 from collections import defaultdict, deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
 from typing import Any
 
 import torch
@@ -19,12 +18,6 @@ from ..utils.logging import get_connector_logger
 from .base import OmniTransferAdapterBase
 
 logger = get_connector_logger(__name__)
-
-
-@dataclass
-class _PendingDecodeQueue:
-    embeds: deque[torch.Tensor] = field(default_factory=deque)
-    upstream_finished: bool = False
 
 
 class OmniChunkTransferAdapter(OmniTransferAdapterBase):
@@ -65,6 +58,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.async_chunk_handle_ar_payload_func: Callable[..., bool | None] | None = None
         self.async_chunk_attach_additional_info_func: Callable[..., Any] | None = None
         self.async_chunk_cleanup_state_func: Callable[..., None] | None = None
+        self.async_chunk_finalize_ar_payload_func: Callable[..., bool] | None = None
         custom_process_next_stage_input_func = getattr(model_config, "custom_process_next_stage_input_func", None)
         custom_process_input_func = getattr(model_config, "custom_process_input_func", None)
         if custom_process_next_stage_input_func:
@@ -86,6 +80,9 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             )
             self.async_chunk_cleanup_state_func = getattr(
                 hook_module, "async_chunk_cleanup_state", None
+            )
+            self.async_chunk_finalize_ar_payload_func = getattr(
+                hook_module, "async_chunk_finalize_ar_payload", None
             )
         # mapping for request id and chunk id
         self.put_req_chunk: dict[str, int] = defaultdict(int)
@@ -109,9 +106,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         #   been read").
         self._held_non_active: deque[Any] = deque()
         self.requests_num_chunks_sent: dict[str, int] = defaultdict(int)
-        self._pending_decode: dict[str, _PendingDecodeQueue] = {}
-        self._pending_prefill_boot: dict[str, dict[str, Any]] = {}
-        self._pending_streaming_prefills: dict[str, dict] = {}
 
     @staticmethod
     def _is_truthy_scalar(value: Any) -> bool:
@@ -275,10 +269,11 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     construct_next_stage_streaming_input_prompt(payload_data, request)
 
                 if payload_finished:
-                    pending_decode = self._pending_decode.get(external_req_id)
-                    if pending_decode is not None and pending_decode.embeds:
-                        pending_decode.upstream_finished = True
+                    if self.async_chunk_finalize_ar_payload_func is not None:
+                        should_finish = self.async_chunk_finalize_ar_payload_func(self, req_id, external_req_id)
                     else:
+                        should_finish = True
+                    if should_finish:
                         self.finished_requests.add(req_id)
                     request.resumable = False
             else:
@@ -338,89 +333,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
             return True
 
         return False
-
-    def _queue_decode_embed(self, external_req_id: str, decode_embed: torch.Tensor) -> None:
-        state = self._pending_decode.setdefault(external_req_id, _PendingDecodeQueue())
-        if decode_embed.ndim >= 2 and decode_embed.shape[0] > 1:
-            for row in decode_embed:
-                state.embeds.append(row.unsqueeze(0))
-        else:
-            state.embeds.append(decode_embed)
-
-    def _release_pending_prefill_boot(
-        self,
-        external_req_id: str,
-        decode_embed: torch.Tensor,
-        decode_meta: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        pending_payload = self._pending_prefill_boot.pop(external_req_id, None)
-        if pending_payload is None:
-            return None
-
-        payload = dict(pending_payload)
-        embed = payload.get("embed", {})
-        embed = dict(embed) if isinstance(embed, dict) else {}
-        embed["decode"] = decode_embed
-        payload["embed"] = embed
-
-        meta = payload.get("meta", {})
-        meta = dict(meta) if isinstance(meta, dict) else {}
-        if isinstance(decode_meta, dict):
-            meta.update({key: decode_meta[key] for key in ("finished", "thinker_finished") if key in decode_meta})
-        payload["meta"] = meta
-
-        self.request_payload[external_req_id] = payload
-        return payload
-
-    def _gate_chunked_prefill_chunk(
-        self,
-        request: Request,
-        payload_data: dict,
-        external_req_id: str,
-    ) -> bool:
-        if payload_data.get("meta", {}).get("is_final_prefill_chunk", False):
-            pending_payload = self.request_payload.get(external_req_id, payload_data)
-            self._pending_prefill_boot[external_req_id] = {
-                key: (dict(value) if isinstance(value, dict) else value) for key, value in pending_payload.items()
-            }
-            self._pending_load_reqs.append(request)
-            with self._recv_cond:
-                self._recv_cond.notify()
-            return True
-
-        accumulated = self.request_payload.get(external_req_id, payload_data)
-        cumulative_embeds = accumulated.get("embed", {}).get("prefill")
-        available_tokens = cumulative_embeds.shape[0] if isinstance(cumulative_embeds, torch.Tensor) else 0
-        remaining_prompt_tokens = max(request.num_prompt_tokens - request.num_computed_tokens, 0)
-        next_scheduler_slice = min(
-            self.scheduler_max_num_batched_tokens,
-            remaining_prompt_tokens,
-        )
-        ready_tokens = available_tokens - request.num_computed_tokens
-        if ready_tokens >= next_scheduler_slice:
-            return False
-        else:
-            self._pending_load_reqs.append(request)
-            with self._recv_cond:
-                self._recv_cond.notify()
-            return True
-
-    def _evict_prefill_tensors(self, external_req_id: str) -> None:
-        acc = self.request_payload.get(external_req_id)
-        if acc is None or not isinstance(acc.get("embed", {}).get("prefill"), torch.Tensor):
-            return
-        cleaned_embed = {
-            k: v
-            for k, v in acc.get("embed", {}).items()
-            if k not in ("prefill", "decode", "tts_bos", "tts_eos", "tts_pad")
-        }
-        cleaned_hs = {k: v for k, v in acc.get("hidden_states", {}).items() if k != "output"}
-        cleaned_ids = {k: v for k, v in acc.get("ids", {}).items() if k not in ("all", "prompt")}
-        cleaned = {k: v for k, v in acc.items() if k not in ("embed", "hidden_states", "ids")}
-        cleaned["embed"] = cleaned_embed
-        cleaned["hidden_states"] = cleaned_hs
-        cleaned["ids"] = cleaned_ids
-        self.request_payload[external_req_id] = cleaned
 
     def _update_request_payload(self, req_id: str, payload_data: dict[str, Any]) -> dict[str, Any]:
         if req_id not in self.request_payload:
