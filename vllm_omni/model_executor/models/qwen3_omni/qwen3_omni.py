@@ -35,7 +35,7 @@ from vllm.v1.outputs import SamplerOutput
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.sampler import Sampler
 
-from vllm_omni.data_entry_keys import Embeddings, HiddenStates, Ids, OmniPayload
+from vllm_omni.data_entry_keys import Embeddings, HiddenStates, Ids, OmniPayload, OmniPayloadMeta
 from vllm_omni.model_executor.custom_process_mixin import CustomProcessMixin
 from vllm_omni.model_executor.models.output_templates import OmniOutput
 from vllm_omni.model_executor.models.qwen3_omni.qwen3_omni_moe_thinker import (
@@ -825,89 +825,110 @@ class Qwen3OmniMoeForConditionalGeneration(
         self.tts_pad_embed = _proj_from_thinker(tts_pad_thinker)
         return self.tts_bos_embed, self.tts_eos_embed, self.tts_pad_embed
 
-    def talker_preprocess_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, payload: OmniPayload):
+    def _prepare_talker_prefill_inputs(self, payload: OmniPayload):
         hs: HiddenStates = payload.get("hidden_states", {})
         embed: Embeddings = payload.get("embed", {})
         ids: Ids = payload.get("ids", {})
-        meta = payload.get("meta", {})
-
-        # Containers to return per-request updates (e.g., code_predictor_hidden_per_request)
-        update_dict: OmniPayload = {}
 
         voice_type = payload.get("speaker")
         if voice_type is not None and isinstance(voice_type, (list, tuple)) and len(voice_type) > 0:
             voice_type = voice_type[0]
         if not isinstance(voice_type, str) or not voice_type.strip():
-            # Fall back to model default; speaker is per-request.
             voice_type = self.default_tts_text_spk_type
         else:
             voice_type = str(voice_type).lower().strip()
-        start_index = meta.get("num_processed_tokens", 0)
-        end_index = start_index + input_embeds.shape[0]
 
-        # Read thinker outputs for prefill
-        thinker_sequence_embeds = embed["prefill"].to(
-            device=self._module_device(self.talker), dtype=torch.bfloat16
-        )  # Tensor [P,H]
-        thinker_hidden_states = hs["output"].to(
-            device=self._module_device(self.talker), dtype=torch.bfloat16
-        )  # Tensor [K,H]
-        thinker_sequences = (
-            ids.get("all")
-            if ids.get("all") is None
-            else torch.as_tensor(ids["all"], device=self._module_device(self.talker))
-        )
-        thinker_chatml_ids = (
-            ids.get("prompt")
-            if ids.get("prompt") is None
-            else torch.as_tensor(ids["prompt"], device=self._module_device(self.talker))
-        )
+        talker_device = self._module_device(self.talker)
 
-        tts_bos_thinker = embed["tts_bos"].to(device=self._module_device(self.talker), dtype=torch.bfloat16)
-        tts_eos_thinker = embed["tts_eos"].to(device=self._module_device(self.talker), dtype=torch.bfloat16)
-        tts_pad_thinker = embed["tts_pad"].to(device=self._module_device(self.talker), dtype=torch.bfloat16)
-
+        thinker_sequence_embeds = embed.get("prefill", None)
+        thinker_hidden_states = hs.get("output", None)
         if thinker_sequence_embeds is None or thinker_hidden_states is None:
             raise ValueError(
                 "additional_information_by_req_id must include "
                 "'embed.prefill' and 'hidden_states.output' for talker prefill."
             )
 
-        # Normalize to tensors
         if not isinstance(thinker_sequence_embeds, torch.Tensor):
-            thinker_sequence_embeds = torch.as_tensor(thinker_sequence_embeds, device=self._module_device(self.talker))
+            thinker_sequence_embeds = torch.as_tensor(thinker_sequence_embeds, device=talker_device)
         if not isinstance(thinker_hidden_states, torch.Tensor):
-            thinker_hidden_states = torch.as_tensor(thinker_hidden_states, device=self._module_device(self.talker))
+            thinker_hidden_states = torch.as_tensor(thinker_hidden_states, device=talker_device)
 
+        thinker_sequence_embeds = thinker_sequence_embeds.to(device=talker_device, dtype=torch.bfloat16)
+        thinker_hidden_states = thinker_hidden_states.to(device=talker_device, dtype=torch.bfloat16)
+
+        thinker_sequences = ids.get("all")
+        if thinker_sequences is not None and not isinstance(thinker_sequences, torch.Tensor):
+            thinker_sequences = torch.as_tensor(thinker_sequences, device=talker_device)
+        elif isinstance(thinker_sequences, torch.Tensor):
+            thinker_sequences = thinker_sequences.to(talker_device)
+
+        thinker_chatml_ids = ids.get("prompt")
         if isinstance(thinker_chatml_ids, torch.Tensor) or isinstance(thinker_chatml_ids, list):
             ids_chatml = (
                 thinker_chatml_ids
                 if isinstance(thinker_chatml_ids, torch.Tensor)
-                else torch.as_tensor(thinker_chatml_ids, device=self._module_device(self.talker))
+                else torch.as_tensor(thinker_chatml_ids, device=talker_device)
             )
+            ids_chatml = ids_chatml.to(talker_device)
             if ids_chatml.ndim == 1:
                 ids_chatml = ids_chatml.unsqueeze(0)
         else:
-            # Fallback: create dummy ids if not provided
             ids_chatml = torch.zeros(
                 (1, thinker_sequence_embeds.shape[1]),
                 dtype=torch.long,
-                device=self._module_device(self.talker),
+                device=talker_device,
             )
             thinker_sequences = ids_chatml
 
+        tts_bos_thinker = embed["tts_bos"].to(device=talker_device, dtype=torch.bfloat16)
+        tts_eos_thinker = embed["tts_eos"].to(device=talker_device, dtype=torch.bfloat16)
+        tts_pad_thinker = embed["tts_pad"].to(device=talker_device, dtype=torch.bfloat16)
         speaker_id = self._get_text_spk_token_id(voice_type)
+
+        return (
+            talker_device,
+            speaker_id,
+            thinker_sequence_embeds,
+            thinker_hidden_states,
+            thinker_sequences,
+            ids_chatml,
+            tts_bos_thinker,
+            tts_eos_thinker,
+            tts_pad_thinker,
+        )
+
+    def talker_preprocess_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, payload: OmniPayload):
+        embed: Embeddings = payload.get("embed", {})
+        meta: OmniPayloadMeta = payload.get("meta", {})
+
+        # Containers to return per-request updates (e.g., code_predictor_hidden_per_request)
+        update_dict: OmniPayload = {}
+
+        start_index = meta.get("num_processed_tokens", 0)
+        end_index = start_index + input_embeds.shape[0]
+        (
+            talker_device,
+            speaker_id,
+            thinker_sequence_embeds,
+            thinker_hidden_states,
+            thinker_sequences,
+            ids_chatml,
+            tts_bos_thinker,
+            tts_eos_thinker,
+            tts_pad_thinker,
+        ) = self._prepare_talker_prefill_inputs(payload)
         req_input_ids, req_embeds, trailing_text_hidden = self._thinker_to_talker_prefill(
-            thinker_embed=thinker_sequence_embeds.to(self._module_device(self.talker)),
-            thinker_hidden=thinker_hidden_states.to(self._module_device(self.talker)),
-            input_ids=ids_chatml.to(self._module_device(self.talker)),
-            thinker_result_ids=thinker_sequences.to(self._module_device(self.talker)),
+            thinker_embed=thinker_sequence_embeds.to(talker_device),
+            thinker_hidden=thinker_hidden_states.to(talker_device),
+            input_ids=ids_chatml.to(talker_device),
+            thinker_result_ids=thinker_sequences.to(talker_device),
             speaker_id=speaker_id,
             tts_bos_thinker=tts_bos_thinker,
             tts_eos_thinker=tts_eos_thinker,
             tts_pad_thinker=tts_pad_thinker,
         )
 
+        # Queue trailing_text_hidden for decode (drop first for next steps),
         try:
             if isinstance(trailing_text_hidden, torch.Tensor) and trailing_text_hidden.numel() > 0:
                 if trailing_text_hidden.ndim == 2:
@@ -920,16 +941,18 @@ class Qwen3OmniMoeForConditionalGeneration(
                         device=trailing_text_hidden.device,
                     )
                 else:
+                    # compatible with old shape [1,S,D]
                     rem_tail = trailing_text_hidden.squeeze(0)
                 if rem_tail.shape[0] > 0:
                     update_dict.setdefault("hidden_states", {})["trailing_text"] = rem_tail.detach()
+            # Also persist projected tts_pad for decode fallback if needed
             if isinstance(tts_pad_thinker, torch.Tensor):
                 pad_in = tts_pad_thinker
                 if pad_in.ndim == 2:
                     pad_in = pad_in.unsqueeze(0)
                 if pad_in.ndim == 1:
                     pad_in = pad_in.view(1, 1, -1)
-                pad_proj = self.talker.text_projection(pad_in.to(self._module_device(self.talker)))
+                pad_proj = self.talker.text_projection(pad_in.to(talker_device))
                 update_dict.setdefault("embed", {})["tts_pad_projected"] = pad_proj.detach()
         except Exception:
             pass
@@ -941,68 +964,18 @@ class Qwen3OmniMoeForConditionalGeneration(
     def talker_preprocess_prefill_chunked_prefill(
         self, input_ids: torch.Tensor, input_embeds: torch.Tensor, payload: OmniPayload
     ):
-        hs: HiddenStates = payload.get("hidden_states", {})
-        embed: Embeddings = payload.get("embed", {})
-        ids: Ids = payload.get("ids", {})
-
         update_dict: OmniPayload = {}
-
-        voice_type = payload.get("speaker")
-        if voice_type is not None and isinstance(voice_type, (list, tuple)) and len(voice_type) > 0:
-            voice_type = voice_type[0]
-        if not isinstance(voice_type, str) or not voice_type.strip():
-            voice_type = self.default_tts_text_spk_type
-        else:
-            voice_type = str(voice_type).lower().strip()
-        talker_device = self._module_device(self.talker)
-
-        thinker_sequence_embeds = embed["prefill"].to(
-            device=self._module_device(self.talker), dtype=torch.bfloat16
-        )
-        thinker_hidden_states = hs["output"].to(
-            device=self._module_device(self.talker), dtype=torch.bfloat16
-        )
-        thinker_sequences = (
-            ids.get("all")
-            if ids.get("all") is None
-            else torch.as_tensor(ids["all"], device=self._module_device(self.talker))
-        )
-        thinker_chatml_ids = (
-            ids.get("prompt")
-            if ids.get("prompt") is None
-            else torch.as_tensor(ids["prompt"], device=self._module_device(self.talker))
-        )
-
-        tts_bos_thinker = embed["tts_bos"].to(device=self._module_device(self.talker), dtype=torch.bfloat16)
-        tts_eos_thinker = embed["tts_eos"].to(device=self._module_device(self.talker), dtype=torch.bfloat16)
-        tts_pad_thinker = embed["tts_pad"].to(device=self._module_device(self.talker), dtype=torch.bfloat16)
-
-        if thinker_sequence_embeds is None or thinker_hidden_states is None:
-            raise ValueError(
-                "additional_information_by_req_id must include "
-                "'embed.prefill' and 'hidden_states.output' for talker prefill."
-            )
-
-        if not isinstance(thinker_sequence_embeds, torch.Tensor):
-            thinker_sequence_embeds = torch.as_tensor(thinker_sequence_embeds, device=self._module_device(self.talker))
-        if not isinstance(thinker_hidden_states, torch.Tensor):
-            thinker_hidden_states = torch.as_tensor(thinker_hidden_states, device=self._module_device(self.talker))
-
-        if isinstance(thinker_chatml_ids, torch.Tensor) or isinstance(thinker_chatml_ids, list):
-            ids_chatml = (
-                thinker_chatml_ids
-                if isinstance(thinker_chatml_ids, torch.Tensor)
-                else torch.as_tensor(thinker_chatml_ids, device=self._module_device(self.talker))
-            )
-            if ids_chatml.ndim == 1:
-                ids_chatml = ids_chatml.unsqueeze(0)
-        else:
-            ids_chatml = torch.zeros(
-                (1, thinker_sequence_embeds.shape[1]),
-                dtype=torch.long,
-                device=self._module_device(self.talker),
-            )
-            thinker_sequences = ids_chatml
+        (
+            talker_device,
+            speaker_id,
+            thinker_sequence_embeds,
+            thinker_hidden_states,
+            thinker_sequences,
+            ids_chatml,
+            tts_bos_thinker,
+            tts_eos_thinker,
+            tts_pad_thinker,
+        ) = self._prepare_talker_prefill_inputs(payload)
 
         num_processed_thinker_tokens = payload.get("meta", {}).get("num_processed_thinker_tokens", 0)
         if thinker_sequences is None:
@@ -1033,7 +1006,6 @@ class Qwen3OmniMoeForConditionalGeneration(
 
         actual_embed_size = thinker_sequence_embed_chunk.shape[0]
         thinker_sequences_chunk = thinker_sequences[chunk_offset : chunk_offset + actual_embed_size]
-        speaker_id = self._get_text_spk_token_id(voice_type)
         req_input_ids, req_embeds, trailing_text_hidden = self._thinker_to_talker_prefill(
             thinker_embed=thinker_sequence_embed_chunk.to(talker_device),
             thinker_hidden=thinker_hidden_chunk.to(talker_device),
@@ -1062,6 +1034,9 @@ class Qwen3OmniMoeForConditionalGeneration(
         embed: Embeddings,
         update_dict: OmniPayload,
     ) -> None:
+        """
+        Cache thinker embeds for decode stage.
+        """
         thinker_decode_embeds = embed.get("decode", None)
         if thinker_decode_embeds is not None:
             cached_thinker_decode_embeds = embed.get("cached_decode", None)
@@ -1096,6 +1071,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         self,
         thinker_embed: torch.Tensor,
         thinker_hidden: torch.Tensor,
+        multimodal_mask: torch.Tensor | None,
         input_ids: torch.Tensor,
         thinker_result_ids: torch.Tensor,
         speaker_id,
