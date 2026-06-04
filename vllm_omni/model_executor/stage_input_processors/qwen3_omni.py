@@ -739,7 +739,7 @@ def async_chunk_handle_ar_payload(
             return True
         _queue_decode_embed(transfer_manager, external_req_id, decode_embed)
 
-    merged_payload = transfer_manager._update_request_payload(external_req_id, payload_data)
+    merged_payload = _update_request_payload(transfer_manager, external_req_id, payload_data)
     request.additional_information = merged_payload
 
     prefill_boundary = payload_finished or has_decode_embed
@@ -813,6 +813,40 @@ def hook_for_chunked_prefill() -> dict[str, Any]:
         "async_chunk_cleanup_state_func": async_chunk_cleanup_state,
         "async_chunk_finalize_ar_payload_func": async_chunk_finalize_ar_payload,
     }
+
+
+def _update_request_payload(transfer_manager: Any, req_id: str, payload_data: dict[str, Any]) -> dict[str, Any]:
+        if req_id not in transfer_manager.request_payload:
+            transfer_manager.request_payload[req_id] = payload_data
+            return payload_data
+        origin_payload = transfer_manager.request_payload[req_id]
+        raw_ok = payload_data.get("meta", {}).pop("override_keys", [])
+        override_keys = {tuple(k) if isinstance(k, list) else k for k in raw_ok}
+        merged_payload = dict(origin_payload)
+        merged_payload.update({k: v for k, v in payload_data.items() if not isinstance(v, dict)})
+        for type_key, new_val in payload_data.items():
+            if not isinstance(new_val, dict):
+                continue
+            origin_sub = origin_payload.get(type_key, {})
+            if not isinstance(origin_sub, dict):
+                merged_payload[type_key] = new_val
+                continue
+            merged_sub = dict(origin_sub)
+            for qual, value in new_val.items():
+                if type_key == "meta" and qual == "finished":
+                    merged_sub[qual] = value
+                elif (type_key, qual) in override_keys:
+                    merged_sub[qual] = value
+                elif isinstance(value, torch.Tensor) and qual in origin_sub:
+                    merged_sub[qual] = torch.cat([origin_sub[qual], value], dim=0)
+                elif isinstance(value, list) and qual in origin_sub:
+                    merged_sub[qual] = origin_sub[qual] + value
+                else:
+                    merged_sub[qual] = value
+            merged_payload[type_key] = merged_sub
+
+        transfer_manager.request_payload[req_id] = merged_payload
+        return merged_payload
 
 
 def thinker2talker_full_payload(
