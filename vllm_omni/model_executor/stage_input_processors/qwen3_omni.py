@@ -894,7 +894,7 @@ def _update_request_payload(transfer_manager: Any, req_id: str, payload_data: di
             continue
         merged_sub = dict(origin_sub)
         for qual, value in new_val.items():
-            if type_key == "meta" and qual == "finished":
+            if type_key == "meta" and (qual == "finished" or qual == "is_segment_finished"):
                 merged_sub[qual] = value
             elif (type_key, qual) in override_keys:
                 merged_sub[qual] = value
