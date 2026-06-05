@@ -138,6 +138,7 @@ class OmniEngineArgs(EngineArgs):
     stage_connector_spec: dict[str, Any] = field(default_factory=dict)
     subtalker_sampling_params: dict[str, Any] | None = None
     async_chunk: bool = False
+    enable_chunked_prefill_between_stage: bool = False
     # WS-A: Stage-1 active stream slots. 0 = legacy preempt-everything.
     # Must be declared here so engine_args dict propagation does not silently
     # drop the value when constructing OmniEngineArgs from kwargs.
@@ -318,6 +319,7 @@ class OmniEngineArgs(EngineArgs):
             # All kwargs below are Omni specific
             stage_id=self.stage_id,
             async_chunk=self.async_chunk,
+            enable_chunked_prefill_between_stage=self.enable_chunked_prefill_between_stage,
             active_stream_window=self.active_stream_window,
             model_stage=self.model_stage,
             model_arch=self.model_arch,
