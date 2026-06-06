@@ -155,11 +155,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             multimodal_config.skip_mm_profiling = True
             self.has_preprocess = True
             self.has_postprocess = True
-            self.set_custom_preprocess(
-                self.talker_preprocess_chunked_prefill
-                if self._is_chunked_prefill_between_stage_enabled()
-                else self.talker_preprocess
-            )
+            self.set_custom_preprocess(self.talker_preprocess)
             self.set_custom_postprocess(self.talker_postprocess)
             self.thinker = None
             # Initialize talker model (text embeddings → codec codes)
@@ -702,12 +698,22 @@ class Qwen3OmniMoeForConditionalGeneration(
             request_resumable = meta.get("resumable", False)
             if num_computed_tokens is not None and not request_resumable:
                 meta["num_processed_tokens"] = int(num_computed_tokens)
-            input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, payload)
-            code_predictor_codes = torch.zeros(
-                (input_embeds.shape[0], self.talker.num_code_groups),
-                device=self._module_device(self.talker),
-                dtype=torch.long,
-            )
+            if self._is_chunked_prefill_between_stage_enabled():
+                input_ids, input_embeds, update_dict = self.talker_preprocess_prefill_chunked_prefill(
+                    input_ids, input_embeds, payload
+                )
+                code_predictor_codes = torch.zeros(
+                    (span_len, self.talker.num_code_groups),
+                    device=self._module_device(self.talker),
+                    dtype=torch.long,
+                )
+            else:
+                input_ids, input_embeds, update_dict = self.talker_preprocess_prefill(input_ids, input_embeds, payload)
+                code_predictor_codes = torch.zeros(
+                    (input_embeds.shape[0], self.talker.num_code_groups),
+                    device=self._module_device(self.talker),
+                    dtype=torch.long,
+                )
             update_dict.setdefault("codes", {})["audio"] = code_predictor_codes
         else:
             # decode
@@ -715,49 +721,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                 # Prefill already consumed the first text token via the
                 # assistant bootstrap path, so decode starts from the
                 # remaining-text boundary rather than cumulative index 0.
-                prefill_consumed_text_tokens = meta.get("prefill_consumed_text_tokens")
-                if prefill_consumed_text_tokens is None:
-                    raise RuntimeError("Missing prefill_consumed_text_tokens for talker decode handoff.")
-                meta["num_processed_tokens"] = prefill_consumed_text_tokens
-                update_dict.setdefault("meta", {})["decode_flag"] = True
-
-            last_talker_hidden, text_step, update_dict = self.talker_preprocess_decode(
-                input_ids, input_embeds, update_dict, payload
-            )
-            update_dict["mtp_inputs"] = last_talker_hidden, text_step
-
-        update_dict.setdefault("meta", {})["num_processed_tokens"] = meta.get("num_processed_tokens", 0) + span_len
-        return input_ids, input_embeds, update_dict
-
-    def talker_preprocess_chunked_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
-        """
-        Preprocess talker embeds for between-stage chunked-prefill.
-        """
-        payload: OmniPayload = info_dict
-        meta = payload.setdefault("meta", {})
-
-        if input_embeds is None and input_ids is not None:
-            input_embeds = self.talker.embed_input_ids(input_ids)
-
-        span_len = input_ids.shape[0]
-        update_dict: OmniPayload = {}
-        is_prefill = bool(payload.get("_omni_is_prefill", span_len > 1))
-        if is_prefill:
-            num_computed_tokens = payload.get("_omni_num_computed_tokens")
-            request_resumable = meta.get("resumable", False)
-            if num_computed_tokens is not None and not request_resumable:
-                meta["num_processed_tokens"] = int(num_computed_tokens)
-            input_ids, input_embeds, update_dict = self.talker_preprocess_prefill_chunked_prefill(
-                input_ids, input_embeds, payload
-            )
-            code_predictor_codes = torch.zeros(
-                (span_len, self.talker.num_code_groups),
-                device=self._module_device(self.talker),
-                dtype=torch.long,
-            )
-            update_dict.setdefault("codes", {})["audio"] = code_predictor_codes
-        else:
-            if not meta.get("decode_flag", False):
                 prefill_consumed_text_tokens = meta.get("prefill_consumed_text_tokens")
                 if prefill_consumed_text_tokens is None:
                     raise RuntimeError("Missing prefill_consumed_text_tokens for talker decode handoff.")
