@@ -32,6 +32,7 @@ class HiddenStates(TypedDict, total=False):
 class Embeddings(TypedDict, total=False):
     prefill: torch.Tensor
     decode: torch.Tensor
+    cached_decode: torch.Tensor
     tts_bos: torch.Tensor
     tts_eos: torch.Tensor
     tts_pad: torch.Tensor
@@ -120,6 +121,7 @@ class EmbeddingsStruct(_StructBase):
     decode: torch.Tensor | None = None
     decode_token_start: int | None = None
     decode_token_end: int | None = None
+    cached_decode: torch.Tensor | None = None
     tts_bos: torch.Tensor | None = None
     tts_eos: torch.Tensor | None = None
     tts_pad: torch.Tensor | None = None

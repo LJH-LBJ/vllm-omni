@@ -1308,22 +1308,9 @@ class Qwen3OmniMoeForConditionalGeneration(
         text_step = None
         try:
             if self.vllm_config.model_config.async_chunk:
-                q_tail = hs.get("trailing_text", None)
-                if isinstance(q_tail, torch.Tensor) and q_tail.shape[0] > 1:
-                    text_step = q_tail[0:1, :].to(input_embeds.device, dtype=input_embeds.dtype)
-                    trailing_text = q_tail[1:, :].detach().to(input_embeds.device, dtype=input_embeds.dtype)
-                    thinker_decode_embeds = payload.get("embed", {}).get("decode", None)
-                    if isinstance(thinker_decode_embeds, torch.Tensor) and thinker_decode_embeds.numel() > 0:
-                        text_embeds = self._project_thinker_decode_embeds(
-                            thinker_decode_embeds, input_embeds.device, input_embeds.dtype
-                        )
-                        trailing_text = torch.cat((trailing_text[:-1], text_embeds, trailing_text[-1:]), dim=0)
-                        update_dict.setdefault("embed", {})["decode"] = None
-                    update_dict.setdefault("hidden_states", {})["trailing_text"] = trailing_text
-                else:
-                    text_step = self._thinker_decode_to_talker_decode_chunked_prefill(
-                        payload, input_ids.device, update_dict
-                    )
+                text_step = self._thinker_decode_to_talker_decode_chunked_prefill(
+                    payload, input_ids.device, update_dict
+                )
             else:
                 q_tail = hs.get("trailing_text", None)
                 if isinstance(q_tail, torch.Tensor) and q_tail.numel() > 0:
