@@ -764,7 +764,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                 meta["num_processed_tokens"] = prefill_consumed_text_tokens
                 update_dict.setdefault("meta", {})["decode_flag"] = True
 
-            last_talker_hidden, text_step, update_dict = self.talker_preprocess_decode_chunked_prefill(
+            last_talker_hidden, text_step, update_dict = self.talker_preprocess_decode(
                 input_ids, input_embeds, update_dict, payload
             )
             update_dict["mtp_inputs"] = last_talker_hidden, text_step
@@ -1264,7 +1264,12 @@ class Qwen3OmniMoeForConditionalGeneration(
         text_step = None
         try:
             if self.vllm_config.model_config.async_chunk:
-                text_step = self._thinker_decode_to_talker_decode(payload, input_ids.device, update_dict)
+                if self._is_chunked_prefill_between_stage_enabled():
+                    text_step = self._thinker_decode_to_talker_decode_chunked_prefill(
+                        payload, input_ids.device, update_dict
+                    )
+                else:
+                    text_step = self._thinker_decode_to_talker_decode(payload, input_ids.device, update_dict)
             else:
                 q_tail = hs.get("trailing_text", None)
                 if isinstance(q_tail, torch.Tensor) and q_tail.numel() > 0:
@@ -1283,47 +1288,6 @@ class Qwen3OmniMoeForConditionalGeneration(
             if last_talker_hidden_tensor is not None:
                 last_talker_hidden = last_talker_hidden_tensor.to(input_embeds.device, dtype=input_embeds.dtype)
                 last_talker_hidden = last_talker_hidden.reshape(*last_talker_hidden.shape[-2:])  # [1, hidden_size]
-            else:
-                last_talker_hidden = torch.zeros(
-                    (1, self.talker_config.text_config.hidden_size),
-                    device=input_embeds.device,
-                    dtype=input_embeds.dtype,
-                )
-        except Exception as e:
-            logger.error(f"Error in decode: {e}")
-
-        return last_talker_hidden, text_step, update_dict
-
-    def talker_preprocess_decode_chunked_prefill(
-        self, input_ids: torch.Tensor, input_embeds: torch.Tensor, update_dict: OmniPayload, payload: OmniPayload
-    ):
-        hs = payload.get("hidden_states", {})
-
-        last_talker_hidden = None
-        text_step = None
-        try:
-            if self.vllm_config.model_config.async_chunk:
-                text_step = self._thinker_decode_to_talker_decode_chunked_prefill(
-                    payload, input_ids.device, update_dict
-                )
-            else:
-                q_tail = hs.get("trailing_text", None)
-                if isinstance(q_tail, torch.Tensor) and q_tail.numel() > 0:
-                    use_vec = q_tail[0:1, :]
-                    new_q_tail = (
-                        q_tail[1:, :].detach()
-                        if q_tail.shape[0] > 1
-                        else self.tts_pad_embed.to(input_embeds.device, dtype=input_embeds.dtype)
-                    )
-                    text_step = use_vec.to(input_embeds.device, dtype=input_embeds.dtype)
-                    update_dict.setdefault("hidden_states", {})["trailing_text"] = new_q_tail
-                else:
-                    text_step = self.tts_pad_embed.to(input_embeds.device, dtype=input_embeds.dtype)
-
-            last_talker_hidden_tensor = hs.get("last")
-            if last_talker_hidden_tensor is not None:
-                last_talker_hidden = last_talker_hidden_tensor.to(input_embeds.device, dtype=input_embeds.dtype)
-                last_talker_hidden = last_talker_hidden.reshape(*last_talker_hidden.shape[-2:])
             else:
                 last_talker_hidden = torch.zeros(
                     (1, self.talker_config.text_config.hidden_size),
