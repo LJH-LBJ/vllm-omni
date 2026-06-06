@@ -191,11 +191,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                 # sync stall; build_mm_cpu handles the eventual D2H at payload time.
                 ("codes", "audio"),
             }
-            # Keys that need to be accumulated across streaming inputs
-            self.streaming_accumulated_keys: set[tuple[str, str]] = {
-                ("embed", "prefill"),
-                ("hidden_states", "output"),
-            }
 
         elif self.model_stage == "code2wav":
             multimodal_config.skip_mm_profiling = True
