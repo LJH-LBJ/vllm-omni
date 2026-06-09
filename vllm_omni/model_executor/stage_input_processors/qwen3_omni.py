@@ -797,7 +797,7 @@ def async_chunk_handle_ar_payload(
             return True
 
     if has_prefill_embeds:
-        # accmulate prefill chunks until the decode chunk arrives, then merge and send
+        # accumulate prefill chunks until the decode chunk arrives, then merge and send
         merged_payload = _update_request_payload(transfer_manager, external_req_id, payload_data)
         request.additional_information = merged_payload
         prefill_boundary = payload_finished or has_decode_embed
