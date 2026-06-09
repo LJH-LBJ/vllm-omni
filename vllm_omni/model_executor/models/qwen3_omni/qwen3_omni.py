@@ -989,6 +989,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             update_dict.setdefault("hidden_states", {})["trailing_text"] = trailing_text_hidden.detach()
         meta_out = update_dict.setdefault("meta", {})
         meta_out["prefill_consumed_text_tokens"] = 1 if decode_assistant_fill is not None else 0
+        self._talker_cache_thinker_decode_embeds(payload.get("embed", {}), update_dict)
         update_dict.setdefault("embed", {})["decode"] = None
 
         return req_input_ids, req_embeds, update_dict
@@ -1017,19 +1018,6 @@ class Qwen3OmniMoeForConditionalGeneration(
                     [cached_thinker_decode_embeds, thinker_decode_embeds], dim=0
                 )
         update_dict.setdefault("embed", {})["decode"] = None
-
-    def _project_thinker_decode_embeds(
-        self,
-        thinker_decode_embeds: torch.Tensor,
-        device: torch.device,
-        dtype: torch.dtype | None = None,
-    ) -> torch.Tensor:
-        thinker_decode_embeds = thinker_decode_embeds.reshape(-1, thinker_decode_embeds.shape[-1]).to(
-            device=self._module_device(self.talker), dtype=torch.bfloat16
-        )
-        text_embeds = self.talker.text_projection(thinker_decode_embeds)
-        text_embeds = text_embeds.to(device=device, dtype=dtype) if dtype is not None else text_embeds.to(device=device)
-        return text_embeds.reshape(-1, self.talker_config.text_config.hidden_size)
 
     def _thinker_to_talker_prefill(
         self,
@@ -1159,35 +1147,10 @@ class Qwen3OmniMoeForConditionalGeneration(
         """
         embed = payload.get("embed", {})
         meta = payload.get("meta", {})
-        start_index = meta.get("num_processed_tokens", 0)
 
-        if self._is_chunked_prefill_between_stage_enabled():
-            ids = payload.get("ids", {})
-            thinker_decode_embed = embed.get("decode", None)
-
-            if start_index >= len(ids.get("output", [])) - 1 and not (
-                isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0
-            ):
-                if meta.get("eos_emitted", False):
-                    return self.tts_pad_embed.to(device)
-                if not meta.get("thinker_finished", False):
-                    return self.tts_pad_embed.to(device)
-                update_dict.setdefault("meta", {})["eos_emitted"] = True
-                return self.tts_eos_embed.to(device)
-
-            if isinstance(thinker_decode_embed, torch.Tensor) and thinker_decode_embed.numel() > 0:
-                text_step = self._project_thinker_decode_embeds(thinker_decode_embed, device)
-                update_dict.setdefault("embed", {})["decode"] = None
-                return text_step[0:1]
-
-            if meta.get("eos_emitted", False):
-                return self.tts_pad_embed.to(device)
-            update_dict.setdefault("meta", {})["eos_emitted"] = True
-            return self.tts_eos_embed.to(device)
-
-        # Non-chunked path: cursor-based decode using cached thinker embeddings
         cached_thinker_decode_embeds = embed.get("cached_decode", None)
         thinker_decode_embed = embed.get("decode", None)
+        start_index = meta.get("num_processed_tokens", 0)
 
         if cached_thinker_decode_embeds is not None and start_index < cached_thinker_decode_embeds.shape[0]:
             cached_thinker_decode_embeds = cached_thinker_decode_embeds.to(device)

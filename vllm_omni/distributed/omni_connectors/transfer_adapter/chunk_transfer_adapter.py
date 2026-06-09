@@ -63,7 +63,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.custom_process_next_stage_input_func: Callable[..., OmniPayloadStruct | None] | None = None
         self.async_chunk_try_cached_payload_func: Callable[..., bool] | None = None
         self.async_chunk_handle_ar_payload_func: Callable[..., bool | None] | None = None
-        self.async_chunk_attach_additional_info_func: Callable[..., Any] | None = None
         self.async_chunk_cleanup_state_func: Callable[..., None] | None = None
         self.async_chunk_finalize_ar_payload_func: Callable[..., bool] | None = None
         custom_process_next_stage_input_func = getattr(model_config, "custom_process_next_stage_input_func", None)
@@ -115,9 +114,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
 
         self.async_chunk_try_cached_payload_func = getattr(hook_module, "async_chunk_try_cached_payload", None)
         self.async_chunk_handle_ar_payload_func = getattr(hook_module, "async_chunk_handle_ar_payload", None)
-        self.async_chunk_attach_additional_info_func = getattr(
-            hook_module, "async_chunk_attach_additional_information", None
-        )
         self.async_chunk_cleanup_state_func = getattr(hook_module, "async_chunk_cleanup_state", None)
         self.async_chunk_finalize_ar_payload_func = getattr(hook_module, "async_chunk_finalize_ar_payload", None)
 
@@ -689,8 +685,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         for req_id in cached_reqs.req_ids:
             request = requests.get(req_id) if req_id else None
             additional_info = getattr(request, "additional_information", None) if request else None
-            if self.async_chunk_attach_additional_info_func is not None:
-                additional_info = self.async_chunk_attach_additional_info_func(self, req_id, additional_info)
             cached_reqs.additional_information[req_id] = additional_info
             if request and additional_info:
                 request.additional_information = None

@@ -788,28 +788,28 @@ def async_chunk_handle_ar_payload(
     has_prefill_embeds = isinstance(embed_data.get("prefill"), torch.Tensor)
     has_decode_embed = isinstance(embed_data.get("decode"), torch.Tensor)
 
-    decode_embed = None
     if has_decode_embed:
-        decode_embed = embed_data.pop("decode")
-    if isinstance(decode_embed, torch.Tensor):
-        boot_payload = _release_pending_prefill_boot(transfer_manager, external_req_id, decode_embed, meta)
+        boot_payload = _release_pending_prefill_boot(transfer_manager, external_req_id, embed_data["decode"], meta)
         if boot_payload is not None:
             request.additional_information = boot_payload
             transfer_manager._finished_load_reqs.add(req_id)
             _evict_prefill_tensors(transfer_manager, external_req_id)
             return True
-        _queue_decode_embed(transfer_manager, external_req_id, decode_embed)
 
-    merged_payload = _update_request_payload(transfer_manager, external_req_id, payload_data)
-    request.additional_information = merged_payload
+    if has_prefill_embeds:
+        # accmulate prefill chunks until the decode chunk arrives, then merge and send
+        merged_payload = _update_request_payload(transfer_manager, external_req_id, payload_data)
+        request.additional_information = merged_payload
+        prefill_boundary = payload_finished or has_decode_embed
+        if not prefill_boundary:
+            if _gate_chunked_prefill_chunk(transfer_manager, request, payload_data, external_req_id):
+                return True
+        if prefill_boundary:
+            _evict_prefill_tensors(transfer_manager, external_req_id)
+    else:
+        # decode-only
+        request.additional_information = payload_data
 
-    prefill_boundary = payload_finished or has_decode_embed
-    if has_prefill_embeds and not prefill_boundary:
-        if _gate_chunked_prefill_chunk(transfer_manager, request, payload_data, external_req_id):
-            return True
-
-    if prefill_boundary and not payload_finished:
-        _evict_prefill_tensors(transfer_manager, external_req_id)
     return None
 
 
@@ -823,35 +823,6 @@ def async_chunk_finalize_ar_payload(
         pending_decode.upstream_finished = True
         return False
     return True
-
-
-def async_chunk_attach_additional_information(
-    transfer_manager: Any,
-    req_id: str,
-    additional_info: Any,
-) -> Any:
-    if not isinstance(additional_info, dict):
-        return additional_info
-
-    external_req_id = transfer_manager.request_ids_mapping.get(req_id, req_id)
-    pending_decode = _get_async_chunk_pending_decode(transfer_manager)
-    state = pending_decode.get(external_req_id)
-    if state is None or not state.embeds:
-        return additional_info
-
-    payload = dict(additional_info)
-    embed = payload.get("embed", {})
-    embed = dict(embed) if isinstance(embed, dict) else {}
-
-    if state.embeds:
-        embed["decode"] = state.embeds.popleft()
-
-    payload["embed"] = embed
-    if not state.embeds:
-        pending_decode.pop(external_req_id, None)
-        if state.upstream_finished:
-            transfer_manager.finished_requests.add(req_id)
-    return payload
 
 
 def async_chunk_cleanup_state(
@@ -870,7 +841,6 @@ def hook_for_chunked_prefill() -> dict[str, Any]:
     return {
         "async_chunk_try_cached_payload_func": async_chunk_try_cached_payload,
         "async_chunk_handle_ar_payload_func": async_chunk_handle_ar_payload,
-        "async_chunk_attach_additional_info_func": async_chunk_attach_additional_information,
         "async_chunk_cleanup_state_func": async_chunk_cleanup_state,
         "async_chunk_finalize_ar_payload_func": async_chunk_finalize_ar_payload,
     }
