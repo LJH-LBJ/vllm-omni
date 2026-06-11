@@ -853,8 +853,9 @@ def _update_request_payload(transfer_manager: Any, req_id: str, payload_data: di
         return payload_data
 
     # Pop override_keys so they don't leak into merged result
-    override_keys = {tuple(k) if isinstance(k, list) else k
-                     for k in payload_data.get("meta", {}).pop("override_keys", [])}
+    override_keys = {
+        tuple(k) if isinstance(k, list) else k for k in payload_data.get("meta", {}).pop("override_keys", [])
+    }
 
     origin = transfer_manager.request_payload[req_id]
     merged = dict(origin)
@@ -869,8 +870,9 @@ def _update_request_payload(transfer_manager: Any, req_id: str, payload_data: di
         merged_sub = dict(origin_sub)
         for qual, value in new_val.items():
             old = origin_sub.get(qual)
-            if (type_key, qual) in override_keys or \
-                (type_key == "meta" and qual in ("finished", "is_segment_finished")):
+            if (type_key, qual) in override_keys or (
+                type_key == "meta" and qual in ("finished", "is_segment_finished")
+            ):
                 merged_sub[qual] = value
             elif isinstance(value, torch.Tensor) and isinstance(old, torch.Tensor):
                 merged_sub[qual] = torch.cat([old, value], dim=0)
