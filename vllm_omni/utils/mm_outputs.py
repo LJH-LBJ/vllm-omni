@@ -10,7 +10,7 @@ from vllm.logger import init_logger
 logger = init_logger(__name__)
 
 
-def build_mm_cpu(multimodal_outputs: dict) -> dict[str, object]:
+def build_mm_cpu(multimodal_outputs: dict, non_blocking: bool = False) -> dict[str, object]:
     """Pre-copies multimodal tensor to CPU once (not per-request) to avoid
     redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
 
@@ -19,6 +19,10 @@ def build_mm_cpu(multimodal_outputs: dict) -> dict[str, object]:
 
     Args:
         multimodal_outputs: Multimodal dict mapping strings to objects.
+        non_blocking: If True, D2H copies are non-blocking; the caller must
+            synchronize (e.g. torch.cuda.synchronize()) before accessing the
+            returned CPU tensors.  Useful for overlapping copies with
+            subsequent CPU/GPU work.
     """
     # Pre-copy multimodal tensors to CPU once (not per-request) to avoid
     # redundant D2H transfers when gpu_resident_buffer_keys keeps them on GPU.
@@ -30,27 +34,27 @@ def build_mm_cpu(multimodal_outputs: dict) -> dict[str, object]:
 
     if multimodal_outputs:
         for k, v in multimodal_outputs.items():
-            cpu_v = _to_cpu(v)
+            cpu_v = _to_cpu(v, non_blocking=non_blocking)
             if cpu_v is not None:
                 mm_cpu[k] = cpu_v
     return mm_cpu
 
 
-def _to_cpu(value):
+def _to_cpu(value, non_blocking: bool = False):
     """Recursively detach + move tensors to CPU; preserve dict/list nesting."""
     if isinstance(value, torch.Tensor):
-        return value.detach().to("cpu").contiguous()
+        return value.detach().to("cpu", non_blocking=non_blocking).contiguous()
     if isinstance(value, dict):
         out = {}
         for k, v in value.items():
-            cpu_v = _to_cpu(v)
+            cpu_v = _to_cpu(v, non_blocking=non_blocking)
             if cpu_v is not None:
                 out[k] = cpu_v
         return out or None
     if isinstance(value, list):
         if not value:
             return value
-        return [_to_cpu(v) for v in value]
+        return [_to_cpu(v, non_blocking=non_blocking) for v in value]
     return value
 
 

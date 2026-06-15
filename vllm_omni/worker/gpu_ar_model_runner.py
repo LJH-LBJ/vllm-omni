@@ -113,6 +113,13 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
         # each model stage has their own hidden size
         self.hidden_size = self.model_config.hf_text_config.hidden_size
         self.inputs_embeds = self._make_buffer(self.max_num_tokens, self.hidden_size, dtype=self.dtype, numpy=False)
+        # Pinned (page-locked) CPU buffer for non-blocking D2H hidden-states copy.
+        # GPU DMA can directly target pinned memory, making the copy truly async.
+        self._hidden_states_cpu_pinned = torch.empty(
+            self.max_num_tokens, self.hidden_size,
+            dtype=self.dtype,
+            pin_memory=True,
+        )
         # Initialize KV cache manager (preserve vllm_config fallback behavior)
         self.kv_transfer_manager = OmniKVTransferManager.from_vllm_config(self.vllm_config, self.model_config)
         # Worker-connector init is gated by a per-`model_arch` allowlist
@@ -1147,7 +1154,13 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
             if audio_sparse_output:
                 pass
             elif len(downstream_req_ids) == len(req_ids_output_copy):
-                hidden_states_cpu = hidden_states[:num_valid_tokens].detach().to("cpu").contiguous()
+                # Direct GPU→pinned-CPU copy: DMA writes straight into page-locked
+                # memory without driver-internal bounce buffer, truly async.
+                # Sync point is right before the pooler_output loop below.
+                self._hidden_states_cpu_pinned[:num_valid_tokens].copy_(
+                    hidden_states[:num_valid_tokens].detach(), non_blocking=True
+                )
+                hidden_states_cpu = self._hidden_states_cpu_pinned[:num_valid_tokens]
             else:
                 req_hidden_states_cpu = {}
         num_scheduled_tokens_np = getattr(self, "_omni_num_scheduled_tokens_np", None)
@@ -1191,7 +1204,12 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                     scheduler_output.num_scheduled_tokens,
                 )
             if self.omni_prefix_cache is None or combined_multimodal_outputs is None:
-                mm_cpu = build_mm_cpu(flatten_payload(multimodal_outputs) if multimodal_outputs else multimodal_outputs)
+                # Non-blocking: all D2H copies are covered by the single
+                # torch.cuda.synchronize() before the pooler_output loop below.
+                mm_cpu = build_mm_cpu(
+                    flatten_payload(multimodal_outputs) if multimodal_outputs else multimodal_outputs,
+                    non_blocking=True,
+                )
 
             self._process_additional_information_updates(
                 hidden_states,
@@ -1209,7 +1227,11 @@ class GPUARModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin):
                     start = int(query_start_loc_cpu[idx])
                     sched = int(num_scheduled_tokens_np[idx])
                     end = start + sched
-                    req_hidden_states_cpu[rid] = hidden_states[start:end].detach().to("cpu").contiguous()
+                    req_hidden_states_cpu[rid] = hidden_states[start:end].detach().to("cpu", non_blocking=True)
+
+            # Ensure all pending non_blocking D2H copies are complete before
+            # reading CPU-side hidden states in the pooler_output loop below.
+            torch.cuda.synchronize()
 
             pooler_output = []
             for rid in req_ids_output_copy:
