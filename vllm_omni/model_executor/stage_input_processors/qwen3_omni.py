@@ -676,7 +676,7 @@ def thinker2talker_async_chunk(
 
 def thinker2talker_async_chunk_chunked_prefill(
     transfer_manager: Any,
-    pooling_output: OmniPayload,
+    multimodal_output: OmniPayload,
     request: OmniEngineCoreRequest,
     is_finished: bool = False,
 ) -> OmniPayloadStruct | None:
@@ -685,15 +685,15 @@ def thinker2talker_async_chunk_chunked_prefill(
     prompt_token_ids = _ensure_list(request.prompt_token_ids)
     sent_prompt_tokens = _get_prefill_part_state(transfer_manager).get(request_id, {}).get("sent_prompt_tokens", 0)
     if sent_prompt_tokens >= len(prompt_token_ids) or (is_finished and not output_token_ids):
-        return thinker2talker_async_chunk(transfer_manager, pooling_output, request, is_finished)
+        return thinker2talker_async_chunk(transfer_manager, multimodal_output, request, is_finished)
 
-    if not isinstance(pooling_output, dict):
+    if not isinstance(multimodal_output, dict):
         logger.debug("thinker2talker_async_chunk: skip non-dict pooling_output for req=%s", request_id)
         return None
 
-    thinker_hs = pooling_output.get("hidden_states", {})
+    thinker_hs = multimodal_output.get("hidden_states", {})
     thinker_layers = thinker_hs.get("layers", {}) if isinstance(thinker_hs, dict) else {}
-    thinker_embed_raw = pooling_output.get("embed", {})
+    thinker_embed_raw = multimodal_output.get("embed", {})
     thinker_embed = thinker_embed_raw if isinstance(thinker_embed_raw, dict) else {}
     thinker_emb = _layer_tensor(thinker_layers, _EMBED_LAYER_KEY)
     thinker_hid = _layer_tensor(thinker_layers, _HIDDEN_LAYER_KEY)
