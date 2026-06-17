@@ -35,7 +35,8 @@ LONG_AUDIO_DURATION_SEC = 120
 
 
 def get_batch_token_config(default_path):
-    """Override stage 1's max_num_batched_tokens to exercise small-batch paths.
+    """Override stage 1's max_num_batched_tokens to exercise small-batch paths
+    with chunked prefill between stages enabled.
 
     Uses the new flat-stage schema (``stages.<id>.<field>``); the legacy
     ``stage_args.<id>.engine_args.<field>`` path no longer applies because
@@ -44,6 +45,7 @@ def get_batch_token_config(default_path):
     return modify_stage_config(
         default_path,
         updates={
+            "enable_chunked_prefill_between_stage": True,
             "stages": {0: {"max_num_batched_tokens": 64}, 1: {"max_num_batched_tokens": 64}},
         },
     )

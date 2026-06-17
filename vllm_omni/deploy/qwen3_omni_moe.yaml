@@ -13,7 +13,7 @@
 #   * Platform sections flip enforce_eager per-stage where platform
 #     cudagraph support differs.
 async_chunk: true
-enable_chunked_prefill_between_stage: true
+enable_chunked_prefill_between_stage: false
 
 connectors:
   connector_of_shared_memory:
