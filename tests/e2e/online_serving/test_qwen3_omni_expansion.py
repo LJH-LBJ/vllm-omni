@@ -80,9 +80,6 @@ test_params = [
         ),
         id="async_chunk",
     ),
-]
-
-test_token_params = [
     pytest.param(
         OmniServerParams(
             model=model,
@@ -91,7 +88,7 @@ test_token_params = [
             server_args=["--async-chunk"],
         ),
         id="batch_token_64",
-    )
+    ),
 ]
 
 
@@ -153,7 +150,7 @@ def test_text_to_audio_001(omni_server, openai_client) -> None:
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params + test_token_params, indirect=True)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_text_to_text_audio_001(omni_server, openai_client) -> None:
     """
     Input Modal: text
@@ -197,7 +194,7 @@ def test_text_video_to_text_001(omni_server, openai_client) -> None:
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params + test_token_params, indirect=True)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_text_audio_to_text_audio_001(omni_server, openai_client) -> None:
     """
     Input Modal: text, audio
@@ -220,7 +217,7 @@ def test_text_audio_to_text_audio_001(omni_server, openai_client) -> None:
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params + test_token_params, indirect=True)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_text_audio_to_text_audio_002(omni_server, openai_client) -> None:
     """
     Input Modal: text, long-duration audio (~LONG_AUDIO_DURATION_SEC s WAV)
@@ -245,7 +242,7 @@ def test_text_audio_to_text_audio_002(omni_server, openai_client) -> None:
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params + test_token_params, indirect=True)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_text_image_to_text_audio_001(omni_server, openai_client) -> None:
     """
     Input Modal: text, image
@@ -269,7 +266,7 @@ def test_text_image_to_text_audio_001(omni_server, openai_client) -> None:
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params + test_token_params, indirect=True)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_large_image_to_text_audio_001(omni_server, openai_client) -> None:
     """
     Input Modal: text, high-resolution image (1080p-class JPEG)
@@ -297,7 +294,7 @@ def test_large_image_to_text_audio_001(omni_server, openai_client) -> None:
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params + test_token_params, indirect=True)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_text_video_to_text_audio_001(omni_server, openai_client) -> None:
     """
     Input Modal: text, video
@@ -323,7 +320,7 @@ def test_text_video_to_text_audio_001(omni_server, openai_client) -> None:
 
 @pytest.mark.skip(reason="There is a known issue with shape mismatch error.")
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", test_params + test_token_params, indirect=True)
+@pytest.mark.parametrize("omni_server", test_params, indirect=True)
 def test_mix_to_text_audio_001(omni_server, openai_client) -> None:
     """
     Input Modal: text, audio, image, video

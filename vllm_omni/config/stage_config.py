@@ -875,6 +875,9 @@ def _build_engine_args(
     # Materialize the resolved pipeline-wide async_chunk value into every
     # stage so explicit False overrides do not get lost downstream.
     engine_args["async_chunk"] = bool(deploy.async_chunk)
+    engine_args["enable_chunked_prefill_between_stage"] = bool(deploy.async_chunk) and bool(
+        deploy.enable_chunked_prefill_between_stage
+    )
     if ps.omni_kv_config:
         engine_args["omni_kv_config"] = dict(ps.omni_kv_config)
     return engine_args
@@ -915,6 +918,8 @@ def merge_pipeline_deploy(
         cli_overrides = {}
 
     deploy = _apply_platform_overrides(deploy)
+    if not deploy.async_chunk:
+        deploy.enable_chunked_prefill_between_stage = False
     deploy_by_id = {s.stage_id: s for s in deploy.stages}
 
     # A pipeline supports async_chunk if any stage has either an explicit
@@ -1205,6 +1210,8 @@ class StageConfigFactory:
         cli_async_chunk = cli_overrides.get("async_chunk")
         if cli_async_chunk is not None:
             deploy_cfg.async_chunk = bool(cli_async_chunk)
+        if not deploy_cfg.async_chunk:
+            deploy_cfg.enable_chunked_prefill_between_stage = False
 
         pipeline_key = deploy_cfg.pipeline or model_type
         if pipeline_key not in _PIPELINE_REGISTRY:

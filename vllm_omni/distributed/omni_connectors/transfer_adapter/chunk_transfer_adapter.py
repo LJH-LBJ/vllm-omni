@@ -61,10 +61,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.model_mode = getattr(model_config, "worker_type", None) or "ar"
         # State specific to Chunk management
         self.custom_process_next_stage_input_func: Callable[..., OmniPayloadStruct | None] | None = None
-        self.async_chunk_try_cached_payload_func: Callable[..., bool] | None = None
         self.async_chunk_handle_ar_payload_func: Callable[..., bool | None] | None = None
         self.async_chunk_cleanup_state_func: Callable[..., None] | None = None
-        self.async_chunk_finalize_ar_payload_func: Callable[..., bool] | None = None
         custom_process_next_stage_input_func = getattr(model_config, "custom_process_next_stage_input_func", None)
         custom_process_input_func = getattr(model_config, "custom_process_input_func", None)
         if custom_process_next_stage_input_func:
@@ -102,6 +100,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         #   been read").
         self._held_non_active: deque[Any] = deque()
         self.requests_num_chunks_sent: dict[str, int] = defaultdict(int)
+        self._pending_streaming_prefills: dict[str, dict] = {}
 
     def _load_chunked_prefill_hooks(self, hook_module: Any) -> None:
         hook_factory = getattr(hook_module, "hook_for_chunked_prefill", None)
@@ -112,10 +111,8 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                     setattr(self, attr_name, hook)
                 return
 
-        self.async_chunk_try_cached_payload_func = getattr(hook_module, "async_chunk_try_cached_payload", None)
         self.async_chunk_handle_ar_payload_func = getattr(hook_module, "async_chunk_handle_ar_payload", None)
         self.async_chunk_cleanup_state_func = getattr(hook_module, "async_chunk_cleanup_state", None)
-        self.async_chunk_finalize_ar_payload_func = getattr(hook_module, "async_chunk_finalize_ar_payload", None)
 
     @staticmethod
     def _is_truthy_scalar(value: Any) -> bool:
@@ -228,10 +225,6 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         external_req_id = self.request_ids_mapping.get(req_id, req_id)
         connector_get_key = f"{external_req_id}_{target_stage_id}_{chunk_id}"
 
-        if self.model_mode == "ar" and self.async_chunk_try_cached_payload_func is not None:
-            if self.async_chunk_try_cached_payload_func(self, request):
-                return True
-
         try:
             result = self.connector.get(
                 str(target_stage_id),
@@ -264,28 +257,23 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
                         meta,
                         payload_finished,
                     )
+                    if early is True:
+                        if payload_finished:
+                            self.finished_requests.add(req_id)
+                            request.resumable = False
+                        return True
                 else:
                     request.additional_information = payload_data
-                    early = None
-                if payload_segment_finished:
-                    self.segment_finished_requests.add(req_id)
-                if early is True:
-                    if payload_finished:
-                        self.finished_requests.add(req_id)
-                        request.resumable = False
-                    return True
+
                 if chunk_id > 0 and request.resumable:
                     # For new streaming input segment, we should update prompt from payload
                     construct_next_stage_streaming_input_prompt(payload_data, request)
 
                 if payload_finished:
-                    if self.async_chunk_finalize_ar_payload_func is not None:
-                        should_finish = self.async_chunk_finalize_ar_payload_func(self, req_id, external_req_id)
-                    else:
-                        should_finish = True
-                    if should_finish:
-                        self.finished_requests.add(req_id)
+                    self.finished_requests.add(req_id)
                     request.resumable = False
+                if payload_segment_finished:
+                    self.segment_finished_requests.add(req_id)
             else:
                 if payload_finished:
                     self.finished_requests.add(req_id)
@@ -463,6 +451,7 @@ class OmniChunkTransferAdapter(OmniTransferAdapterBase):
         self.request_payload.pop(external_req_id, None)
         self.code_prompt_token_ids.pop(external_req_id, None)
         self.requests_num_chunks_sent.pop(external_req_id, None)
+        self._pending_streaming_prefills.pop(external_req_id, None)
         if self.async_chunk_cleanup_state_func is not None:
             self.async_chunk_cleanup_state_func(self, external_req_id)
 

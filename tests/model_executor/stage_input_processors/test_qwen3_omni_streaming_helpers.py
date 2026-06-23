@@ -142,6 +142,80 @@ def test_streaming_input_prefill_flushes_with_next_decode_chunk() -> None:
     assert "rt-2" not in transfer_manager._pending_streaming_prefills
 
 
+def test_chunked_prefill_held_final_waits_for_first_decode_token_when_finished() -> None:
+    transfer_manager = SimpleNamespace(
+        _prefill_part_state={
+            "req-final": {
+                "sent_prompt_tokens": 3,
+                "held_final_prefill": {
+                    "embeds": torch.ones(3, 4),
+                    "hidden": torch.full((3, 4), 2.0),
+                    "filtered_ids": [151644, 872, 100],
+                    "tts_bos": torch.ones(1, 4),
+                    "tts_eos": torch.ones(1, 4),
+                    "tts_pad": torch.ones(1, 4),
+                    "speaker": None,
+                    "language": None,
+                },
+            }
+        }
+    )
+    request = SimpleNamespace(
+        external_req_id="req-final",
+        prompt_token_ids=[151644, 872, 100],
+    )
+
+    payload = q3.thinker2talker_async_chunk_chunked_prefill(
+        transfer_manager,
+        multimodal_output={},
+        request=request,
+        is_finished=True,
+    )
+
+    assert payload is not None
+    assert bool(payload.meta.is_final_prefill_chunk) is True
+    assert bool(payload.meta.finished.item()) is False
+
+
+def test_chunked_prefill_finished_chunk_with_complete_assistant_is_gated(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_parse(_multimodal_output, _request):
+        return q3._ThinkerPoolingOutput(
+            thinker_emb=torch.ones(6, 4),
+            thinker_hid=torch.full((6, 4), 2.0),
+            thinker_tts={},
+            speaker=None,
+            language=None,
+        )
+
+    monkeypatch.setattr(q3, "_parse_thinker2talker_pooling_output", fake_parse)
+    transfer_manager = SimpleNamespace(_prefill_part_state={})
+    request = SimpleNamespace(
+        external_req_id="req-complete-assistant",
+        prompt_token_ids=[
+            q3._IM_START_TOKEN_ID,
+            872,
+            100,
+            q3._IM_START_TOKEN_ID,
+            77091,
+            101,
+        ],
+    )
+
+    payload = q3.thinker2talker_async_chunk_chunked_prefill(
+        transfer_manager,
+        multimodal_output={},
+        request=request,
+        is_finished=True,
+    )
+
+    assert payload is not None
+    assert payload.embed.prefill.shape == (6, 4)
+    assert payload.hidden_states.output.shape == (6, 4)
+    assert bool(payload.meta.is_final_prefill_chunk) is True
+    assert bool(payload.meta.finished.item()) is False
+    assert "held_final_prefill" not in transfer_manager._prefill_part_state["req-complete-assistant"]
+
+
 def test_talker2code2wav_full_payload_filters_by_output_token_ids() -> None:
     request = SimpleNamespace(
         request_id="codec",
