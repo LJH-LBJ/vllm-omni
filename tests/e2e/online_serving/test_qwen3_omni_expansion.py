@@ -46,7 +46,7 @@ def get_batch_token_config(default_path):
         default_path,
         updates={
             "enable_chunked_prefill_between_stage": True,
-            "stages": {0: {"max_num_batched_tokens": 64}, 1: {"max_num_batched_tokens": 64}},
+            "stages": {0: {"max_num_batched_tokens": 8192}, 1: {"max_num_batched_tokens": 8192}},
         },
     )
 
@@ -65,8 +65,6 @@ test_params = [
             use_stage_cli=True,
             server_args=[
                 "--no-async-chunk",
-                "--stage-overrides",
-                '{"0": {"enable_prefix_caching": true}, "1": {"enable_prefix_caching": true}}',
             ],
         ),
         id="default",

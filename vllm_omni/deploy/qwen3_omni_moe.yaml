@@ -33,6 +33,7 @@ stages:
     devices: "0"
     default_sampling_params:
       temperature: 0.0
+      seed: 42
       max_tokens: 2048
 
   - stage_id: 1
