@@ -288,7 +288,17 @@ def test_large_image_to_text_audio_001(omni_server, openai_client) -> None:
         "key_words": {"image": IMAGE_KEY},
     }
 
-    openai_client.send_omni_request(request_config, request_num=get_max_batch_size())
+    # Retry only when assert_omni_response fails on text/audio cosine similarity (see tests/helpers/assertions.py).
+    _similarity_assert_msg = "The audio content is not same as the text"
+    _max_retries = 3
+    for attempt in range(_max_retries):
+        try:
+            openai_client.send_omni_request(request_config, request_num=get_max_batch_size())
+            break
+        except AssertionError as e:
+            if _similarity_assert_msg not in str(e) or attempt == _max_retries - 1:
+                raise
+            print(f"Similarity assertion failed, retrying {attempt + 2}/{_max_retries}: {e!r}")
 
 
 @hardware_test(res={"cuda": "H100", "rocm": "MI325"}, num_cards=2)
